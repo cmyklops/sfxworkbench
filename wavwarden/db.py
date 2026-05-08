@@ -101,10 +101,29 @@ CREATE TABLE IF NOT EXISTS audio_descriptors (
     spectral_bandwidth REAL,
     spectral_rolloff REAL,
     spectral_flatness REAL,
+    segment_count INTEGER DEFAULT 0,
+    segment_method TEXT,
     duration_bucket TEXT,
     generated_at TEXT NOT NULL,
     error TEXT,
     PRIMARY KEY (file_id, backend)
+);
+
+CREATE TABLE IF NOT EXISTS audio_segments (
+    id INTEGER PRIMARY KEY,
+    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    backend TEXT NOT NULL,
+    path TEXT NOT NULL,
+    max_duration_s REAL,
+    segment_index INTEGER NOT NULL,
+    start_s REAL NOT NULL,
+    end_s REAL NOT NULL,
+    duration_s REAL NOT NULL,
+    peak REAL,
+    rms REAL,
+    confidence REAL,
+    method TEXT NOT NULL,
+    generated_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_files_ext ON files(extension);
@@ -114,6 +133,8 @@ CREATE INDEX IF NOT EXISTS idx_fn_issues_file ON fn_issues(file_id);
 CREATE INDEX IF NOT EXISTS idx_analysis_runs_backend ON analysis_runs(backend);
 CREATE INDEX IF NOT EXISTS idx_audio_descriptors_backend ON audio_descriptors(backend);
 CREATE INDEX IF NOT EXISTS idx_audio_descriptors_path ON audio_descriptors(path);
+CREATE INDEX IF NOT EXISTS idx_audio_segments_backend ON audio_segments(backend);
+CREATE INDEX IF NOT EXISTS idx_audio_segments_file ON audio_segments(file_id);
 """
 
 _FILES_COLUMN_MIGRATIONS = {
@@ -130,6 +151,8 @@ _AUDIO_DESCRIPTORS_COLUMN_MIGRATIONS = {
     "spectral_bandwidth": "REAL",
     "spectral_rolloff": "REAL",
     "spectral_flatness": "REAL",
+    "segment_count": "INTEGER DEFAULT 0",
+    "segment_method": "TEXT",
 }
 
 

@@ -197,6 +197,46 @@ def cmd_similarity_search(
         )
 
 
+@similarity_app.command("segments")
+def cmd_similarity_segments(
+    path: Annotated[Path, typer.Argument(help="Root path of the indexed library to inspect.")],
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    max_duration: Annotated[
+        float | None,
+        typer.Option("--max-duration", help="Descriptor analysis window to inspect; 0 uses full-file segments."),
+    ] = 30.0,
+    limit: Annotated[int, typer.Option("--limit", help="Maximum segments to include; 0 writes all.")] = 200,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """List cached event-like segments from the similarity crawler."""
+    from wavwarden.similarity import list_similarity_segments
+
+    effective_max_duration = None if max_duration == 0 else max_duration
+    try:
+        report = list_similarity_segments(
+            path,
+            db_path=db,
+            max_duration_s=effective_max_duration,
+            limit=limit,
+            quiet=json_output,
+        )
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "similarity_segments",
+                    "root": path,
+                    "db_path": db,
+                    "report": report,
+                }
+            )
+        )
+
+
 @similarity_app.command("audit")
 def cmd_similarity_audit(
     path: Annotated[Path, typer.Argument(help="Root path of the indexed library to audit.")],

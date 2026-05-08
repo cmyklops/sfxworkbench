@@ -82,6 +82,8 @@ class SimilarityDescriptor(BaseModel):
     spectral_bandwidth: float | None = None
     spectral_rolloff: float | None = None
     spectral_flatness: float | None = None
+    segment_count: int = 0
+    segment_method: str | None = None
     duration_bucket: str | None = None
     generated_at: str
     error: str | None = None
@@ -92,6 +94,7 @@ class SimilarityCrawlSummary(BaseModel):
     analyzed: int = 0
     skipped: int = 0
     errors: int = 0
+    segments_detected: int = 0
 
 
 class SimilarityCrawlReport(BaseModel):
@@ -147,6 +150,42 @@ class SimilaritySearchReport(BaseModel):
     limit: int = 20
     query_descriptor: SimilarityDescriptor
     results: list[SimilaritySearchResult] = []
+
+
+class SimilaritySegment(BaseModel):
+    file_id: int
+    path: str
+    filename: str | None = None
+    backend: str = "deterministic_v1"
+    max_duration_s: float | None = None
+    segment_index: int
+    start_s: float
+    end_s: float
+    duration_s: float
+    peak: float | None = None
+    rms: float | None = None
+    confidence: float | None = None
+    method: str
+    generated_at: str
+
+
+class SimilaritySegmentsSummary(BaseModel):
+    files_with_segments: int = 0
+    segments: int = 0
+
+
+class SimilaritySegmentsReport(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    backend: str = "deterministic_v1"
+    root: str
+    db_path: str
+    max_duration_s: float | None = None
+    limit: int = 200
+    summary: SimilaritySegmentsSummary
+    segments: list[SimilaritySegment] = []
 
 
 class SimilarityAuditFile(BaseModel):

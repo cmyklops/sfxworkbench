@@ -22,6 +22,9 @@ from wavwarden.models import (
     SimilarityDescriptor,
     SimilaritySearchReport,
     SimilaritySearchResult,
+    SimilaritySegment,
+    SimilaritySegmentsReport,
+    SimilaritySegmentsSummary,
 )
 from wavwarden.utils import json_dumps
 
@@ -29,6 +32,7 @@ console = Console()
 
 DEFAULT_SIMILARITY_CACHE = Path.home() / ".wavwarden" / "similarity"
 DETERMINISTIC_BACKEND = "deterministic_v1"
+SEGMENT_METHOD = "rms_event_v1"
 _COMMIT_BATCH = 250
 
 
@@ -68,6 +72,8 @@ def _existing_descriptor_is_current(row, descriptor_row, *, max_duration_s: floa
         for column in ("spectral_centroid", "spectral_bandwidth", "spectral_rolloff", "spectral_flatness")
     ):
         return False
+    if descriptor_row["segment_method"] != SEGMENT_METHOD:
+        return False
     return (
         descriptor_row["size_bytes"] == row["size_bytes"]
         and descriptor_row["mtime"] == row["mtime"]
@@ -77,11 +83,16 @@ def _existing_descriptor_is_current(row, descriptor_row, *, max_duration_s: floa
 
 
 def _compute_audio_descriptor(path: Path, *, max_duration_s: float | None) -> dict:
+    metrics, _segments = _compute_audio_analysis(path, max_duration_s=max_duration_s)
+    return metrics
+
+
+def _compute_audio_analysis(path: Path, *, max_duration_s: float | None) -> tuple[dict, list[dict]]:
     try:
         import numpy as np
         import soundfile as sf
     except Exception as e:
-        return {"error": f"audio descriptor dependencies unavailable: {e}"}
+        return {"error": f"audio descriptor dependencies unavailable: {e}"}, []
 
     try:
         with sf.SoundFile(str(path)) as sound_file:
@@ -92,7 +103,7 @@ def _compute_audio_descriptor(path: Path, *, max_duration_s: float | None) -> di
                 frames = min(total_frames, max(1, int(max_duration_s * sample_rate)))
             audio = sound_file.read(frames=frames, dtype="float32", always_2d=True)
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": str(e)}, []
 
     if audio.size == 0:
         return {
@@ -108,8 +119,10 @@ def _compute_audio_descriptor(path: Path, *, max_duration_s: float | None) -> di
             "spectral_bandwidth": 0.0,
             "spectral_rolloff": 0.0,
             "spectral_flatness": 0.0,
+            "segment_count": 0,
+            "segment_method": SEGMENT_METHOD,
             "error": None,
-        }
+        }, []
 
     analyzed_duration_s = float(audio.shape[0] / sample_rate) if sample_rate else None
     abs_audio = np.abs(audio)
@@ -139,6 +152,7 @@ def _compute_audio_descriptor(path: Path, *, max_duration_s: float | None) -> di
             transient_density = float(np.count_nonzero(deltas > threshold) / analyzed_duration_s)
 
     spectral = _compute_spectral_features(mono, sample_rate, np)
+    segments = _detect_audio_segments(mono, sample_rate, np)
 
     return {
         "analyzed_duration_s": analyzed_duration_s,
@@ -150,8 +164,10 @@ def _compute_audio_descriptor(path: Path, *, max_duration_s: float | None) -> di
         "zero_crossing_rate": zero_crossing_rate,
         "transient_density": transient_density,
         **spectral,
+        "segment_count": len(segments),
+        "segment_method": SEGMENT_METHOD,
         "error": None,
-    }
+    }, segments
 
 
 def _compute_spectral_features(mono, sample_rate: int, np) -> dict[str, float]:
@@ -206,6 +222,87 @@ def _compute_spectral_features(mono, sample_rate: int, np) -> dict[str, float]:
         "spectral_rolloff": float(np.mean(rolloff)),
         "spectral_flatness": float(np.mean(flatness)),
     }
+
+
+def _detect_audio_segments(mono, sample_rate: int, np, *, max_segments: int = 10) -> list[dict]:
+    if mono.size < 2 or sample_rate <= 0:
+        return []
+
+    total_duration_s = float(mono.size / sample_rate)
+    frame_size = max(256, int(sample_rate * 0.05))
+    hop_size = max(128, int(sample_rate * 0.025))
+    if mono.size < frame_size:
+        padded = np.pad(mono, (0, frame_size - mono.size))
+        frames_view = padded.reshape(1, frame_size)
+    else:
+        frame_count = 1 + ((mono.size - frame_size) // hop_size)
+        shape = (frame_count, frame_size)
+        strides = (mono.strides[0] * hop_size, mono.strides[0])
+        frames_view = np.lib.stride_tricks.as_strided(mono, shape=shape, strides=strides)
+
+    frame_rms = np.sqrt(np.mean(np.square(frames_view), axis=1))
+    if frame_rms.size == 0 or float(np.max(frame_rms)) <= 0.000001:
+        return []
+
+    max_rms = float(np.max(frame_rms))
+    noise_floor = float(np.percentile(frame_rms, 20))
+    adaptive_threshold = max(noise_floor * 3.0, max_rms * 0.1)
+    threshold = max(0.002, min(max_rms * 0.5, adaptive_threshold))
+    active = frame_rms >= threshold
+    if not np.any(active):
+        return []
+
+    ranges: list[tuple[int, int]] = []
+    start: int | None = None
+    for index, is_active in enumerate(active):
+        if is_active and start is None:
+            start = index
+        elif not is_active and start is not None:
+            ranges.append((start, index))
+            start = None
+    if start is not None:
+        ranges.append((start, len(active)))
+
+    merged: list[tuple[float, float]] = []
+    max_gap_s = 0.15
+    for start_index, end_index in ranges:
+        start_s = max(0.0, (start_index * hop_size) / sample_rate)
+        end_s = min(total_duration_s, (((end_index - 1) * hop_size) + frame_size) / sample_rate)
+        if merged and start_s - merged[-1][1] <= max_gap_s:
+            merged[-1] = (merged[-1][0], end_s)
+        else:
+            merged.append((start_s, end_s))
+
+    segments: list[dict] = []
+    min_duration_s = min(0.1, total_duration_s)
+    for start_s, end_s in merged:
+        duration_s = end_s - start_s
+        if duration_s < min_duration_s:
+            continue
+        start_frame = max(0, int(start_s * sample_rate))
+        end_frame = min(mono.size, max(start_frame + 1, int(end_s * sample_rate)))
+        segment_audio = mono[start_frame:end_frame]
+        peak = float(np.max(np.abs(segment_audio))) if segment_audio.size else 0.0
+        rms = float(math.sqrt(float(np.mean(np.square(segment_audio))))) if segment_audio.size else 0.0
+        confidence = min(1.0, rms / (threshold * 3.0)) if threshold > 0 else 0.0
+        segments.append(
+            {
+                "start_s": start_s,
+                "end_s": end_s,
+                "duration_s": duration_s,
+                "peak": peak,
+                "rms": rms,
+                "confidence": confidence,
+                "method": SEGMENT_METHOD,
+            }
+        )
+
+    segments.sort(key=lambda segment: (-segment["confidence"], segment["start_s"]))
+    segments = segments[:max_segments]
+    segments.sort(key=lambda segment: segment["start_s"])
+    for index, segment in enumerate(segments):
+        segment["segment_index"] = index
+    return segments
 
 
 def _descriptor_from_row(
@@ -293,8 +390,9 @@ def _write_descriptor(conn, descriptor: SimilarityDescriptor) -> None:
             file_id, backend, path, size_bytes, mtime, md5, max_duration_s, analyzed_duration_s,
             peak, rms, crest_factor, silence_ratio, clipping_count,
             zero_crossing_rate, transient_density, spectral_centroid, spectral_bandwidth,
-            spectral_rolloff, spectral_flatness, duration_bucket, generated_at, error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            spectral_rolloff, spectral_flatness, segment_count, segment_method,
+            duration_bucket, generated_at, error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(file_id, backend) DO UPDATE SET
             path=excluded.path,
             size_bytes=excluded.size_bytes,
@@ -313,6 +411,8 @@ def _write_descriptor(conn, descriptor: SimilarityDescriptor) -> None:
             spectral_bandwidth=excluded.spectral_bandwidth,
             spectral_rolloff=excluded.spectral_rolloff,
             spectral_flatness=excluded.spectral_flatness,
+            segment_count=excluded.segment_count,
+            segment_method=excluded.segment_method,
             duration_bucket=excluded.duration_bucket,
             generated_at=excluded.generated_at,
             error=excluded.error
@@ -337,11 +437,61 @@ def _write_descriptor(conn, descriptor: SimilarityDescriptor) -> None:
             descriptor.spectral_bandwidth,
             descriptor.spectral_rolloff,
             descriptor.spectral_flatness,
+            descriptor.segment_count,
+            descriptor.segment_method,
             descriptor.duration_bucket,
             descriptor.generated_at,
             descriptor.error,
         ),
     )
+
+
+def _delete_segments(conn, *, file_id: int, backend: str, max_duration_s: float | None) -> None:
+    conn.execute(
+        """
+        DELETE FROM audio_segments
+        WHERE file_id = ? AND backend = ?
+          AND ((? IS NULL AND max_duration_s IS NULL) OR max_duration_s = ?)
+        """,
+        (file_id, backend, max_duration_s, max_duration_s),
+    )
+
+
+def _write_segments(
+    conn,
+    *,
+    file_id: int,
+    path: str,
+    backend: str,
+    max_duration_s: float | None,
+    generated_at: str,
+    segments: list[dict],
+) -> None:
+    _delete_segments(conn, file_id=file_id, backend=backend, max_duration_s=max_duration_s)
+    for segment in segments:
+        conn.execute(
+            """
+            INSERT INTO audio_segments (
+                file_id, backend, path, max_duration_s, segment_index, start_s, end_s,
+                duration_s, peak, rms, confidence, method, generated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                file_id,
+                backend,
+                path,
+                max_duration_s,
+                segment["segment_index"],
+                segment["start_s"],
+                segment["end_s"],
+                segment["duration_s"],
+                segment["peak"],
+                segment["rms"],
+                segment["confidence"],
+                segment["method"],
+                generated_at,
+            ),
+        )
 
 
 def crawl_similarity_descriptors(
@@ -402,7 +552,8 @@ def crawl_similarity_descriptors(
         existing = conn.execute(
             """
             SELECT size_bytes, mtime, md5, max_duration_s, error, spectral_centroid,
-                   spectral_bandwidth, spectral_rolloff, spectral_flatness
+                   spectral_bandwidth, spectral_rolloff, spectral_flatness,
+                   segment_method
             FROM audio_descriptors
             WHERE file_id = ? AND backend = ?
             """,
@@ -416,8 +567,9 @@ def crawl_similarity_descriptors(
         generated_at = _utc_now()
         if not path.exists():
             metrics = {"error": "file not found"}
+            segments = []
         else:
-            metrics = _compute_audio_descriptor(path, max_duration_s=max_duration_s)
+            metrics, segments = _compute_audio_analysis(path, max_duration_s=max_duration_s)
 
         descriptor = _descriptor_from_row(
             row,
@@ -427,7 +579,17 @@ def crawl_similarity_descriptors(
             metrics=metrics,
         )
         _write_descriptor(conn, descriptor)
+        _write_segments(
+            conn,
+            file_id=row["id"],
+            path=row["path"],
+            backend=DETERMINISTIC_BACKEND,
+            max_duration_s=max_duration_s,
+            generated_at=generated_at,
+            segments=segments,
+        )
         summary.analyzed += 1
+        summary.segments_detected += len(segments)
         if descriptor.error is not None:
             summary.errors += 1
         if limit <= 0 or len(descriptors) < limit:
@@ -718,6 +880,76 @@ def audit_similarity_descriptors(
     return report
 
 
+def list_similarity_segments(
+    root: Path,
+    db_path: Path = DEFAULT_DB_PATH,
+    max_duration_s: float | None = 30.0,
+    limit: int = 200,
+    quiet: bool = False,
+) -> SimilaritySegmentsReport:
+    """List cached event-like segment windows from the deterministic crawler."""
+    root = root.expanduser().resolve()
+    if not root.exists():
+        raise ValueError(f"path not found: {root}")
+    if limit < 0:
+        raise ValueError("limit must be 0 or greater")
+
+    conn = get_connection(db_path)
+    rows = conn.execute(
+        """
+        SELECT s.file_id, s.path, f.filename, s.backend, s.max_duration_s,
+               s.segment_index, s.start_s, s.end_s, s.duration_s, s.peak,
+               s.rms, s.confidence, s.method, s.generated_at
+        FROM audio_segments s
+        JOIN files f ON f.id = s.file_id
+        WHERE s.backend = ?
+          AND ((? IS NULL AND s.max_duration_s IS NULL) OR s.max_duration_s = ?)
+        ORDER BY s.path, s.segment_index
+        """,
+        (DETERMINISTIC_BACKEND, max_duration_s, max_duration_s),
+    ).fetchall()
+    conn.close()
+    rows = [row for row in rows if Path(row["path"]) == root or _is_relative_to(Path(row["path"]), root)]
+
+    reported_rows = rows if limit == 0 else rows[:limit]
+    segments = [
+        SimilaritySegment(
+            file_id=row["file_id"],
+            path=row["path"],
+            filename=row["filename"],
+            backend=row["backend"],
+            max_duration_s=row["max_duration_s"],
+            segment_index=row["segment_index"],
+            start_s=row["start_s"],
+            end_s=row["end_s"],
+            duration_s=row["duration_s"],
+            peak=row["peak"],
+            rms=row["rms"],
+            confidence=row["confidence"],
+            method=row["method"],
+            generated_at=row["generated_at"],
+        )
+        for row in reported_rows
+    ]
+    report = SimilaritySegmentsReport(
+        generated_at=_utc_now(),
+        tool_version=__version__,
+        backend=DETERMINISTIC_BACKEND,
+        root=str(root),
+        db_path=str(db_path),
+        max_duration_s=max_duration_s,
+        limit=limit,
+        summary=SimilaritySegmentsSummary(
+            files_with_segments=len({row["file_id"] for row in rows}),
+            segments=len(rows),
+        ),
+        segments=segments,
+    )
+    if not quiet:
+        show_similarity_segments_report(report)
+    return report
+
+
 def show_similarity_crawl_report(report: SimilarityCrawlReport) -> None:
     table = Table(title="Similarity descriptor crawl", show_lines=False)
     table.add_column("Metric")
@@ -727,6 +959,7 @@ def show_similarity_crawl_report(report: SimilarityCrawlReport) -> None:
     table.add_row("Analyzed", f"{report.summary.analyzed:,}")
     table.add_row("Skipped", f"{report.summary.skipped:,}")
     table.add_row("Errors", f"{report.summary.errors:,}")
+    table.add_row("Segments detected", f"{report.summary.segments_detected:,}")
     table.add_row("Cache", report.cache_path or "SQLite only")
     console.print(table)
 
@@ -770,3 +1003,31 @@ def show_similarity_audit_report(report: SimilarityAuditReport) -> None:
             first_file,
         )
     console.print(group_table)
+
+
+def show_similarity_segments_report(report: SimilaritySegmentsReport) -> None:
+    table = Table(title="Similarity segments", show_lines=False)
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_row("Files with segments", f"{report.summary.files_with_segments:,}")
+    table.add_row("Segments", f"{report.summary.segments:,}")
+    table.add_row("Reported", f"{len(report.segments):,}")
+    console.print(table)
+    if not report.segments:
+        return
+
+    segment_table = Table(title="Cached segment windows", show_lines=False)
+    segment_table.add_column("File")
+    segment_table.add_column("Index", justify="right")
+    segment_table.add_column("Start", justify="right")
+    segment_table.add_column("End", justify="right")
+    segment_table.add_column("Confidence", justify="right")
+    for segment in report.segments[:20]:
+        segment_table.add_row(
+            segment.filename or Path(segment.path).name,
+            str(segment.segment_index),
+            f"{segment.start_s:.2f}s",
+            f"{segment.end_s:.2f}s",
+            f"{segment.confidence or 0.0:.2f}",
+        )
+    console.print(segment_table)

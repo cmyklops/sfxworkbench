@@ -41,14 +41,18 @@ Implemented first slice:
 
 - `sfx similarity crawl PATH`
 - `sfx similarity search --file QUERY`
+- `sfx similarity segments PATH`
 - `sfx similarity audit PATH`
 - deterministic backend name: `deterministic_v1`
-- SQLite-backed `analysis_runs` and `audio_descriptors` tables
+- SQLite-backed `analysis_runs`, `audio_descriptors`, and `audio_segments`
+  tables
 - optional cache directory for run report JSON
 - incremental skips when path anchors still match size, mtime, and MD5
 - descriptor fields for peak, RMS, crest factor, silence ratio, clipping count,
   zero-crossing rate, transient density, spectral centroid/bandwidth/rolloff/
   flatness, and duration bucket
+- RMS-based segment windows for event-like regions, capped per file and cached
+  for future per-segment search/embedding work
 - nearest-neighbor search over cached descriptor vectors with distance and
   0-1 score output
 - report-only near-duplicate groups from cached descriptors, with exact MD5
@@ -82,7 +86,7 @@ The first implementation should be boring and report-first:
 1. Cheap audio descriptors: implemented in the first crawler slice.
    peak, RMS, crest factor, silence, spectral shape, transient density,
    duration buckets, clipping flags, channel count, sample rate, bit depth.
-2. Segment/event detection:
+2. Segment/event detection: first RMS-based segment cache implemented.
    identify candidate regions inside longer files so one ambience or designed
    sound can produce multiple searchable moments.
 3. Optional embeddings:

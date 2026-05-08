@@ -9,6 +9,7 @@ from wavwarden.scan import scan_library
 from wavwarden.similarity import (
     audit_similarity_descriptors,
     crawl_similarity_descriptors,
+    list_similarity_segments,
     search_similarity_descriptors,
 )
 
@@ -23,6 +24,33 @@ def _make_tone(path: Path, *, sample_rate: int = 44100, frequency: float = 440.0
         for i in range(frames):
             sample = int(12000 * math.sin(2 * math.pi * frequency * i / sample_rate))
             payload.extend(struct.pack("<h", sample))
+        wav.writeframes(bytes(payload))
+    return path
+
+
+def _make_pulses(path: Path, *, sample_rate: int = 44100) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    regions = [
+        (0.20, 0.0),
+        (0.20, 440.0),
+        (0.35, 0.0),
+        (0.25, 660.0),
+        (0.20, 0.0),
+    ]
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        payload = bytearray()
+        frame_offset = 0
+        for duration_s, frequency in regions:
+            frames = int(duration_s * sample_rate)
+            for i in range(frames):
+                sample = 0
+                if frequency:
+                    sample = int(12000 * math.sin(2 * math.pi * frequency * (frame_offset + i) / sample_rate))
+                payload.extend(struct.pack("<h", sample))
+            frame_offset += frames
         wav.writeframes(bytes(payload))
     return path
 
@@ -50,10 +78,11 @@ def test_similarity_crawl_writes_descriptors_and_skips_current_rows(tmp_path: Pa
     row = conn.execute(
         """
         SELECT peak, rms, spectral_centroid, spectral_bandwidth, spectral_rolloff,
-               spectral_flatness, error
+               spectral_flatness, segment_count, segment_method, error
         FROM audio_descriptors
         """
     ).fetchone()
+    segment_count = conn.execute("SELECT COUNT(*) FROM audio_segments").fetchone()[0]
     run_count = conn.execute("SELECT COUNT(*) FROM analysis_runs").fetchone()[0]
     conn.close()
 
@@ -63,6 +92,9 @@ def test_similarity_crawl_writes_descriptors_and_skips_current_rows(tmp_path: Pa
     assert row["spectral_bandwidth"] > 0
     assert row["spectral_rolloff"] > 0
     assert row["spectral_flatness"] >= 0
+    assert row["segment_count"] == 1
+    assert row["segment_method"] == "rms_event_v1"
+    assert segment_count == 1
     assert row["error"] is None
     assert run_count == 1
 
@@ -141,6 +173,25 @@ def test_similarity_descriptors_capture_spectral_difference(tmp_path: Path, tmp_
 
     assert by_path[str(high)]["spectral_centroid"] > by_path[str(low)]["spectral_centroid"]
     assert by_path[str(high)]["spectral_rolloff"] > by_path[str(low)]["spectral_rolloff"]
+
+
+def test_similarity_crawl_detects_multiple_event_segments(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    pulses = _make_pulses(root / "pulses.wav")
+    scan_library(root, tmp_db, skip_hash=False, quiet=True)
+
+    crawl = crawl_similarity_descriptors(root, db_path=tmp_db, cache_path=None, quiet=True)
+    report = list_similarity_segments(root, db_path=tmp_db, quiet=True)
+
+    assert crawl.summary.segments_detected == 2
+    assert report.summary.files_with_segments == 1
+    assert report.summary.segments == 2
+    assert [segment.path for segment in report.segments] == [str(pulses), str(pulses)]
+    assert [segment.segment_index for segment in report.segments] == [0, 1]
+    assert 0.15 <= report.segments[0].start_s <= 0.25
+    assert 0.35 <= report.segments[0].end_s <= 0.45
+    assert 0.70 <= report.segments[1].start_s <= 0.80
+    assert 0.95 <= report.segments[1].end_s <= 1.05
 
 
 def test_similarity_search_returns_nearest_cached_descriptors(tmp_path: Path, tmp_db: Path) -> None:

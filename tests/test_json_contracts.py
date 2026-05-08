@@ -163,9 +163,39 @@ def test_similarity_crawl_json_contract(tmp_library: Path, tmp_db: Path, tmp_pat
     assert payload["report"]["backend"] == "deterministic_v1"
     assert payload["report"]["summary"]["total_files"] == 4
     assert payload["report"]["summary"]["analyzed"] == 4
+    assert "segments_detected" in payload["report"]["summary"]
     assert len(payload["report"]["descriptors"]) == 2
     assert payload["report"]["descriptors"][0]["duration_bucket"] is not None
     assert "spectral_centroid" in payload["report"]["descriptors"][0]
+    assert "segment_count" in payload["report"]["descriptors"][0]
+
+    segments_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "similarity",
+                    "segments",
+                    str(tmp_library),
+                    "--db",
+                    str(tmp_db),
+                    "--limit",
+                    "2",
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert segments_payload["schema_version"] == 1
+    assert segments_payload["command"] == "similarity_segments"
+    assert segments_payload["root"] == "<ROOT>"
+    assert segments_payload["db_path"] == "<DB>"
+    assert segments_payload["report"]["summary"]["segments"] >= 0
+    assert isinstance(segments_payload["report"]["segments"], list)
 
     search_payload = _normalize(
         _load(
