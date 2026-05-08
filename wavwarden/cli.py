@@ -25,6 +25,13 @@ packs_app = typer.Typer(
     rich_markup_mode="rich",
 )
 app.add_typer(packs_app, name="packs")
+metadata_app = typer.Typer(
+    name="metadata",
+    help="Report metadata coverage and sample-rate hygiene.",
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+)
+app.add_typer(metadata_app, name="metadata")
 organize_app = typer.Typer(
     name="organize",
     help="Preview safe folder-structure organization.",
@@ -54,6 +61,51 @@ def _main(
     ] = None,
 ) -> None:
     """sfx — sound library hygiene toolkit."""
+
+
+# ---------------------------------------------------------------------------
+# sfx metadata
+# ---------------------------------------------------------------------------
+
+
+@metadata_app.command("audit")
+def cmd_metadata_audit(
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    output: Annotated[
+        Path | None, typer.Option("--output", help="Write metadata audit report JSON to this path.")
+    ] = None,
+    limit: Annotated[int, typer.Option("--limit", help="Maximum rows per report section; 0 writes all rows.")] = 200,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Report files missing BWF/iXML metadata and files with unusual sample rates."""
+    from wavwarden.metadata_audit import (
+        build_metadata_audit_report,
+        show_metadata_audit_report,
+        write_metadata_audit_report,
+    )
+
+    try:
+        report = build_metadata_audit_report(db, limit=limit)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
+    if output is not None:
+        write_metadata_audit_report(report, output, quiet=json_output)
+    elif not json_output:
+        show_metadata_audit_report(report)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "metadata_audit",
+                    "db_path": db,
+                    "report_path": output,
+                    "report": report,
+                }
+            )
+        )
 
 
 # ---------------------------------------------------------------------------

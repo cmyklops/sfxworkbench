@@ -17,6 +17,10 @@ def test_scan_audit_search_export_json(tmp_library, tmp_db, tmp_path) -> None:
     assert audit.exit_code == 0
     assert json.loads(audit.stdout)["command"] == "audit"
 
+    metadata = runner.invoke(app, ["metadata", "audit", "--db", str(tmp_db), "--json"])
+    assert metadata.exit_code == 0
+    assert json.loads(metadata.stdout)["command"] == "metadata_audit"
+
     search = runner.invoke(app, ["search", "RAIN", "--db", str(tmp_db), "--json"])
     assert search.exit_code == 0
     assert json.loads(search.stdout)["results"]

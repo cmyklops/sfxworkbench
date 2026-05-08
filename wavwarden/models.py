@@ -113,6 +113,45 @@ class AuditResult(BaseModel):
     sample_rates: dict[str, int] = {}
 
 
+class MetadataAuditEntry(BaseModel):
+    path: str
+    filename: str
+    sample_rate: int | None = None
+    bit_depth: int | None = None
+    channels: int | None = None
+    duration_s: float | None = None
+    has_bext: bool = False
+    has_ixml: bool = False
+    has_riff_info: bool = False
+    has_adm: bool = False
+    has_cue_markers: bool = False
+    has_sampler: bool = False
+    metadata_sources: list[str] = []
+    reasons: list[str] = []
+
+
+class MetadataAuditSummary(BaseModel):
+    total_files: int = 0
+    missing_metadata: int = 0
+    unusual_sample_rate_files: int = 0
+    reported_missing_metadata: int = 0
+    reported_unusual_sample_rate_files: int = 0
+    sample_rates: dict[str, int] = {}
+
+
+class MetadataAuditReport(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    db_path: str
+    standard_sample_rates: list[int] = []
+    limit: int = 200
+    summary: MetadataAuditSummary
+    missing_metadata: list[MetadataAuditEntry] = []
+    unusual_sample_rates: list[MetadataAuditEntry] = []
+
+
 # ---------------------------------------------------------------------------
 # Dedupe groups
 # ---------------------------------------------------------------------------

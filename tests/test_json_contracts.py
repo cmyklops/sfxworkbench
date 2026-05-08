@@ -72,6 +72,37 @@ def test_audit_search_export_json_contract(tmp_library: Path, tmp_db: Path, tmp_
     assert audit["result"]["fn_issues_by_type"]["illegal_chars"] == 1
     assert audit["result"]["fn_issues_by_type"]["unicode_normalization"] == 1
 
+    metadata_out = tmp_path / "metadata_report.json"
+    metadata = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "metadata",
+                    "audit",
+                    "--db",
+                    str(tmp_db),
+                    "--output",
+                    str(metadata_out),
+                    "--limit",
+                    "2",
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert metadata["schema_version"] == 1
+    assert metadata["command"] == "metadata_audit"
+    assert metadata["db_path"] == "<DB>"
+    assert metadata["report_path"] == "<TMP>/metadata_report.json"
+    assert metadata["report"]["summary"]["total_files"] == 5
+    assert metadata["report"]["summary"]["reported_missing_metadata"] == 2
+    assert len(metadata["report"]["missing_metadata"]) == 2
+    assert metadata_out.exists()
+
     search = _normalize(
         _load(runner.invoke(app, ["search", "RAIN", "--db", str(tmp_db), "--json"]).stdout),
         tmp_path,

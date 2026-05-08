@@ -42,17 +42,22 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
 - Portable long-path shortening apply: done, 32 file renames,
   undo log at `/Users/mattwesdock/reports/portable_path_shortening_log_20260508.json`.
 - Current indexed filename issues: 0.
+- Metadata audit report: `/Users/mattwesdock/reports/metadata_audit_full_20260508.json`.
+- Missing BWF/iXML metadata: 22,412 files.
+- Unusual sample-rate files: 2,854 files.
 
 Current audit focus:
 
 - Scan errors: cleared with RIFF fallback reader for malformed side chunks.
 - Filename issues: cleared.
+- Metadata/sample-rate reporting: implemented as report-only.
 
 ## Next
 
 1. Move on from folder nesting unless you want a manual review flow for semantic wrappers.
 2. Add report-only related sound groups/collections audit.
-3. Review missing metadata and unusual sample-rate reports.
+3. Decide whether unusual sample rates are informational only or should become
+   a reviewed `normalize` candidate report later.
 
 ## Later
 
