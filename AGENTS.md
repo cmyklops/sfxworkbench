@@ -34,6 +34,7 @@ uv run sfx organize audit ~/CommercialLibraries --depth 1 --output ~/reports/org
 uv run sfx organize audit ~/CommercialLibraries --pattern redundant-nesting --depth 8 --output ~/reports/nesting_report.json
 uv run sfx organize nesting-plan ~/reports/nesting_report.json --output ~/reports/nesting_plan.json
 uv run sfx organize nesting-plan ~/reports/nesting_report.json --kind single_child_chain --output ~/reports/single_child_plan.json
+uv run sfx organize nesting-plan ~/reports/nesting_report.json --kind low_value_wrapper --output ~/reports/wrapper_plan.json
 uv run sfx organize review ~/reports/nesting_plan.json --approve-all
 uv run sfx organize nesting-apply ~/reports/nesting_plan.json --db ~/.wavwarden/index.db --require-reviewed
 uv run sfx organize nesting-apply ~/reports/nesting_plan.json --db ~/.wavwarden/index.db --apply --require-reviewed --log nesting_log.json
@@ -77,7 +78,7 @@ sfx dedupe --apply PLAN → validate size/hash → quarantine duplicates + updat
 sfx packs audit PATH → folder hash signatures + overlap candidates → report JSON
 sfx organize audit/review/apply/undo PATH → folder-structure cleanup with undo log
 sfx organize audit --pattern redundant-nesting PATH → report-only nested-folder review
-sfx organize nesting-plan/apply/undo → reviewed repeated-folder and non-generic single-child flatten workflow
+sfx organize nesting-plan/apply/undo → reviewed repeated-folder, non-generic single-child, and strict leaf-wrapper flatten workflow
 sfx rename PATH → preview/apply UCS-oriented or safe names → rename_log_TIMESTAMP.json
 sfx audit      →  SELECT queries against index
 sfx search Q   →  FTS5 MATCH query on files_fts

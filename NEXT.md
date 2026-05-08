@@ -23,8 +23,7 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
 - Redundant nesting audit: report-only CLI pattern added and run.
 - Redundant nesting report: `/Users/mattwesdock/reports/redundant_nesting_report_20260508.json`
   found 52 candidates: 30 one-child chains, 12 repeated folder names, 10 low-value wrappers.
-- Repeated-folder-name flatten workflow: implemented; one-child chains and low-value
-  wrappers remain report-only.
+- Repeated-folder-name flatten workflow: implemented and applied.
 - Repeated-folder nesting plan: `/Users/mattwesdock/reports/repeated_folder_nesting_plan_20260508.json`
   is reviewed and dry-run clean: 12 folders, 240 child moves, 0 errors.
 - Repeated-folder nesting apply: done, 12 folders flattened, 240 child moves,
@@ -33,6 +32,10 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
   generic child folders such as `Content`, `Designed`, `Source`, and `Sounds` stay report-only.
 - Final redundant nesting report: `/Users/mattwesdock/reports/redundant_nesting_report_final_20260508.json`
   found 27 candidates: 23 low-value wrappers and 4 generic single-child chains.
+- Strict low-value wrapper apply: done, 2 leaf `Samples` wrappers flattened,
+  102 file moves, undo log at `/Users/mattwesdock/reports/low_value_wrapper_log_20260508.json`.
+- Latest redundant nesting report: `/Users/mattwesdock/reports/redundant_nesting_report_after_wrappers_20260508.json`
+  found 25 candidates: 21 low-value wrappers and 4 generic single-child chains.
 
 Current audit focus:
 
@@ -42,7 +45,7 @@ Current audit focus:
 
 ## Next
 
-1. Decide whether low-value wrapper folders should get a stricter reviewed plan/apply workflow.
+1. Move on from folder nesting unless you want a manual review flow for semantic wrappers.
 2. Add report-only related sound groups/collections audit.
 3. Review risky-character filename issues.
 

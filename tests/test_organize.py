@@ -272,6 +272,61 @@ def test_build_nesting_plan_single_child_chain_reports_collisions(tmp_path: Path
     assert plan.errors[0]["error"] == "target exists"
 
 
+def test_build_nesting_plan_from_low_value_leaf_wrapper(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    wrapper = root / "Pack" / "Samples"
+    wrapper.mkdir(parents=True)
+    audio = wrapper / "hit.wav"
+    audio.write_bytes(b"audio")
+    report = audit_organization(root, pattern="redundant-nesting", depth=3)
+    report_path = tmp_path / "nesting_report.json"
+    write_organize_audit_report(report, report_path, quiet=True)
+
+    plan = build_nesting_plan_from_report(report_path, kind="low_value_wrapper", quiet=True)
+
+    assert len(plan.entries) == 1
+    assert plan.entries[0].source_path == str(wrapper)
+    assert plan.entries[0].target_path == str(wrapper.parent)
+    assert plan.entries[0].action == "flatten_low_value_leaf_wrapper"
+    assert plan.entries[0].moves[0].old_path == str(audio)
+    assert plan.entries[0].moves[0].new_path == str(wrapper.parent / "hit.wav")
+    assert plan.errors == []
+
+
+def test_build_nesting_plan_low_value_wrapper_skips_semantic_names_and_child_dirs(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    designed = root / "Pack" / "Designed"
+    designed.mkdir(parents=True)
+    (designed / "hit.wav").write_bytes(b"audio")
+    samples = root / "Other Pack" / "Samples" / "Subfolder"
+    samples.mkdir(parents=True)
+    (samples / "hit.wav").write_bytes(b"audio")
+    report = audit_organization(root, pattern="redundant-nesting", depth=4)
+    report_path = tmp_path / "nesting_report.json"
+    write_organize_audit_report(report, report_path, quiet=True)
+
+    plan = build_nesting_plan_from_report(report_path, kind="low_value_wrapper", quiet=True)
+
+    assert plan.entries == []
+    assert plan.errors == []
+
+
+def test_build_nesting_plan_low_value_wrapper_reports_collisions(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    wrapper = root / "Pack" / "Samples"
+    wrapper.mkdir(parents=True)
+    (wrapper / "hit.wav").write_bytes(b"audio")
+    (wrapper.parent / "hit.wav").write_bytes(b"existing")
+    report = audit_organization(root, pattern="redundant-nesting", depth=3)
+    report_path = tmp_path / "nesting_report.json"
+    write_organize_audit_report(report, report_path, quiet=True)
+
+    plan = build_nesting_plan_from_report(report_path, kind="low_value_wrapper", quiet=True)
+
+    assert plan.entries == []
+    assert plan.errors[0]["error"] == "target exists"
+
+
 def test_apply_nesting_plan_requires_review(tmp_path: Path) -> None:
     root = tmp_path / "library"
     repeated = root / "Vendor" / "Pack" / "Pack"

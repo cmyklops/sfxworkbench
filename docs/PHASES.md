@@ -35,6 +35,7 @@ uv run sfx organize audit PATH --depth 1 --output ~/reports/organize_report.json
 uv run sfx organize audit PATH --pattern redundant-nesting --depth 8 --output ~/reports/nesting_report.json
 uv run sfx organize nesting-plan ~/reports/nesting_report.json --output ~/reports/nesting_plan.json
 uv run sfx organize nesting-plan ~/reports/nesting_report.json --kind single_child_chain --output ~/reports/single_child_plan.json
+uv run sfx organize nesting-plan ~/reports/nesting_report.json --kind low_value_wrapper --output ~/reports/wrapper_plan.json
 uv run sfx organize review ~/reports/nesting_plan.json --approve-all
 uv run sfx organize nesting-apply ~/reports/nesting_plan.json --require-reviewed
 uv run sfx organize nesting-apply ~/reports/nesting_plan.json --apply --require-reviewed --log nesting_log.json
@@ -74,7 +75,7 @@ python3 audit.py ~/CommercialLibraries --json
 - `packs audit`: report-only exact duplicate folder and pack-overlap detection; no filesystem or SQLite mutation.
 - `organize audit/review/apply/undo`: safe folder-structure cleanup with review gate, SQLite path updates, and undo log.
 - `organize audit --pattern redundant-nesting`: report-only folder-structure review for repeated names, one-child chains, and low-value wrappers.
-- `organize nesting-plan/apply/undo`: reviewed flatten workflow for repeated folder names and non-generic single-child chains; dry-run by default and never overwrites.
+- `organize nesting-plan/apply/undo`: reviewed flatten workflow for repeated folder names, non-generic single-child chains, and strict leaf wrappers; dry-run by default and never overwrites.
 - `rename`: previews UCS-oriented or safe filename/path changes, refuses collisions, applies with undo log. `--allow-partial` can apply valid entries while keeping unresolved collisions visible in the result.
 
 ## Phase 2 — Cleanup Tooling
@@ -117,8 +118,12 @@ Single-child chains are also supported when the child folder name is not generic
 The planner orders nested wrappers deepest-first, skips generic child names such
 as `Content`, `Designed`, `Source`, and `Sounds`, and uses the same review/apply/undo path.
 
-Low-value wrappers intentionally remain report-only because they can require
-subjective merge choices.
+Low-value wrappers can be planned only when they are leaf folders with low-risk
+names such as `Samples`, `Audio`, `WAV`, or `Files`:
+`sfx organize nesting-plan REPORT --kind low_value_wrapper --output PLAN`.
+The planner skips semantic wrappers such as `Designed`, `Source`, `Content`, and
+`Sounds`, and skips wrappers that contain subfolders. Broader wrapper flattening
+remains report-only because it can require subjective merge choices.
 
 Future organization audits should stay report-first:
 

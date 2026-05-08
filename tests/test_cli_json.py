@@ -185,3 +185,47 @@ def test_organize_single_child_nesting_plan_json(tmp_library, tmp_path) -> None:
     assert payload["command"] == "organize_nesting_plan"
     assert payload["plan"]["entries"][0]["kind"] == "single_child_chain"
     assert payload["plan"]["entries"][0]["action"] == "collapse_single_child_wrapper"
+
+
+def test_organize_low_value_wrapper_nesting_plan_json(tmp_library, tmp_path) -> None:
+    audio = tmp_library / "Pack" / "Samples" / "hit.wav"
+    audio.parent.mkdir(parents=True)
+    audio.write_bytes(b"audio")
+    report_path = tmp_path / "nesting.json"
+    plan_path = tmp_path / "wrapper_plan.json"
+    audit = runner.invoke(
+        app,
+        [
+            "organize",
+            "audit",
+            str(tmp_library),
+            "--pattern",
+            "redundant-nesting",
+            "--depth",
+            "3",
+            "--output",
+            str(report_path),
+            "--json",
+        ],
+    )
+    assert audit.exit_code == 0
+
+    plan = runner.invoke(
+        app,
+        [
+            "organize",
+            "nesting-plan",
+            str(report_path),
+            "--kind",
+            "low_value_wrapper",
+            "--output",
+            str(plan_path),
+            "--json",
+        ],
+    )
+
+    assert plan.exit_code == 0
+    payload = json.loads(plan.stdout)
+    assert payload["command"] == "organize_nesting_plan"
+    assert payload["plan"]["entries"][0]["kind"] == "low_value_wrapper"
+    assert payload["plan"]["entries"][0]["action"] == "flatten_low_value_leaf_wrapper"

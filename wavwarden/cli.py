@@ -144,7 +144,9 @@ def cmd_organize_nesting_plan(
         str,
         typer.Option(
             "--kind",
-            help="Candidate kind to plan. Supported: 'repeated_folder_name', 'single_child_chain'.",
+            help=(
+                "Candidate kind to plan. Supported: 'repeated_folder_name', 'single_child_chain', 'low_value_wrapper'."
+            ),
         ),
     ] = "repeated_folder_name",
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,

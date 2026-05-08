@@ -58,6 +58,18 @@ _LOW_VALUE_WRAPPER_NAMES = {
     "waves",
     "wavs",
 }
+_APPLYABLE_LEAF_WRAPPER_NAMES = {
+    "audio",
+    "audios",
+    "file",
+    "files",
+    "sample",
+    "samples",
+    "wav",
+    "wave",
+    "waves",
+    "wavs",
+}
 
 
 def _now_iso() -> str:
@@ -296,7 +308,7 @@ def build_nesting_plan_from_report(
     report = OrganizeAuditReport.model_validate(raw_report)
     errors: list[dict] = list(report.errors)
     entries: list[NestingPlanEntry] = []
-    supported_kinds = {"repeated_folder_name", "single_child_chain"}
+    supported_kinds = {"repeated_folder_name", "single_child_chain", "low_value_wrapper"}
 
     if report.pattern != "redundant-nesting":
         errors.append({"path": report.root, "error": "source report must use pattern='redundant-nesting'"})
@@ -342,7 +354,7 @@ def build_nesting_plan_from_report(
                 )
             action = "flatten_child_into_parent"
             target_path = target
-        else:
+        elif candidate.kind == "single_child_chain":
             children = sorted(source.iterdir(), key=lambda path: path.name.casefold())
             if len(children) != 1 or not children[0].is_dir():
                 errors.append({"path": str(source), "error": "source must contain exactly one child directory"})
@@ -363,6 +375,42 @@ def build_nesting_plan_from_report(
                 )
             ]
             action = "collapse_single_child_wrapper"
+        else:
+            if _folder_key(source.name) not in _APPLYABLE_LEAF_WRAPPER_NAMES:
+                continue
+            children = sorted(source.iterdir(), key=lambda path: path.name.casefold())
+            if any(child.is_dir() for child in children):
+                continue
+            target_path = Path(candidate.target_path) if candidate.target_path is not None else source.parent
+            if source.parent != target_path:
+                errors.append(
+                    {"path": str(source), "target": str(target_path), "error": "target must be source parent"}
+                )
+                continue
+            if not target_path.exists() or not target_path.is_dir():
+                errors.append({"path": str(source), "target": str(target_path), "error": "target directory missing"})
+                continue
+            moves = []
+            planned_targets: set[Path] = set()
+            for child in children:
+                destination = target_path / child.name
+                if destination.exists():
+                    errors.append({"path": str(child), "target": str(destination), "error": "target exists"})
+                    continue
+                if destination in planned_targets:
+                    errors.append(
+                        {"path": str(child), "target": str(destination), "error": "target planned more than once"}
+                    )
+                    continue
+                planned_targets.add(destination)
+                moves.append(
+                    NestingMove(
+                        old_path=str(child),
+                        new_path=str(destination),
+                        path_type="file",
+                    )
+                )
+            action = "flatten_low_value_leaf_wrapper"
 
         if not moves:
             errors.append({"path": str(source), "error": "no children to move"})

@@ -47,6 +47,7 @@ uv run sfx organize audit PATH --depth 1 --output ~/reports/organize_report.json
 uv run sfx organize audit PATH --pattern redundant-nesting --depth 8 --output ~/reports/nesting_report.json
 uv run sfx organize nesting-plan ~/reports/nesting_report.json --output ~/reports/nesting_plan.json
 uv run sfx organize nesting-plan ~/reports/nesting_report.json --kind single_child_chain --output ~/reports/single_child_plan.json
+uv run sfx organize nesting-plan ~/reports/nesting_report.json --kind low_value_wrapper --output ~/reports/wrapper_plan.json
 uv run sfx organize review ~/reports/nesting_plan.json --approve-all
 uv run sfx organize nesting-apply ~/reports/nesting_plan.json --require-reviewed
 uv run sfx organize nesting-apply ~/reports/nesting_plan.json --apply --require-reviewed --log nesting_log.json
@@ -86,7 +87,7 @@ python3 audit.py ~/CommercialLibraries --json
 - `organize audit --pattern redundant-nesting` is report-only; it flags repeated
   folder names, one-child chains, and generic wrapper folders for human review.
 - `organize nesting-plan/apply/undo` safely promotes repeated folder names and
-  non-generic single-child chains into reviewed flatten operations with collision checks and undo.
+  selected low-risk nesting cleanup into reviewed flatten operations with collision checks and undo.
 - Pack/folder consolidation is planned as a separate reviewed workflow
   for duplicated commercial packs and overlapping bundle folders.
 - `scan-errors` writes a plan for unreadable indexed files; only obvious
