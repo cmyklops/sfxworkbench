@@ -10,7 +10,7 @@ _SUBTYPE_BIT_DEPTH: dict[str, int] = {
     "PCM_16": 16,
     "PCM_24": 24,
     "PCM_32": 32,
-    "FLOAT": 32,    # subtype stays "FLOAT" to distinguish from PCM_32
+    "FLOAT": 32,  # subtype stays "FLOAT" to distinguish from PCM_32
     "DOUBLE": 64,
 }
 

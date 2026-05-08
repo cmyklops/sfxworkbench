@@ -13,7 +13,7 @@ console = Console()
 _STANDARD_SAMPLE_RATES = {44100, 48000, 88200, 96000, 176400, 192000}
 
 
-def run_audit(db_path: Path) -> AuditResult:
+def run_audit(db_path: Path, quiet: bool = False) -> AuditResult:
     """Query the index for problems and print a Rich summary.
 
     Returns the structured result so callers (tests, future GUI) can use it
@@ -22,12 +22,8 @@ def run_audit(db_path: Path) -> AuditResult:
     conn = get_connection(db_path)
 
     total = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-    scan_errors = conn.execute(
-        "SELECT COUNT(*) FROM files WHERE scan_error IS NOT NULL"
-    ).fetchone()[0]
-    missing_metadata = conn.execute(
-        "SELECT COUNT(*) FROM files WHERE has_bext = 0 AND has_ixml = 0"
-    ).fetchone()[0]
+    scan_errors = conn.execute("SELECT COUNT(*) FROM files WHERE scan_error IS NOT NULL").fetchone()[0]
+    missing_metadata = conn.execute("SELECT COUNT(*) FROM files WHERE has_bext = 0 AND has_ixml = 0").fetchone()[0]
     has_bext = conn.execute("SELECT COUNT(*) FROM files WHERE has_bext = 1").fetchone()[0]
     has_ixml = conn.execute("SELECT COUNT(*) FROM files WHERE has_ixml = 1").fetchone()[0]
     ucs_named = conn.execute("SELECT COUNT(*) FROM files WHERE is_ucs = 1").fetchone()[0]
@@ -48,14 +44,11 @@ def run_audit(db_path: Path) -> AuditResult:
     ).fetchall()
     fn_issues_by_type = {row["issue"]: row["cnt"] for row in fn_issue_rows}
 
-    error_rows = conn.execute(
-        "SELECT path, scan_error FROM files WHERE scan_error IS NOT NULL LIMIT 50"
-    ).fetchall()
+    error_rows = conn.execute("SELECT path, scan_error FROM files WHERE scan_error IS NOT NULL LIMIT 50").fetchall()
     errors = [{"path": row["path"], "error": row["scan_error"]} for row in error_rows]
 
     bit_depth_rows = conn.execute(
-        "SELECT bit_depth, COUNT(*) AS cnt FROM files "
-        "WHERE bit_depth IS NOT NULL GROUP BY bit_depth ORDER BY cnt DESC"
+        "SELECT bit_depth, COUNT(*) AS cnt FROM files WHERE bit_depth IS NOT NULL GROUP BY bit_depth ORDER BY cnt DESC"
     ).fetchall()
     bit_depths = {str(row["bit_depth"]): row["cnt"] for row in bit_depth_rows}
 
@@ -76,7 +69,8 @@ def run_audit(db_path: Path) -> AuditResult:
         sample_rates=sample_rates,
     )
 
-    _print_audit(result)
+    if not quiet:
+        _print_audit(result)
     return result
 
 

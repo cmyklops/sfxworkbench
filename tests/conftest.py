@@ -1,16 +1,16 @@
 """Pytest fixtures for wavwarden tests."""
 
-import struct
 import unicodedata
 import wave
 from pathlib import Path
 
 import pytest
-
 from wavwarden.db import get_connection
 
 
-def _make_tiny_wav(path: Path, sample_rate: int = 44100, channels: int = 1, sampwidth: int = 2, nframes: int = 100) -> None:
+def _make_tiny_wav(
+    path: Path, sample_rate: int = 44100, channels: int = 1, sampwidth: int = 2, nframes: int = 100
+) -> None:
     """Create a minimal valid WAV file using stdlib wave."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with wave.open(str(path), "wb") as w:
@@ -55,7 +55,9 @@ def tmp_library(tmp_path: Path) -> Path:
     (root / "sounds" / "SFX_GUNSHOT_01.sfk").write_bytes(b"\x00" * 32)
 
     # File with illegal char in name (:)
-    (root / "sounds" / "bad:name.wav").write_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x44\xac\x00\x00\x88X\x01\x00\x02\x00\x10\x00data\x04\x00\x00\x00\x00\x00\x00\x00")
+    (root / "sounds" / "bad:name.wav").write_bytes(
+        b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x44\xac\x00\x00\x88X\x01\x00\x02\x00\x10\x00data\x04\x00\x00\x00\x00\x00\x00\x00"
+    )
 
     # File with NFD-encoded name
     nfd_name = unicodedata.normalize("NFD", "café_sound.wav")

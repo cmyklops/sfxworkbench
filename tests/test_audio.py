@@ -5,7 +5,6 @@ import wave
 from pathlib import Path
 
 import pytest
-
 from wavwarden.models import AudioInfo
 
 
@@ -32,11 +31,7 @@ def _make_wav_with_bext(path: Path) -> Path:
     # Minimal bext chunk (602 bytes of zeros)
     bext_data = b"bext" + struct.pack("<I", 602) + b"\x00" * 602
     # fmt chunk
-    fmt_data = (
-        b"fmt "
-        + struct.pack("<I", 16)
-        + struct.pack("<HHIIHH", 1, 1, 44100, 88200, 2, 16)
-    )
+    fmt_data = b"fmt " + struct.pack("<I", 16) + struct.pack("<HHIIHH", 1, 1, 44100, 88200, 2, 16)
     # data chunk
     data_chunk = b"data" + struct.pack("<I", 4) + b"\x00" * 4
     # RIFF wrapper
@@ -51,6 +46,7 @@ def test_read_audio_info_basic(tmp_path: Path) -> None:
     wav = _make_wav(tmp_path / "test.wav", sample_rate=44100, channels=1, sampwidth=2, nframes=44100)
 
     from wavwarden.audio import read_audio_info
+
     info = read_audio_info(wav)
 
     # If soundfile is not installed, we get an error — skip gracefully
@@ -68,6 +64,7 @@ def test_read_audio_info_stereo(tmp_path: Path) -> None:
     wav = _make_wav(tmp_path / "stereo.wav", sample_rate=48000, channels=2, sampwidth=2, nframes=100)
 
     from wavwarden.audio import read_audio_info
+
     info = read_audio_info(wav)
 
     if info.error and "soundfile not installed" in info.error:
@@ -82,6 +79,7 @@ def test_read_audio_info_24bit(tmp_path: Path) -> None:
     wav = _make_wav(tmp_path / "24bit.wav", sample_rate=96000, channels=1, sampwidth=3, nframes=100)
 
     from wavwarden.audio import read_audio_info
+
     info = read_audio_info(wav)
 
     if info.error and "soundfile not installed" in info.error:
@@ -97,6 +95,7 @@ def test_read_audio_info_bext_detected(tmp_path: Path) -> None:
     wav = _make_wav_with_bext(tmp_path / "bext.wav")
 
     from wavwarden.audio import read_audio_info
+
     info = read_audio_info(wav)
 
     if info.error and "soundfile not installed" in info.error:
@@ -112,6 +111,7 @@ def test_read_audio_info_no_bext(tmp_path: Path) -> None:
     wav = _make_wav(tmp_path / "no_bext.wav")
 
     from wavwarden.audio import read_audio_info
+
     info = read_audio_info(wav)
 
     if info.error and "soundfile not installed" in info.error:
@@ -125,6 +125,7 @@ def test_read_audio_info_no_bext(tmp_path: Path) -> None:
 def test_read_audio_info_nonexistent_file(tmp_path: Path) -> None:
     """Non-existent file should return an AudioInfo with an error field."""
     from wavwarden.audio import read_audio_info
+
     info = read_audio_info(tmp_path / "nonexistent.wav")
 
     if info.error and "soundfile not installed" in info.error:

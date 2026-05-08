@@ -7,17 +7,17 @@ flow CLI-ward stay as plain dicts.
 
 from pydantic import BaseModel
 
-
 # ---------------------------------------------------------------------------
 # Audio + filename metadata (passed between modules)
 # ---------------------------------------------------------------------------
+
 
 class AudioInfo(BaseModel):
     sample_rate: int | None = None
     bit_depth: int | None = None
     channels: int | None = None
     duration_s: float | None = None
-    subtype: str | None = None   # e.g. "PCM_24", "FLOAT"
+    subtype: str | None = None  # e.g. "PCM_24", "FLOAT"
     has_bext: bool = False
     has_ixml: bool = False
     error: str | None = None
@@ -32,6 +32,7 @@ class FilenameIssue(BaseModel):
 # ---------------------------------------------------------------------------
 # Result types — returned from command modules to the CLI
 # ---------------------------------------------------------------------------
+
 
 class CleanResult(BaseModel):
     removed_files: list[str] = []
@@ -49,8 +50,10 @@ class ScanResult(BaseModel):
 
 class DedupeApplyResult(BaseModel):
     removed: int = 0
+    quarantined: int = 0
     bytes_freed: int = 0
     errors: list[dict] = []
+    quarantine_dir: str | None = None
     dry_run: bool = True
 
 
@@ -73,7 +76,35 @@ class AuditResult(BaseModel):
 # Dedupe groups
 # ---------------------------------------------------------------------------
 
+
 class DedupeGroup(BaseModel):
     hash: str
     size_bytes: int
     files: list[str]
+
+
+class RenameEntry(BaseModel):
+    old_path: str
+    new_path: str
+    old_filename: str
+    new_filename: str
+    action: str = "rename"
+    issue_fixes: list[str] = []
+
+
+class RenamePlan(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    root: str
+    pattern: str
+    entries: list[RenameEntry]
+    errors: list[dict] = []
+
+
+class RenameResult(BaseModel):
+    planned: int = 0
+    renamed: int = 0
+    undone: int = 0
+    errors: list[dict] = []
+    log_path: str | None = None
+    dry_run: bool = True

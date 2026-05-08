@@ -1,11 +1,10 @@
 """Tests for wavwarden.health — one test per issue type."""
 
 import unicodedata
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 import pytest
-
-from wavwarden.health import check_path, _MAX_NAME_BYTES, _MAX_PATH_BYTES
+from wavwarden.health import _MAX_NAME_BYTES, _MAX_PATH_BYTES, check_path
 from wavwarden.models import FilenameIssue
 
 
@@ -115,8 +114,6 @@ def test_leading_space_detected(tmp_path: Path) -> None:
 def test_trailing_space_detected(tmp_path: Path) -> None:
     # Construct a path with a component that has a trailing space before the check.
     # We use PurePosixPath to avoid filesystem normalization.
-    from pathlib import PurePosixPath
-    import os
     # Build the path string directly — we only need the health.check_path logic,
     # which operates on path.parts without touching the filesystem.
     base = str(tmp_path)

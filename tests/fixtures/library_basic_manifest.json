@@ -1,0 +1,11 @@
+{
+  "name": "library_basic",
+  "expected_audio_files": 5,
+  "expected_junk_files": 6,
+  "expected_junk_dirs": 2,
+  "expected_scan_errors_at_least": 1,
+  "expected_filename_issue_types": [
+    "illegal_chars",
+    "unicode_normalization"
+  ]
+}

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 import typer
 from rich.console import Console
 
 from wavwarden import __version__
 from wavwarden.db import DEFAULT_DB_PATH
+from wavwarden.utils import json_dumps
 
 app = typer.Typer(
     name="sfx",
@@ -24,6 +25,7 @@ console = Console()
 # Version callback
 # ---------------------------------------------------------------------------
 
+
 def _version_callback(value: bool) -> None:
     if value:
         console.print(f"wavwarden {__version__}")
@@ -33,7 +35,7 @@ def _version_callback(value: bool) -> None:
 @app.callback()
 def _main(
     version: Annotated[
-        Optional[bool],
+        bool | None,
         typer.Option("--version", callback=_version_callback, is_eager=True, help="Show version and exit."),
     ] = None,
 ) -> None:
@@ -44,11 +46,13 @@ def _main(
 # sfx clean
 # ---------------------------------------------------------------------------
 
+
 @app.command("clean")
 def cmd_clean(
     path: Annotated[Path, typer.Argument(help="Root path of the library to clean.")],
     apply: Annotated[bool, typer.Option("--apply", help="Actually remove files (default is dry-run).")] = False,
-    log: Annotated[Optional[Path], typer.Option("--log", help="Write JSON removal log to this file.")] = None,
+    log: Annotated[Path | None, typer.Option("--log", help="Write JSON removal log to this file.")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
     """Find and remove junk files (._*, .DS_Store, _wfCache/, *.reapeaks, etc.)."""
     from wavwarden.clean import clean_library
@@ -58,15 +62,18 @@ def cmd_clean(
         raise typer.Exit(1)
 
     dry_run = not apply
-    if dry_run:
+    if dry_run and not json_output:
         console.print("[yellow]Dry run — pass --apply to actually remove files.[/yellow]\n")
 
-    clean_library(path, dry_run=dry_run, log_path=log)
+    result = clean_library(path, dry_run=dry_run, log_path=log, quiet=json_output)
+    if json_output:
+        print(json_dumps({"schema_version": 1, "command": "clean", "result": result}))
 
 
 # ---------------------------------------------------------------------------
 # sfx scan
 # ---------------------------------------------------------------------------
+
 
 @app.command("scan")
 def cmd_scan(
@@ -74,6 +81,7 @@ def cmd_scan(
     db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
     no_hash: Annotated[bool, typer.Option("--no-hash", help="Skip MD5 hashing (faster).")] = False,
     force: Annotated[bool, typer.Option("--force", help="Re-scan all files even if unchanged.")] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
     """Crawl a path and index all audio files into SQLite."""
     from wavwarden.scan import scan_library
@@ -82,66 +90,110 @@ def cmd_scan(
         console.print(f"[red]Error: path not found: {path}[/red]")
         raise typer.Exit(1)
 
-    scan_library(path, db_path=db, skip_hash=no_hash, force_rescan=force)
+    result = scan_library(path, db_path=db, skip_hash=no_hash, force_rescan=force, quiet=json_output)
+    if json_output:
+        print(json_dumps({"schema_version": 1, "command": "scan", "db_path": db, "root": path, "result": result}))
 
 
 # ---------------------------------------------------------------------------
 # sfx dedupe
 # ---------------------------------------------------------------------------
 
+
 @app.command("dedupe")
 def cmd_dedupe(
     db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
-    apply: Annotated[Optional[Path], typer.Option("--apply", help="Execute a reviewed dedupe plan JSON file.")] = None,
+    apply: Annotated[Path | None, typer.Option("--apply", help="Execute a reviewed dedupe plan JSON file.")] = None,
+    quarantine_dir: Annotated[
+        Path | None, typer.Option("--quarantine-dir", help="Directory for quarantined duplicates.")
+    ] = None,
+    permanent_delete: Annotated[
+        bool, typer.Option("--delete", help="Permanently delete instead of quarantining. Advanced/destructive.")
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
     """Find duplicate files or execute a dedupe plan."""
-    from wavwarden.dedupe import find_duplicates, show_duplicates, write_dedupe_plan, apply_dedupe_plan
+    from wavwarden.dedupe import apply_dedupe_plan, find_duplicates, show_duplicates, write_dedupe_plan
 
     if apply is not None:
         if not apply.exists():
             console.print(f"[red]Error: plan file not found: {apply}[/red]")
             raise typer.Exit(1)
-        apply_dedupe_plan(apply, db_path=db, dry_run=False)
+        result = apply_dedupe_plan(
+            apply,
+            db_path=db,
+            dry_run=False,
+            quarantine_dir=quarantine_dir,
+            permanent_delete=permanent_delete,
+            quiet=json_output,
+        )
+        if json_output:
+            print(json_dumps({"schema_version": 1, "command": "dedupe_apply", "result": result}))
         return
 
     groups = find_duplicates(db)
-    show_duplicates(groups)
+    show_duplicates(groups, quiet=json_output)
 
+    plan_path = None
     if groups:
         from datetime import datetime
+
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         plan_path = Path(f"dedupe_plan_{ts}.json")
-        write_dedupe_plan(groups, plan_path)
+        write_dedupe_plan(groups, plan_path, db_path=db, quiet=json_output)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "dedupe",
+                    "db_path": db,
+                    "plan_path": plan_path,
+                    "groups": groups,
+                }
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
 # sfx audit
 # ---------------------------------------------------------------------------
 
+
 @app.command("audit")
 def cmd_audit(
     db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
     """Query the index for problems: missing metadata, scan errors, unusual sample rates."""
     from wavwarden.audit_cmd import run_audit
-    run_audit(db)
+
+    result = run_audit(db, quiet=json_output)
+    if json_output:
+        print(json_dumps({"schema_version": 1, "command": "audit", "db_path": db, "result": result}))
 
 
 # ---------------------------------------------------------------------------
 # sfx search
 # ---------------------------------------------------------------------------
 
+
 @app.command("search")
 def cmd_search(
     query: Annotated[str, typer.Argument(help="Full-text search query.")],
     db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
     limit: Annotated[int, typer.Option("--limit", help="Maximum results to return.")] = 50,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
     """Full-text search over filenames and stems."""
     from rich.table import Table
+
     from wavwarden.search import search
 
     results = search(db, query, limit=limit)
+    if json_output:
+        print(json_dumps({"schema_version": 1, "command": "search", "db_path": db, "query": query, "results": results}))
+        return
     if not results:
         console.print("[yellow]No results found.[/yellow]")
         return
@@ -173,16 +225,66 @@ def cmd_search(
 # sfx export
 # ---------------------------------------------------------------------------
 
+
 @app.command("export")
 def cmd_export(
     db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
     output: Annotated[Path, typer.Option("--output", help="Output CSV file path.")] = Path("library.csv"),
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
     """Export the files index to CSV."""
     from wavwarden.export import export_csv
 
     count = export_csv(db, output)
-    console.print(f"Exported [yellow]{count:,}[/yellow] rows to [cyan]{output}[/cyan]")
+    if json_output:
+        print(json_dumps({"schema_version": 1, "command": "export", "db_path": db, "output": output, "count": count}))
+    else:
+        console.print(f"Exported [yellow]{count:,}[/yellow] rows to [cyan]{output}[/cyan]")
+
+
+# ---------------------------------------------------------------------------
+# sfx rename
+# ---------------------------------------------------------------------------
+
+
+@app.command("rename")
+def cmd_rename(
+    path: Annotated[Path | None, typer.Argument(help="Root path of the library to rename.")] = None,
+    pattern: Annotated[str, typer.Option("--pattern", help="Rename pattern. Currently only 'ucs'.")] = "ucs",
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    apply: Annotated[bool, typer.Option("--apply", help="Actually rename files (default is dry-run).")] = False,
+    log: Annotated[Path | None, typer.Option("--log", help="Write/read rename log path.")] = None,
+    undo: Annotated[Path | None, typer.Option("--undo", help="Undo a previous rename log.")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Bulk UCS rename with preview, apply, collision detection, and undo."""
+    from wavwarden.rename import apply_rename_plan, build_rename_plan, show_rename_plan, undo_rename_log
+
+    if undo is not None:
+        result = undo_rename_log(undo, db_path=db, dry_run=not apply, quiet=json_output)
+        if json_output:
+            print(json_dumps({"schema_version": 1, "command": "rename_undo", "result": result}))
+        return
+
+    if path is None:
+        console.print("[red]Error: PATH is required unless --undo is provided.[/red]")
+        raise typer.Exit(1)
+    if not path.exists():
+        console.print(f"[red]Error: path not found: {path}[/red]")
+        raise typer.Exit(1)
+
+    plan = build_rename_plan(path, pattern=pattern)
+    if not apply:
+        if not json_output:
+            console.print("[yellow]Dry run — pass --apply to actually rename files.[/yellow]\n")
+            show_rename_plan(plan)
+        if json_output:
+            print(json_dumps({"schema_version": 1, "command": "rename", "plan": plan}))
+        return
+
+    result = apply_rename_plan(plan, db_path=db, log_path=log, dry_run=False, quiet=json_output)
+    if json_output:
+        print(json_dumps({"schema_version": 1, "command": "rename_apply", "result": result, "plan": plan}))
 
 
 if __name__ == "__main__":

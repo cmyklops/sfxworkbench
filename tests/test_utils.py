@@ -18,8 +18,8 @@ def test_fmt_bytes_mb() -> None:
 
 
 def test_fmt_bytes_gb() -> None:
-    assert fmt_bytes(1024 ** 3) == "1.0 GB"
+    assert fmt_bytes(1024**3) == "1.0 GB"
 
 
 def test_fmt_bytes_tb() -> None:
-    assert fmt_bytes(1024 ** 4) == "1.0 TB"
+    assert fmt_bytes(1024**4) == "1.0 TB"

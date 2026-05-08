@@ -11,10 +11,20 @@ from pathlib import Path
 # Audio extensions — never treated as junk (safety guard)
 # ---------------------------------------------------------------------------
 
-AUDIO_EXTENSIONS: frozenset[str] = frozenset({
-    ".wav", ".aif", ".aiff", ".mp3", ".flac",
-    ".ogg", ".opus", ".m4a", ".w64", ".rf64",
-})
+AUDIO_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".wav",
+        ".aif",
+        ".aiff",
+        ".mp3",
+        ".flac",
+        ".ogg",
+        ".opus",
+        ".m4a",
+        ".w64",
+        ".rf64",
+    }
+)
 
 # ---------------------------------------------------------------------------
 # Junk patterns
@@ -36,6 +46,7 @@ APPLE_DOUBLE_PREFIX: str = "._"
 # ---------------------------------------------------------------------------
 # Predicates
 # ---------------------------------------------------------------------------
+
 
 def is_apple_double(name: str) -> bool:
     """True if the filename is a macOS AppleDouble resource fork."""

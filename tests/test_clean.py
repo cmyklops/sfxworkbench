@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from wavwarden.clean import find_junk, clean_library
+from wavwarden.clean import clean_library, find_junk
 
 
 def test_find_junk_detects_appledouble(tmp_library: Path) -> None:
@@ -64,8 +64,9 @@ def test_apply_removes_junk(tmp_library: Path) -> None:
 
     assert ".DS_Store" not in remaining_names, "DS_Store should be removed"
     assert not any(n.startswith("._") for n in remaining_names), "AppleDouble files should be removed"
-    assert not any(tmp_library / "_wfCache" in p.parents or p == tmp_library / "_wfCache" for p in remaining), \
+    assert not any(tmp_library / "_wfCache" in p.parents or p == tmp_library / "_wfCache" for p in remaining), (
         "_wfCache dir should be gone"
+    )
 
 
 def test_apply_leaves_audio_files(tmp_library: Path) -> None:
@@ -84,6 +85,7 @@ def test_clean_result_counts(tmp_library: Path) -> None:
 
 def test_clean_log_written(tmp_library: Path, tmp_path: Path) -> None:
     import json
+
     log_path = tmp_path / "clean_log.json"
     clean_library(tmp_library, dry_run=True, log_path=log_path)
     assert log_path.exists(), "Log file should be created"

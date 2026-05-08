@@ -53,6 +53,7 @@ def test_scan_rescans_modified_files(tmp_library: Path, tmp_db: Path) -> None:
     new_time = time.time() + 100
     target.touch()
     import os
+
     os.utime(target, (new_time, new_time))
 
     second = scan_library(tmp_library, tmp_db, skip_hash=True)

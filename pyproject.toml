@@ -17,7 +17,33 @@ dependencies = [
 sfx = "wavwarden.cli:app"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-cov"]
+dev = ["pytest>=8.0", "pytest-cov", "ruff>=0.8", "poethepoet>=0.30"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+src = ["wavwarden", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"audit.py" = ["T201"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.poe.tasks]
+test = "pytest tests/ -v"
+lint = "ruff check ."
+fmt = "ruff format ."
+fmt-check = "ruff format --check ."
+json-smoke = "pytest tests/test_cli_json.py tests/test_json_contracts.py -v"
+check = ["lint", "fmt-check", "test"]
+bench-scan = "python scripts/bench_large_library.py"
