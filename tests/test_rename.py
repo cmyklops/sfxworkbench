@@ -107,6 +107,62 @@ def test_safe_rename_applies_directory_and_file_updates_db(tmp_path: Path, tmp_d
     assert bad_file.exists()
 
 
+def test_portable_rename_plan_fixes_risky_and_non_ascii_names(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    bad_dir = root / "CB Sound Design - Defect \u2013 Hum, Noise And Glitches"
+    bad_dir.mkdir(parents=True)
+    bad_file = bad_dir / "100_C#_Flesh & Bones!.wav"
+    bad_file.write_bytes(b"audio")
+
+    plan = build_rename_plan(root, pattern="portable")
+    planned = {entry.old_filename: entry.new_filename for entry in plan.entries}
+
+    assert planned["CB Sound Design - Defect \u2013 Hum, Noise And Glitches"] == (
+        "CB Sound Design - Defect - Hum, Noise And Glitches"
+    )
+    assert planned["100_C#_Flesh & Bones!.wav"] == "100_CSharp_Flesh and Bones_.wav"
+    assert any("non_ascii" in entry.issue_fixes for entry in plan.entries)
+    assert any("risky_or_illegal_chars" in entry.issue_fixes for entry in plan.entries)
+
+
+def test_portable_rename_translates_cyrillic_c_in_key_names(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    root.mkdir()
+    bad_file = root / "Ghosthack - FRE - Vocal Loop 07 - \u0421m 126BPM.wav"
+    bad_file.write_bytes(b"audio")
+
+    plan = build_rename_plan(root, pattern="portable")
+
+    assert len(plan.entries) == 1
+    assert plan.entries[0].new_filename == "Ghosthack - FRE - Vocal Loop 07 - Cm 126BPM.wav"
+
+
+def test_portable_rename_spaces_ampersand_replacement(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    root.mkdir()
+    bad_file = root / "Doors&Building stuff.wav"
+    bad_file.write_bytes(b"audio")
+
+    plan = build_rename_plan(root, pattern="portable")
+
+    assert plan.entries[0].new_filename == "Doors and Building stuff.wav"
+
+
+def test_portable_rename_shortens_long_paths(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    deep = root / ("Long Folder " * 8).strip()
+    deep.mkdir(parents=True)
+    bad_file = deep / (("Very Long Filename " * 9).strip() + ".wav")
+    bad_file.write_bytes(b"audio")
+
+    plan = build_rename_plan(root, pattern="portable")
+
+    assert len(plan.entries) == 1
+    assert "path_too_long" in plan.entries[0].issue_fixes
+    assert len(plan.entries[0].new_path.encode("utf-8")) <= 240
+    assert plan.entries[0].new_filename.endswith(".wav")
+
+
 def test_apply_rename_plan_allows_partial_when_requested(tmp_path: Path) -> None:
     root = tmp_path / "lib"
     root.mkdir()

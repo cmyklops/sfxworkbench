@@ -16,7 +16,8 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
 - Index: `/Users/mattwesdock/.wavwarden/index.db`
 - Exact file duplicates: quarantined.
 - Safe filename/path cleanup: applied.
-- Long paths: fixed.
+- Portable filename/path cleanup: applied.
+- Long paths: fixed with conservative path shortening.
 - Unicode normalization duplicates: quarantined.
 - Pack overlap report: zero exact-hash pack candidates after dedupe.
 - Top-level numeric sort-prefix folder organization: applied.
@@ -36,18 +37,22 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
   102 file moves, undo log at `/Users/mattwesdock/reports/low_value_wrapper_log_20260508.json`.
 - Latest redundant nesting report: `/Users/mattwesdock/reports/redundant_nesting_report_after_wrappers_20260508.json`
   found 25 candidates: 21 low-value wrappers and 4 generic single-child chains.
+- Portable rename apply: done, 832 risky/non-ASCII filename/path renames,
+  undo log at `/Users/mattwesdock/reports/portable_rename_log_20260508.json`.
+- Portable long-path shortening apply: done, 32 file renames,
+  undo log at `/Users/mattwesdock/reports/portable_path_shortening_log_20260508.json`.
+- Current indexed filename issues: 0.
 
 Current audit focus:
 
 - Scan errors: cleared with RIFF fallback reader for malformed side chunks.
-- 1,910 risky-character filename issues remain.
-- 17 non-ASCII filename issues remain.
+- Filename issues: cleared.
 
 ## Next
 
 1. Move on from folder nesting unless you want a manual review flow for semantic wrappers.
 2. Add report-only related sound groups/collections audit.
-3. Review risky-character filename issues.
+3. Review missing metadata and unusual sample-rate reports.
 
 ## Later
 

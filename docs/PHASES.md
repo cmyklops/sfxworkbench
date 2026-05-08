@@ -45,8 +45,10 @@ uv run sfx organize apply organize_report.json --require-reviewed --log organize
 uv run sfx organize undo organize_log.json --apply
 uv run sfx rename PATH --pattern ucs
 uv run sfx rename PATH --pattern safe
+uv run sfx rename PATH --pattern portable
 uv run sfx rename PATH --pattern ucs --apply --log rename_log.json
 uv run sfx rename PATH --pattern safe --apply --allow-partial --log safe_rename_log.json
+uv run sfx rename PATH --pattern portable --apply --log portable_rename_log.json
 uv run sfx rename --undo rename_log.json --apply
 ```
 
@@ -76,11 +78,11 @@ python3 audit.py ~/CommercialLibraries --json
 - `organize audit/review/apply/undo`: safe folder-structure cleanup with review gate, SQLite path updates, and undo log.
 - `organize audit --pattern redundant-nesting`: report-only folder-structure review for repeated names, one-child chains, and low-value wrappers.
 - `organize nesting-plan/apply/undo`: reviewed flatten workflow for repeated folder names, non-generic single-child chains, and strict leaf wrappers; dry-run by default and never overwrites.
-- `rename`: previews UCS-oriented or safe filename/path changes, refuses collisions, applies with undo log. `--allow-partial` can apply valid entries while keeping unresolved collisions visible in the result.
+- `rename`: previews UCS-oriented, safe, or portable filename/path changes, refuses collisions, applies with undo log. `--pattern portable` fixes Unicode normalization, risky cross-platform characters, non-ASCII names, and conservative long paths. `--allow-partial` can apply valid entries while keeping unresolved collisions visible in the result.
 
 ## Phase 2 — Cleanup Tooling
 
-First priority is `sfx rename --pattern ucs`, with preview/apply/undo behavior.
+`sfx rename` now supports `ucs`, `safe`, and `portable` preview/apply/undo behavior.
 Pack/folder duplicate detection is the next professional-grade safety layer
 after exact file dedupe and filename/path cleanup. It should ship as a reviewed
 report/plan/apply workflow before broad folder organization features:

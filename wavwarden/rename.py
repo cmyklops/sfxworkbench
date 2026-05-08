@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from datetime import datetime, timezone
+from hashlib import md5
 from pathlib import Path
 
 from rich.console import Console
@@ -19,8 +21,28 @@ console = Console()
 
 _BAD_CHARS_RE = re.compile(r"[:*?\"<>|#&;'\\!]+")
 _SAFE_BAD_CHARS_RE = re.compile(r"[:*?\"<>|]+")
+_PORTABLE_UNDERSCORE_CHARS_RE = re.compile(r"[:*?\"<>|;\\!]+")
 _SEPARATOR_RE = re.compile(r"[\s\-]+")
 _UNDERSCORE_RE = re.compile(r"_+")
+_PORTABLE_MAX_PATH_BYTES = 240
+_PORTABLE_TRANSLATION = str.maketrans(
+    {
+        "&": " and ",
+        "#": "Sharp",
+        "'": "",
+        "\u2018": "",
+        "\u2019": "",
+        "\u201c": "",
+        "\u201d": "",
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2212": "-",
+        "\u2026": "...",
+        "\u00d7": "x",
+        "\u0421": "C",
+        "\u0441": "c",
+    }
+)
 
 
 def _now_iso() -> str:
@@ -76,6 +98,31 @@ def _safe_component(name: str) -> tuple[str, list[str]]:
     return cleaned, fixes
 
 
+def _portable_component(name: str) -> tuple[str, list[str]]:
+    fixes: list[str] = []
+    normalized = normalize_stem(name)
+    if normalized != name:
+        fixes.append("unicode_normalization")
+    had_non_ascii = any(ord(char) > 127 for char in normalized)
+    translated = normalized.translate(_PORTABLE_TRANSLATION)
+    ascii_name = unicodedata.normalize("NFKD", translated).encode("ascii", "ignore").decode("ascii")
+    if had_non_ascii and ascii_name != normalized:
+        fixes.append("non_ascii")
+    cleaned = _PORTABLE_UNDERSCORE_CHARS_RE.sub("_", ascii_name)
+    if translated != normalized or cleaned != ascii_name or any(char in normalized for char in "#&;'\\!"):
+        fixes.append("risky_or_illegal_chars")
+    stripped = cleaned.strip()
+    if stripped != cleaned:
+        fixes.append("leading_trailing_space")
+    cleaned = _UNDERSCORE_RE.sub("_", stripped)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = cleaned.strip("._ ")
+    if not cleaned or cleaned in {".", ".."}:
+        cleaned = "UNTITLED"
+        fixes.append("empty_name")
+    return cleaned, sorted(set(fixes), key=fixes.index)
+
+
 def _safe_paths_for_audio(path: Path, root: Path) -> list[tuple[Path, Path, list[str]]]:
     planned: list[tuple[Path, Path, list[str]]] = []
     for component_path in [path, *path.parents]:
@@ -87,10 +134,48 @@ def _safe_paths_for_audio(path: Path, root: Path) -> list[tuple[Path, Path, list
     return planned
 
 
+def _component_paths_for_audio(path: Path, root: Path, component_fn) -> list[tuple[Path, Path, list[str]]]:
+    planned: list[tuple[Path, Path, list[str]]] = []
+    for component_path in [path, *path.parents]:
+        if component_path == root or root not in component_path.parents:
+            break
+        new_name, fixes = component_fn(component_path.name)
+        if fixes:
+            planned.append((component_path, component_path.with_name(new_name), fixes))
+    return planned
+
+
+def _truncate_utf8(value: str, max_bytes: int) -> str:
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def _shorten_path_component(
+    path: Path, max_path_bytes: int = _PORTABLE_MAX_PATH_BYTES
+) -> tuple[Path, list[str]] | None:
+    path_bytes = len(str(path).encode("utf-8"))
+    if path_bytes <= max_path_bytes:
+        return None
+    suffix = path.suffix if path.is_file() else ""
+    stem = path.stem if path.is_file() else path.name
+    marker = "_" + md5(path.name.encode("utf-8")).hexdigest()[:6]
+    parent_bytes = len(str(path.parent).encode("utf-8")) + 1
+    max_stem_bytes = max(
+        1,
+        max_path_bytes - parent_bytes - len(marker.encode("utf-8")) - len(suffix.encode("utf-8")),
+    )
+    shortened = _truncate_utf8(stem, max_stem_bytes).rstrip(" -_.")
+    if not shortened:
+        shortened = "SHORT"
+    return path.with_name(f"{shortened}{marker}{suffix}"), ["path_too_long"]
+
+
 def build_rename_plan(root: Path, pattern: str = "ucs") -> RenamePlan:
     """Build a dry-run rename plan for audio files under root."""
-    if pattern not in {"ucs", "safe"}:
-        raise ValueError("Only pattern='ucs' and pattern='safe' are currently supported")
+    if pattern not in {"ucs", "safe", "portable"}:
+        raise ValueError("Only pattern='ucs', pattern='safe', and pattern='portable' are currently supported")
 
     root = root.resolve()
     entries_by_path: dict[Path, RenameEntry] = {}
@@ -108,6 +193,13 @@ def build_rename_plan(root: Path, pattern: str = "ucs") -> RenamePlan:
         if pattern == "ucs":
             new_filename, fixes = _ucs_filename(path)
             candidates = [(path, path.with_name(new_filename), fixes)]
+        elif pattern == "portable":
+            candidates = _component_paths_for_audio(path, root, _portable_component)
+            if not candidates:
+                shortened = _shorten_path_component(path)
+                if shortened is not None:
+                    target, fixes = shortened
+                    candidates = [(path, target, fixes)]
         else:
             candidates = _safe_paths_for_audio(path, root)
 

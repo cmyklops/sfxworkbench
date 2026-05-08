@@ -631,7 +631,9 @@ def cmd_export(
 @app.command("rename")
 def cmd_rename(
     path: Annotated[Path | None, typer.Argument(help="Root path of the library to rename.")] = None,
-    pattern: Annotated[str, typer.Option("--pattern", help="Rename pattern. Supported: 'ucs', 'safe'.")] = "ucs",
+    pattern: Annotated[
+        str, typer.Option("--pattern", help="Rename pattern. Supported: 'ucs', 'safe', 'portable'.")
+    ] = "ucs",
     db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
     apply: Annotated[bool, typer.Option("--apply", help="Actually rename files (default is dry-run).")] = False,
     allow_partial: Annotated[

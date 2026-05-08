@@ -57,8 +57,10 @@ uv run sfx organize apply ~/reports/organize_report.json --require-reviewed --lo
 uv run sfx organize undo organize_log.json --apply
 uv run sfx rename PATH --pattern ucs  # dry-run UCS-oriented rename preview
 uv run sfx rename PATH --pattern safe # dry-run safe filename/path cleanup
+uv run sfx rename PATH --pattern portable # dry-run portable filename/path cleanup
 uv run sfx rename PATH --pattern ucs --apply --log rename_log.json
 uv run sfx rename PATH --pattern safe --apply --allow-partial --log safe_rename_log.json
+uv run sfx rename PATH --pattern portable --apply --log portable_rename_log.json
 uv run sfx rename --undo rename_log.json --apply
 ```
 
@@ -93,7 +95,8 @@ python3 audit.py ~/CommercialLibraries --json
 - `scan-errors` writes a plan for unreadable indexed files; only obvious
   artifacts are marked for quarantine automatically.
 - `rename` previews first, refuses collisions, writes an undo log on apply, and
-  can restore from that log.
+  can restore from that log. `--pattern portable` handles Unicode normalization,
+  risky cross-platform characters, non-ASCII names, and conservative long-path shortening.
 - `normalize` is intentionally not part of the beta safety promise yet because
   it modifies audio content.
 

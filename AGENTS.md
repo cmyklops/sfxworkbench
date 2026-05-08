@@ -45,8 +45,10 @@ uv run sfx organize undo organize_log.json --db ~/.wavwarden/index.db --apply
 uv run sfx search "gunshot exterior"
 uv run sfx rename ~/CommercialLibraries --pattern ucs                   # dry-run
 uv run sfx rename ~/CommercialLibraries --pattern safe                  # dry-run
+uv run sfx rename ~/CommercialLibraries --pattern portable              # dry-run
 uv run sfx rename ~/CommercialLibraries --pattern ucs --apply --log rename_log.json
 uv run sfx rename ~/CommercialLibraries --pattern safe --apply --allow-partial --log safe_rename_log.json
+uv run sfx rename ~/CommercialLibraries --pattern portable --apply --log portable_rename_log.json
 
 # Run the standalone Phase 0 auditor (no install required, Python 3.9+)
 python3 audit.py ~/CommercialLibraries --output-dir ~/reports
@@ -79,7 +81,7 @@ sfx packs audit PATH → folder hash signatures + overlap candidates → report 
 sfx organize audit/review/apply/undo PATH → folder-structure cleanup with undo log
 sfx organize audit --pattern redundant-nesting PATH → report-only nested-folder review
 sfx organize nesting-plan/apply/undo → reviewed repeated-folder, non-generic single-child, and strict leaf-wrapper flatten workflow
-sfx rename PATH → preview/apply UCS-oriented or safe names → rename_log_TIMESTAMP.json
+sfx rename PATH → preview/apply UCS-oriented, safe, or portable names → rename_log_TIMESTAMP.json
 sfx audit      →  SELECT queries against index
 sfx search Q   →  FTS5 MATCH query on files_fts
 ```
@@ -95,7 +97,7 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 - **`dedupe.py`** — exact MD5 duplicate grouping. Writes versioned JSON plans and quarantines by default on apply.
 - **`packs.py`** — report-only pack/folder duplicate detection. Computes recursive folder signatures from indexed MD5 hashes and reports exact duplicate folders plus high-overlap pack candidates.
 - **`organize.py`** — folder organization preview/review/apply/undo. Conservative numeric sort-prefix removal reuses the rename engine for apply; repeated-folder nesting and non-generic one-child chains have reviewed plan/apply/undo; generic wrappers remain report-only.
-- **`rename.py`** — UCS-oriented and safe filename/path rename preview/apply/undo. Refuses collisions and updates SQLite paths after apply.
+- **`rename.py`** — UCS-oriented, safe, and portable filename/path rename preview/apply/undo. Refuses collisions and updates SQLite paths after apply.
 - **`ucs.py`** — shared UCS-looking filename heuristic/parser. This is not a full official UCS catalog validator yet.
 
 ### Critical design constraints
