@@ -75,6 +75,12 @@ report/plan/apply workflow before broad folder organization features:
 Folder consolidation must not permanently delete by default. Merging unique
 files is a later explicit action and must never overwrite existing files.
 
+Folder organization should follow the same safety model. Planned first command:
+`sfx organize audit PATH --depth 1 --pattern strip-leading-numbers`, reporting
+top-level folder changes such as `01 Vendor Pack` -> `Vendor Pack` for
+alphabetized browsing and easier bulk edits. Apply must require a reviewed plan,
+refuse collisions, update SQLite paths, and write an undo log.
+
 Metadata writing follows after rename and pack review workflows stabilize:
 
 - `sfx tag --from-filename`

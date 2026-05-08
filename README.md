@@ -8,6 +8,7 @@ See [`docs/PHASES.md`](docs/PHASES.md) for the roadmap.
 
 Project docs:
 
+- [`NEXT.md`](NEXT.md): current solo-dev sprint note
 - [`docs/PHASES.md`](docs/PHASES.md): roadmap, safety model, JSON contracts
 - [`docs/UCS.md`](docs/UCS.md): UCS data and category integration plan
 - [`docs/METADATA_TAGGING.md`](docs/METADATA_TAGGING.md): metadata writing and audio-suggestion plan
