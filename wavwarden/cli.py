@@ -595,6 +595,33 @@ def cmd_metadata_audit(
         )
 
 
+@metadata_app.command("backends")
+def cmd_metadata_backends(
+    bwfmetaedit: Annotated[
+        Path | None,
+        typer.Option("--bwfmetaedit", help="Explicit path to the BWF MetaEdit CLI executable."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Report installed metadata write backends. No audio files are modified."""
+    from wavwarden.metadata_backends import build_metadata_backends_report, show_metadata_backends_report
+
+    report = build_metadata_backends_report(bwfmetaedit=bwfmetaedit)
+    if not json_output:
+        show_metadata_backends_report(report)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "metadata_backends",
+                    "bwfmetaedit": bwfmetaedit,
+                    "report": report,
+                }
+            )
+        )
+
+
 # ---------------------------------------------------------------------------
 # sfx ucs
 # ---------------------------------------------------------------------------

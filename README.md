@@ -160,6 +160,7 @@ These commands are report-only today:
 
 ```bash
 uv run sfx metadata audit --output ~/reports/metadata_report.json
+uv run sfx metadata backends --json
 uv run sfx groups audit PATH --output ~/reports/related_groups_report.json
 uv run sfx format audit PATH --output ~/reports/format_report.json
 uv run sfx packs audit PATH --output ~/reports/pack_overlap_report.json

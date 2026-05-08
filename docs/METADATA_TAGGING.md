@@ -104,6 +104,7 @@ uv run sfx tag review tag_plan.json --approve-all
 uv run sfx tag apply tag_plan.json --db ~/.wavwarden/index.db --require-reviewed --apply --log tag_apply_log.json
 uv run sfx tag sidecar-export accepted_tags.sidecar.json --db ~/.wavwarden/index.db --path PATH
 uv run sfx tag sidecar-import accepted_tags.sidecar.json --db ~/.wavwarden/index.db
+uv run sfx metadata backends --json
 ```
 
 Each plan entry should include validation anchors:
@@ -157,6 +158,17 @@ Use BWF MetaEdit as the professional reference behavior first. If wavwarden
 wraps it, treat it as an external command with explicit version capture in tag
 plans/logs. Avoid hand-rolled binary metadata mutation until the read/plan/apply
 contracts are stable and backed by fixtures from real-world files.
+
+Current embedded-write preflight:
+
+```bash
+uv run sfx metadata backends --json
+uv run sfx metadata backends --bwfmetaedit /path/to/bwfmetaedit --json
+```
+
+This command only probes writer availability and version. It does not read or
+modify audio files. Future embedded-write plans should copy the discovered
+backend executable and version into plan/log records before any write is allowed.
 
 ## Audio Listening Suggestions
 

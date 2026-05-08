@@ -407,6 +407,30 @@ class MetadataAuditReport(BaseModel):
     unusual_sample_rates: list[MetadataAuditEntry] = []
 
 
+class MetadataWriteBackend(BaseModel):
+    name: str
+    display_name: str
+    available: bool = False
+    executable: str | None = None
+    version: str | None = None
+    version_command: list[str] = []
+    error: str | None = None
+    supported_extensions: list[str] = []
+    writes_embedded_metadata: bool = True
+    writes_bext: bool = False
+    writes_ixml: bool = False
+    notes: list[str] = []
+
+
+class MetadataWriteBackendsReport(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    recommended_backend: str = "bwfmetaedit"
+    backends: list[MetadataWriteBackend] = []
+
+
 class RelatedSoundFile(BaseModel):
     path: str
     filename: str

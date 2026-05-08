@@ -103,6 +103,20 @@ def test_audit_search_export_json_contract(tmp_library: Path, tmp_db: Path, tmp_
     assert len(metadata["report"]["missing_metadata"]) == 2
     assert metadata_out.exists()
 
+    metadata_backends = _normalize(
+        _load(runner.invoke(app, ["metadata", "backends", "--json"]).stdout),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert metadata_backends["schema_version"] == 1
+    assert metadata_backends["command"] == "metadata_backends"
+    assert metadata_backends["bwfmetaedit"] is None
+    assert metadata_backends["report"]["schema_version"] == 1
+    assert metadata_backends["report"]["recommended_backend"] == "bwfmetaedit"
+    assert metadata_backends["report"]["backends"][0]["name"] == "bwfmetaedit"
+    assert "available" in metadata_backends["report"]["backends"][0]
+
     search = _normalize(
         _load(runner.invoke(app, ["search", "RAIN", "--db", str(tmp_db), "--json"]).stdout),
         tmp_path,
