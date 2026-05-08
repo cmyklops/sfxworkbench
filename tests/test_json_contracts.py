@@ -129,6 +129,44 @@ def test_audit_search_export_json_contract(tmp_library: Path, tmp_db: Path, tmp_
     }
 
 
+def test_similarity_crawl_json_contract(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
+    runner.invoke(app, ["scan", str(tmp_library), "--db", str(tmp_db), "--no-hash", "--json"])
+
+    payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "similarity",
+                    "crawl",
+                    str(tmp_library),
+                    "--db",
+                    str(tmp_db),
+                    "--cache",
+                    str(tmp_path / "similarity_cache"),
+                    "--limit",
+                    "2",
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "similarity_crawl"
+    assert payload["root"] == "<ROOT>"
+    assert payload["db_path"] == "<DB>"
+    assert payload["cache_path"] == "<TMP>/similarity_cache"
+    assert payload["report"]["backend"] == "deterministic_v1"
+    assert payload["report"]["summary"]["total_files"] == 4
+    assert payload["report"]["summary"]["analyzed"] == 4
+    assert len(payload["report"]["descriptors"]) == 2
+    assert payload["report"]["descriptors"][0]["duration_bucket"] is not None
+
+
 def test_rename_json_contract(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
     runner.invoke(app, ["scan", str(tmp_library), "--db", str(tmp_db), "--no-hash", "--json"])
     payload = _normalize(

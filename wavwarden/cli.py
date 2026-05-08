@@ -67,6 +67,13 @@ ucs_app = typer.Typer(
     rich_markup_mode="rich",
 )
 app.add_typer(ucs_app, name="ucs")
+similarity_app = typer.Typer(
+    name="similarity",
+    help="Analyze audio content descriptors for future similarity workflows.",
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+)
+app.add_typer(similarity_app, name="similarity")
 
 console = Console()
 
@@ -89,6 +96,65 @@ def _main(
     ] = None,
 ) -> None:
     """sfx — sound library hygiene toolkit."""
+
+
+# ---------------------------------------------------------------------------
+# sfx similarity
+# ---------------------------------------------------------------------------
+
+
+@similarity_app.command("crawl")
+def cmd_similarity_crawl(
+    path: Annotated[Path, typer.Argument(help="Root path of the indexed library to analyze.")],
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    cache: Annotated[
+        Path | None,
+        typer.Option("--cache", help="Directory for similarity crawl run reports."),
+    ] = None,
+    max_duration: Annotated[
+        float | None,
+        typer.Option("--max-duration", help="Maximum seconds to analyze per file; 0 reads each full file."),
+    ] = 30.0,
+    force: Annotated[bool, typer.Option("--force", help="Rebuild descriptors even when file anchors match.")] = False,
+    limit: Annotated[
+        int, typer.Option("--limit", help="Maximum descriptor rows to include in JSON output; 0 includes all.")
+    ] = 50,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Build deterministic audio descriptors for indexed files."""
+    from wavwarden.similarity import DEFAULT_SIMILARITY_CACHE, crawl_similarity_descriptors
+
+    if not path.exists():
+        console.print(f"[red]Error: path not found: {path}[/red]")
+        raise typer.Exit(1)
+    effective_cache = cache if cache is not None else DEFAULT_SIMILARITY_CACHE
+    effective_max_duration = None if max_duration == 0 else max_duration
+    try:
+        report = crawl_similarity_descriptors(
+            path,
+            db_path=db,
+            cache_path=effective_cache,
+            max_duration_s=effective_max_duration,
+            force=force,
+            limit=limit,
+            quiet=json_output,
+        )
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "similarity_crawl",
+                    "root": path,
+                    "db_path": db,
+                    "cache_path": effective_cache,
+                    "report": report,
+                }
+            )
+        )
 
 
 # ---------------------------------------------------------------------------

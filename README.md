@@ -172,16 +172,16 @@ uv run sfx ucs import ~/Desktop/_categorylist.csv --release-version v8.2.1
 uv run sfx ucs validate PATH --json
 ```
 
-Future similarity work is planned as an optional crawler, not as part of the
-default scan:
+Experimental similarity work starts with an optional descriptor crawler, not
+with the default scan:
 
 ```bash
 uv run sfx similarity crawl PATH --db ~/.wavwarden/index.db --cache ~/.wavwarden/similarity
-uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --limit 50 --json
 ```
 
-That roadmap folds Sononym-style descriptor discovery together with a
-Soundminer-style resumable cache builder. See
+This first slice stores deterministic descriptors in SQLite and skips unchanged
+files on later runs. The larger roadmap folds Sononym-style descriptor discovery
+together with a Soundminer-style resumable cache builder. See
 [`docs/SIMILARITY.md`](docs/SIMILARITY.md).
 
 ## Standalone First-Look Audit

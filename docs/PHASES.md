@@ -90,6 +90,7 @@ uv run sfx scan-errors --output ~/reports/scan_error_plan.json
 uv run sfx scan-errors --apply ~/reports/scan_error_plan.json
 uv run sfx search QUERY
 uv run sfx export --output library.csv
+uv run sfx similarity crawl PATH --db ~/.wavwarden/index.db --cache ~/.wavwarden/similarity
 uv run sfx dedupe --summary-only
 uv run sfx dedupe --output ~/reports/dedupe_plan.json
 uv run sfx dedupe --output ~/reports/dedupe_plan.json --safe-folder ~/CommercialLibraries/Master
@@ -150,6 +151,9 @@ python3 audit.py ~/CommercialLibraries --json
   review within related groups. It does not recommend or perform conversion.
 - `scan-errors`: writes a review plan for unreadable indexed files; quarantines
   only obvious artifacts/all-zero blobs by default.
+- `similarity crawl`: experimental, optional deterministic descriptor crawler
+  over indexed files. It stores SQLite descriptor rows, writes an optional cache
+  run report, and skips unchanged files by size/mtime/hash anchors.
 - `dedupe --summary-only`: finds exact MD5 duplicate groups and prints counts without writing a plan.
 - `dedupe --output PLAN.json`: writes a reviewed duplicate plan to an explicit path. Repeated `--safe-folder PATH` options prefer protected duplicate files as keep copies and mark protected extra copies as ignored. Repeated `--prefer-folder PATH` and `--prefer-extension EXT` options store preservation-priority evidence and choose keep copies accordingly.
 - `dedupe --review PLAN.json`: stamps all or selected duplicate groups as approved.
@@ -358,8 +362,9 @@ from reviewed quarantine logs and requires an explicit irreversible-delete flag.
 
 ## Phase 2.5 — Audio Analysis And Similarity
 
-After the cleanup, organization, and tag-plan foundations settle, add an
-optional audio-analysis lane. This lane should be CLI-first and JSON-first:
+After the cleanup, organization, and tag-plan foundations settle, keep expanding
+the optional audio-analysis lane. This lane should remain CLI-first and
+JSON-first:
 
 ```bash
 uv run sfx similarity crawl PATH --db ~/.wavwarden/index.db --cache ~/.wavwarden/similarity
@@ -371,7 +376,7 @@ First useful slice:
 
 - cheap descriptors such as peak, RMS, crest factor, rough brightness,
   transient density, silence, clipping, duration, channels, sample rate, and
-  bit depth
+  bit depth. Initial deterministic crawler implemented.
 - segment/event detection for long ambience and designed files
 - optional per-file and per-segment embeddings behind an extra dependency
 - JSON nearest-neighbor results with explicit distance/confidence caveats

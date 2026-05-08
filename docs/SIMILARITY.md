@@ -29,14 +29,23 @@ explicitly:
 uv run sfx similarity crawl ~/CommercialLibraries \
   --db ~/.wavwarden/index.db \
   --cache ~/.wavwarden/similarity \
-  --jobs 4 \
-  --resume
+  --max-duration 30
 
 uv run sfx similarity search --file ~/Desktop/query.wav \
   --db ~/.wavwarden/index.db \
   --limit 50 \
   --json
 ```
+
+Implemented first slice:
+
+- `sfx similarity crawl PATH`
+- deterministic backend name: `deterministic_v1`
+- SQLite-backed `analysis_runs` and `audio_descriptors` tables
+- optional cache directory for run report JSON
+- incremental skips when path anchors still match size, mtime, and MD5
+- descriptor fields for peak, RMS, crest factor, silence ratio, clipping count,
+  zero-crossing rate, transient density, and duration bucket
 
 ## Product Lessons
 
@@ -63,7 +72,7 @@ scale:
 
 The first implementation should be boring and report-first:
 
-1. Cheap audio descriptors:
+1. Cheap audio descriptors: implemented in the first crawler slice.
    peak, RMS, crest factor, silence, rough brightness, transient density,
    duration buckets, clipping flags, channel count, sample rate, bit depth.
 2. Segment/event detection:

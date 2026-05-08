@@ -65,10 +65,51 @@ CREATE TABLE IF NOT EXISTS scan_meta (
     value TEXT
 );
 
+CREATE TABLE IF NOT EXISTS analysis_runs (
+    id INTEGER PRIMARY KEY,
+    backend TEXT NOT NULL,
+    root TEXT NOT NULL,
+    db_path TEXT NOT NULL,
+    cache_path TEXT,
+    max_duration_s REAL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    status TEXT NOT NULL,
+    total_files INTEGER DEFAULT 0,
+    analyzed INTEGER DEFAULT 0,
+    skipped INTEGER DEFAULT 0,
+    errors INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS audio_descriptors (
+    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    backend TEXT NOT NULL,
+    path TEXT NOT NULL,
+    size_bytes INTEGER,
+    mtime REAL,
+    md5 TEXT,
+    max_duration_s REAL,
+    analyzed_duration_s REAL,
+    peak REAL,
+    rms REAL,
+    crest_factor REAL,
+    silence_ratio REAL,
+    clipping_count INTEGER DEFAULT 0,
+    zero_crossing_rate REAL,
+    transient_density REAL,
+    duration_bucket TEXT,
+    generated_at TEXT NOT NULL,
+    error TEXT,
+    PRIMARY KEY (file_id, backend)
+);
+
 CREATE INDEX IF NOT EXISTS idx_files_ext ON files(extension);
 CREATE INDEX IF NOT EXISTS idx_files_md5 ON files(md5);
 CREATE INDEX IF NOT EXISTS idx_files_size ON files(size_bytes);
 CREATE INDEX IF NOT EXISTS idx_fn_issues_file ON fn_issues(file_id);
+CREATE INDEX IF NOT EXISTS idx_analysis_runs_backend ON analysis_runs(backend);
+CREATE INDEX IF NOT EXISTS idx_audio_descriptors_backend ON audio_descriptors(backend);
+CREATE INDEX IF NOT EXISTS idx_audio_descriptors_path ON audio_descriptors(path);
 """
 
 _FILES_COLUMN_MIGRATIONS = {

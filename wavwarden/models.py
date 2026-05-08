@@ -62,6 +62,50 @@ class ScanResult(BaseModel):
     errors: int = 0
 
 
+class SimilarityDescriptor(BaseModel):
+    file_id: int
+    path: str
+    backend: str = "deterministic_v1"
+    size_bytes: int | None = None
+    mtime: float | None = None
+    md5: str | None = None
+    max_duration_s: float | None = None
+    analyzed_duration_s: float | None = None
+    peak: float | None = None
+    rms: float | None = None
+    crest_factor: float | None = None
+    silence_ratio: float | None = None
+    clipping_count: int = 0
+    zero_crossing_rate: float | None = None
+    transient_density: float | None = None
+    duration_bucket: str | None = None
+    generated_at: str
+    error: str | None = None
+
+
+class SimilarityCrawlSummary(BaseModel):
+    total_files: int = 0
+    analyzed: int = 0
+    skipped: int = 0
+    errors: int = 0
+
+
+class SimilarityCrawlReport(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    run_id: int | None = None
+    backend: str = "deterministic_v1"
+    root: str
+    db_path: str
+    cache_path: str | None = None
+    max_duration_s: float | None = None
+    force: bool = False
+    summary: SimilarityCrawlSummary
+    descriptors: list[SimilarityDescriptor] = []
+
+
 class ScanErrorEntry(BaseModel):
     path: str
     action: str = "review"

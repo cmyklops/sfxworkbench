@@ -7,6 +7,11 @@ versioning once public releases begin.
 
 ## Unreleased
 
+- Added `sfx similarity crawl` as an experimental deterministic audio
+  descriptor crawler. It analyzes indexed files, skips unchanged descriptor
+  rows by size/mtime/hash anchors, stores results in SQLite, writes an optional
+  cache run report, and reports peak/RMS/crest/silence/clipping plus simple
+  zero-crossing and transient-density descriptors.
 - Added preservation-priority evidence for duplicate keep decisions. `sfx
   dedupe --output PLAN --prefer-folder PATH --prefer-extension EXT` and `sfx
   packs plan --prefer-folder PATH` store ordered rule evidence in generated
