@@ -35,6 +35,7 @@ uv run sfx clean PATH --apply         # remove junk after review
 uv run sfx scan PATH                  # index audio files into SQLite
 uv run sfx audit                      # report index health
 uv run sfx metadata audit --output ~/reports/metadata_report.json
+uv run sfx groups audit PATH --output ~/reports/related_groups_report.json
 uv run sfx scan-errors --output ~/reports/scan_error_plan.json
 uv run sfx scan-errors --apply ~/reports/scan_error_plan.json
 uv run sfx search QUERY               # FTS filename search
@@ -97,6 +98,8 @@ python3 audit.py ~/CommercialLibraries --json
   artifacts are marked for quarantine automatically.
 - `metadata audit` is report-only; it lists files missing BWF/iXML metadata and
   files with unusual sample rates before any tag-writing work is attempted.
+- `groups audit` is report-only; it infers obvious related sound groups such as
+  numbered takes and channel sets from indexed filenames.
 - `rename` previews first, refuses collisions, writes an undo log on apply, and
   can restore from that log. `--pattern portable` handles Unicode normalization,
   risky cross-platform characters, non-ASCII names, and conservative long-path shortening.

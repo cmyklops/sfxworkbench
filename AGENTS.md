@@ -24,6 +24,7 @@ uv run sfx clean ~/CommercialLibraries           # dry-run
 uv run sfx clean ~/CommercialLibraries --apply   # actually remove junk
 uv run sfx scan ~/CommercialLibraries --db ~/.wavwarden/index.db
 uv run sfx metadata audit --db ~/.wavwarden/index.db --output ~/reports/metadata_report.json
+uv run sfx groups audit ~/CommercialLibraries --db ~/.wavwarden/index.db --output ~/reports/related_groups_report.json
 uv run sfx scan-errors --db ~/.wavwarden/index.db --output ~/reports/scan_error_plan.json
 uv run sfx scan-errors --apply ~/reports/scan_error_plan.json --db ~/.wavwarden/index.db
 uv run sfx dedupe --db ~/.wavwarden/index.db --summary-only
@@ -75,6 +76,7 @@ sfx scan PATH  →  audio.read_audio_info()  →  SQLite (files + files_fts)
                   MD5 hash                 →  SQLite (files.md5)
 
 sfx metadata audit → list missing BWF/iXML metadata and unusual sample-rate files
+sfx groups audit PATH → infer numbered takes and channel sets → report JSON
 sfx scan-errors → classify scan_error rows → review/quarantine obvious artifacts
 sfx dedupe     →  GROUP BY md5 WHERE count > 1  →  summary or reviewed plan JSON
 sfx dedupe --review PLAN → approve groups
@@ -96,6 +98,7 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 - **`clean.py`** — `find_junk()` returns `(junk_files, junk_dirs)`. AppleDouble files (`._*`) bypass the audio-extension safety guard since they're always metadata blobs regardless of apparent extension.
 - **`scan.py`** — incremental: skips files where `mtime + size_bytes` match the existing DB row. Junk detection uses shared `junk.py`; junk files are never indexed.
 - **`metadata_audit.py`** — report-only metadata coverage and unusual sample-rate audit for planning future tagging work.
+- **`groups.py`** — report-only related sound group detection from indexed filename patterns.
 - **`scan_errors.py`** — plans quarantine for unreadable indexed files. Only all-zero blobs and AppleDouble artifacts are auto-marked `quarantine`; broken RIFF files stay `review`.
 - **`dedupe.py`** — exact MD5 duplicate grouping. Writes versioned JSON plans and quarantines by default on apply.
 - **`packs.py`** — report-only pack/folder duplicate detection. Computes recursive folder signatures from indexed MD5 hashes and reports exact duplicate folders plus high-overlap pack candidates.

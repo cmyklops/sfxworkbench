@@ -257,6 +257,48 @@ def test_packs_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
     assert out.exists()
 
 
+def test_groups_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
+    from wavwarden.db import get_connection
+
+    root = tmp_library
+    conn = get_connection(tmp_db)
+    for name in ["Metal Hit 01.wav", "Metal Hit 02.wav"]:
+        path = root / "Impacts" / name
+        conn.execute(
+            """INSERT INTO files (
+                path, filename, stem, extension, size_bytes, mtime, md5,
+                sample_rate, bit_depth, channels, duration_s, scanned_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (str(path), path.name, path.stem, path.suffix, 10, 0.0, name, 48000, 24, 2, 1.0, "2026"),
+        )
+    conn.commit()
+    conn.close()
+
+    out = tmp_path / "groups_report.json"
+    payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                ["groups", "audit", str(root), "--db", str(tmp_db), "--output", str(out), "--json"],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "groups_audit"
+    assert payload["root"] == "<ROOT>"
+    assert payload["db_path"] == "<DB>"
+    assert payload["report_path"] == "<TMP>/groups_report.json"
+    assert payload["report"]["schema_version"] == 1
+    assert payload["report"]["summary"]["candidate_groups"] == 1
+    assert payload["report"]["groups"][0]["inferred_stem"] == "Metal Hit"
+    assert out.exists()
+
+
 def test_organize_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
     folder = tmp_library / "01 Pack"
     folder.mkdir()

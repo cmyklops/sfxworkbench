@@ -45,19 +45,24 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
 - Metadata audit report: `/Users/mattwesdock/reports/metadata_audit_full_20260508.json`.
 - Missing BWF/iXML metadata: 22,412 files.
 - Unusual sample-rate files: 2,854 files.
+- Related groups report: `/Users/mattwesdock/reports/related_groups_report_20260508.json`.
+- Related group candidates: 15,331 groups covering 78,735 files.
+- Related group mix: 15,163 numbered-sequence groups, 168 channel-set groups,
+  147 groups with mixed sample-rate/bit-depth/channel formats.
 
 Current audit focus:
 
 - Scan errors: cleared with RIFF fallback reader for malformed side chunks.
 - Filename issues: cleared.
 - Metadata/sample-rate reporting: implemented as report-only.
+- Related sound group reporting: implemented as report-only.
 
 ## Next
 
 1. Move on from folder nesting unless you want a manual review flow for semantic wrappers.
-2. Add report-only related sound groups/collections audit.
-3. Decide whether unusual sample rates are informational only or should become
+2. Decide whether unusual sample rates are informational only or should become
    a reviewed `normalize` candidate report later.
+3. Use related group evidence to shape future tag suggestions and TUI review.
 
 ## Later
 

@@ -23,6 +23,7 @@ uv run sfx clean PATH
 uv run sfx scan PATH
 uv run sfx audit
 uv run sfx metadata audit --output ~/reports/metadata_report.json
+uv run sfx groups audit PATH --output ~/reports/related_groups_report.json
 uv run sfx scan-errors --output ~/reports/scan_error_plan.json
 uv run sfx scan-errors --apply ~/reports/scan_error_plan.json
 uv run sfx search QUERY
@@ -70,6 +71,8 @@ python3 audit.py ~/CommercialLibraries --json
 - `clean`: dry-run by default; `--apply` removes known junk only.
 - `scan`: indexes audio files into SQLite and skips junk.
 - `metadata audit`: report-only metadata coverage and unusual sample-rate review.
+- `groups audit`: report-only related sound groups inferred from numbered takes
+  and channel-set filename patterns.
 - `scan-errors`: writes a review plan for unreadable indexed files; quarantines
   only obvious artifacts/all-zero blobs by default.
 - `dedupe --summary-only`: finds exact MD5 duplicate groups and prints counts without writing a plan.
@@ -129,11 +132,10 @@ The planner skips semantic wrappers such as `Designed`, `Source`, `Content`, and
 `Sounds`, and skips wrappers that contain subfolders. Broader wrapper flattening
 remains report-only because it can require subjective merge choices.
 
-Future organization audits should stay report-first:
-
-- related sound groups/collections inferred from path tokens, filename stems,
-  numbered takes, channel pairs, UCS categories, metadata, and exact/perceptual
-  similarity
+Related group detection is implemented first as report-only:
+`sfx groups audit PATH`, inferring numbered takes and channel sets from indexed
+filenames. Future versions can layer in path tokens, UCS categories, metadata,
+and exact/perceptual similarity.
 
 Physical folder cleanup is useful for browsing and bulk edits, but future
 integrations should primarily consume indexed metadata and inferred group
@@ -243,6 +245,7 @@ Command contracts:
 - `scan --json`: includes `root`, `db_path`, and `result.total/scanned/skipped/errors`.
 - `audit --json`: includes `db_path` and aggregate `AuditResult` fields.
 - `metadata audit --json`: includes `db_path`, optional `report_path`, and a versioned report with missing BWF/iXML metadata entries and unusual sample-rate entries.
+- `groups audit PATH --json`: includes `root`, `db_path`, optional `report_path`, and a versioned report of inferred related sound groups.
 - `scan-errors --json`: includes a scan-error `plan` with classifications and actions.
 - `scan-errors --apply PLAN --json`: includes quarantine `result`.
 - `search QUERY --json`: includes `query`, `db_path`, and `results`.
