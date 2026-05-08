@@ -8,6 +8,7 @@ from pathlib import Path
 from wavwarden.db import get_connection
 from wavwarden.models import RelatedSoundFile, RelatedSoundGroup, UcsCatalog, UcsCatalogProvenance, UcsEntry
 from wavwarden.tag_plan import apply_tag_plan, build_tag_plan, review_tag_plan, write_tag_plan
+from wavwarden.tag_sidecar import build_tag_sidecar_report, import_tag_sidecar, write_tag_sidecar_report
 from wavwarden.tag_suggest import (
     build_tag_suggestion_report,
     suggest_from_filename,
@@ -436,6 +437,54 @@ def test_tag_plan_review_and_db_apply(tmp_path: Path, tmp_db: Path) -> None:
     )
     assert second.applied == 0
     assert second.skipped == plan.summary.candidate_entries
+
+
+def test_tag_sidecar_export_and_import_round_trip(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "Impacts"
+    folder.mkdir(parents=True)
+    audio = folder / "SFX_HIT_01.wav"
+    audio.write_bytes(b"not really audio")
+    _seed_files(tmp_db, [{"path": audio, "md5": "A", "size": len(audio.read_bytes())}])
+
+    plan = build_tag_plan(root, db_path=tmp_db, min_confidence=0.7)
+    plan_path = tmp_path / "tag_plan.json"
+    write_tag_plan(plan, plan_path, quiet=True)
+    review_tag_plan(plan_path, approve_all=True, quiet=True)
+    apply_tag_plan(
+        plan_path,
+        db_path=tmp_db,
+        dry_run=False,
+        require_reviewed=True,
+        log_path=tmp_path / "tag_apply_log.json",
+        quiet=True,
+    )
+
+    sidecar = build_tag_sidecar_report(tmp_db, root=root)
+    sidecar_path = tmp_path / "tags.sidecar.json"
+    write_tag_sidecar_report(sidecar, sidecar_path, quiet=True)
+
+    assert sidecar.entry_count == 1
+    assert sidecar.tag_count == plan.summary.add_entries
+    assert sidecar.entries[0].path == str(audio)
+    assert any(tag.field == "category" and tag.value == "SFX" for tag in sidecar.entries[0].tags)
+
+    conn = get_connection(tmp_db)
+    conn.execute("DELETE FROM accepted_tags")
+    conn.commit()
+    conn.close()
+
+    dry_run = import_tag_sidecar(sidecar_path, db_path=tmp_db, quiet=True)
+    assert dry_run.dry_run is True
+    assert dry_run.imported == sidecar.tag_count
+
+    imported = import_tag_sidecar(sidecar_path, db_path=tmp_db, dry_run=False, quiet=True)
+    assert imported.imported == sidecar.tag_count
+    assert imported.errors == []
+    conn = get_connection(tmp_db)
+    rows = conn.execute("SELECT field, value FROM accepted_tags ORDER BY field, value").fetchall()
+    conn.close()
+    assert ("category", "SFX") in [(row["field"], row["value"]) for row in rows]
 
 
 def test_summary_confidence_buckets_are_sorted(tmp_path: Path, tmp_db: Path) -> None:

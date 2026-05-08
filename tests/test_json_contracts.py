@@ -903,6 +903,55 @@ def test_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
     assert apply_payload["result"]["applied"] == 1
     assert apply_payload["result"]["log_path"] == "<TMP>/tag_apply_log.json"
 
+    sidecar_out = tmp_path / "accepted_tags.sidecar.json"
+    sidecar_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "tag",
+                    "sidecar-export",
+                    str(sidecar_out),
+                    "--db",
+                    str(tmp_db),
+                    "--path",
+                    str(tmp_library),
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert sidecar_payload["schema_version"] == 1
+    assert sidecar_payload["command"] == "tag_sidecar_export"
+    assert sidecar_payload["db_path"] == "<DB>"
+    assert sidecar_payload["root"] == "<ROOT>"
+    assert sidecar_payload["sidecar_path"] == "<TMP>/accepted_tags.sidecar.json"
+    assert sidecar_payload["report"]["schema_version"] == 1
+    assert sidecar_payload["report"]["entry_count"] == 1
+    assert sidecar_payload["report"]["tag_count"] == 1
+    assert sidecar_payload["report"]["entries"][0]["path"].startswith("<ROOT>/")
+
+    sidecar_import_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                ["tag", "sidecar-import", str(sidecar_out), "--db", str(tmp_db), "--json"],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert sidecar_import_payload["schema_version"] == 1
+    assert sidecar_import_payload["command"] == "tag_sidecar_import"
+    assert sidecar_import_payload["db_path"] == "<DB>"
+    assert sidecar_import_payload["sidecar_path"] == "<TMP>/accepted_tags.sidecar.json"
+    assert sidecar_import_payload["result"]["planned"] == 1
+    assert sidecar_import_payload["result"]["skipped"] == 1
+
 
 def test_ucs_validate_and_catalog_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
     src = tmp_path / "_categorylist.csv"

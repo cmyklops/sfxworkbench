@@ -102,6 +102,8 @@ uv run sfx tag suggest PATH --db ~/.wavwarden/index.db --output tag_suggestions.
 uv run sfx tag plan PATH --db ~/.wavwarden/index.db --from-suggestions tag_suggestions.json --output tag_plan.json
 uv run sfx tag review tag_plan.json --approve-all
 uv run sfx tag apply tag_plan.json --db ~/.wavwarden/index.db --require-reviewed --apply --log tag_apply_log.json
+uv run sfx tag sidecar-export accepted_tags.sidecar.json --db ~/.wavwarden/index.db --path PATH
+uv run sfx tag sidecar-import accepted_tags.sidecar.json --db ~/.wavwarden/index.db
 ```
 
 Each plan entry should include validation anchors:
@@ -128,18 +130,20 @@ uv run sfx tag apply tag_plan.json --require-reviewed
 
 The initial implementation is DB-only: approved entries are written to
 `accepted_tags`, and apply writes `tag_apply_log` rows plus an external JSON log.
-Embedded metadata writes remain a later step.
+Accepted tags can also be exported and re-imported as JSON sidecars. Embedded
+metadata writes remain a later step.
 
 ## Phase D: Metadata Writes
 
-Start with DB-only accepted tags and CSV export. This first slice is
-implemented: `sfx export` includes an `accepted_tags` JSON column. Then add
-sidecar output. Binary audio mutation comes last.
+Start with DB-only accepted tags and portable export. This first slice is
+implemented: `sfx export` includes an `accepted_tags` JSON column, and
+`sfx tag sidecar-export/import` round-trips accepted tags through a validated
+JSON sidecar. Binary audio mutation comes last.
 
 Preferred write ladder:
 
 1. DB-only accepted tags
-2. sidecar JSON/XML export
+2. sidecar JSON export/import, then XML only if another tool needs it
 3. BWF/iXML writes for proven-safe formats
 4. optional overwrite mode with original-file backup/quarantine
 

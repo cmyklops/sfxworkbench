@@ -75,6 +75,9 @@ uv run sfx tag plan ~/CommercialLibraries --db ~/.wavwarden/index.db --from-sugg
 uv run sfx tag review ~/reports/tag_plan.json --approve-all
 uv run sfx tag apply ~/reports/tag_plan.json --db ~/.wavwarden/index.db --require-reviewed
 uv run sfx tag apply ~/reports/tag_plan.json --db ~/.wavwarden/index.db --require-reviewed --apply --log ~/reports/tag_apply_log.json
+uv run sfx tag sidecar-export ~/reports/accepted_tags.sidecar.json --db ~/.wavwarden/index.db --path ~/CommercialLibraries
+uv run sfx tag sidecar-import ~/reports/accepted_tags.sidecar.json --db ~/.wavwarden/index.db
+uv run sfx tag sidecar-import ~/reports/accepted_tags.sidecar.json --db ~/.wavwarden/index.db --apply
 uv run sfx ucs import ~/Desktop/_categorylist.csv --release-version v8.2.1
 uv run sfx ucs info
 uv run sfx ucs categories --cat-short AMB
@@ -129,6 +132,7 @@ sfx organize nesting-plan/apply/undo → reviewed repeated-folder, non-generic s
 sfx rename PATH → preview/apply UCS-oriented, safe, or portable names → rename_log_TIMESTAMP.json
 sfx tag suggest PATH → report-only tag suggestions from filename/path/group evidence (Phase B)
 sfx tag plan/review/apply → reviewed DB-only accepted tag writes with apply log
+sfx tag sidecar-export/import → portable JSON sidecars for accepted DB-only tags
 sfx ucs import SOURCE → parse Soundminer/_categorylist.csv → ~/.wavwarden/ucs_catalog.json
 sfx ucs info → show provenance and entry count of the loaded UCS catalog
 sfx ucs categories [--category | --cat-short] → list/filter UCS entries
@@ -153,6 +157,7 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 - **`rename.py`** — UCS-oriented, safe, and portable filename/path rename preview/apply/undo. Refuses collisions and updates SQLite paths after apply.
 - **`tag_suggest.py`** — Phase B report-only tag suggestions. Pure suggestor: composes UCS stem parsing, optional UCS catalog matches, filename heuristics (abbreviation expansion, take-number extraction), parent-folder evidence, and related-group membership into versioned JSON suggestion plans. No filesystem or DB writes.
 - **`tag_plan.py`** — reviewed metadata-writing workflow. Builds tag plans from suggestions, stamps review state, validates file anchors, and writes approved entries to SQLite `accepted_tags`; it does not mutate audio files.
+- **`tag_sidecar.py`** — portable JSON sidecar export/import for DB-only accepted tags. Import validates indexed path, size, mtime, MD5, and file existence before writing.
 - **`ucs_catalog.py`** — UCS catalog import, cache, and lookup. Parses the official `Soundminer/_categorylist.csv` from `UCS Release.zip`, writes a normalized JSON cache at `~/.wavwarden/ucs_catalog.json` with provenance (source URL, release version, import timestamp, attribution). Discovery chain for `load_catalog()`: explicit path → `WAVWARDEN_UCS_DATA` env var → default cache → `None`. XLSX import is deferred.
 - **`ucs_validate.py`** — report-only validation of UCS-looking indexed filenames against a loaded UCS catalog.
 - **`ucs.py`** — shared UCS-looking filename heuristic/parser. This is not a full official UCS catalog validator yet.
@@ -192,7 +197,7 @@ Fixtures in `tests/conftest.py`:
 Full phase spec: `docs/PHASES.md`. Current status:
 - **Phase 0** ✅ — `audit.py` standalone auditor
 - **Phase 1** ✅ — `sfx` CLI package (clean, scan, dedupe, audit, search, export, JSON output)
-- **Phase 2** 🔜 — embedded metadata writing; DB-only `sfx tag plan/review/apply`, cleanup, rename, organize, pack review, UCS import/validate, and tag suggestions are implemented
+- **Phase 2** 🔜 — embedded metadata writing; DB-only `sfx tag plan/review/apply`, tag sidecars, cleanup, rename, organize, pack review, UCS import/validate, and tag suggestions are implemented
 - **Pack/folder duplicate detection** ✅ — `sfx packs audit/plan/review/apply/undo` is implemented for exact duplicate folders and fully-covered overlaps
 - **Phase 3** ⬜ — Textual TUI first, Tauri later
 

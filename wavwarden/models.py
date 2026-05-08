@@ -956,3 +956,42 @@ class TagApplyResult(BaseModel):
     dry_run: bool = True
     target: str = "db"
     log_path: str | None = None
+
+
+class TagSidecarTag(BaseModel):
+    field: str
+    value: str
+    source: str
+    method: str | None = None
+    confidence: float | None = None
+    evidence: list[str] = []
+
+
+class TagSidecarEntry(BaseModel):
+    file_id: int | None = None
+    path: str
+    filename: str
+    size_bytes: int | None = None
+    mtime: float | None = None
+    md5: str | None = None
+    tags: list[TagSidecarTag] = []
+
+
+class TagSidecarReport(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    root: str | None = None
+    db_path: str
+    entry_count: int = 0
+    tag_count: int = 0
+    entries: list[TagSidecarEntry] = []
+
+
+class TagSidecarImportResult(BaseModel):
+    planned: int = 0
+    imported: int = 0
+    skipped: int = 0
+    errors: list[dict] = []
+    dry_run: bool = True

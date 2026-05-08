@@ -992,6 +992,72 @@ def cmd_tag_apply(
         )
 
 
+@tag_app.command("sidecar-export")
+def cmd_tag_sidecar_export(
+    output: Annotated[Path, typer.Argument(help="Output JSON sidecar path.")],
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    path: Annotated[Path | None, typer.Option("--path", help="Optional indexed library root to export.")] = None,
+    limit: Annotated[int, typer.Option("--limit", help="Maximum tagged files to include; 0 writes all.")] = 0,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Export DB-only accepted tags as a portable JSON sidecar."""
+    from wavwarden.tag_sidecar import build_tag_sidecar_report, show_tag_sidecar_report, write_tag_sidecar_report
+
+    try:
+        report = build_tag_sidecar_report(db_path=db, root=path, limit=limit)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+    write_tag_sidecar_report(report, output, quiet=json_output)
+    if not json_output:
+        show_tag_sidecar_report(report)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "tag_sidecar_export",
+                    "db_path": db,
+                    "root": path,
+                    "sidecar_path": output,
+                    "report": report,
+                }
+            )
+        )
+
+
+@tag_app.command("sidecar-import")
+def cmd_tag_sidecar_import(
+    sidecar: Annotated[Path, typer.Argument(help="JSON sidecar path to import.")],
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    apply: Annotated[bool, typer.Option("--apply", help="Import sidecar tags into SQLite accepted_tags.")] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Import a portable JSON sidecar into DB-only accepted tags."""
+    from wavwarden.tag_sidecar import import_tag_sidecar
+
+    if not sidecar.exists():
+        console.print(f"[red]Error: sidecar file not found: {sidecar}[/red]")
+        raise typer.Exit(1)
+    try:
+        result = import_tag_sidecar(sidecar, db_path=db, dry_run=not apply, quiet=json_output)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "tag_sidecar_import",
+                    "db_path": db,
+                    "sidecar_path": sidecar,
+                    "result": result,
+                }
+            )
+        )
+
+
 # ---------------------------------------------------------------------------
 # sfx organize
 # ---------------------------------------------------------------------------

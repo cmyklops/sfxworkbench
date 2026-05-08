@@ -116,6 +116,35 @@ def test_tag_plan_review_apply_json(tmp_library, tmp_db, tmp_path) -> None:
     assert payload["result"]["target"] == "db"
     assert log.exists()
 
+    sidecar_path = tmp_path / "accepted_tags.sidecar.json"
+    sidecar_export = runner.invoke(
+        app,
+        [
+            "tag",
+            "sidecar-export",
+            str(sidecar_path),
+            "--db",
+            str(tmp_db),
+            "--path",
+            str(tmp_library),
+            "--json",
+        ],
+    )
+    assert sidecar_export.exit_code == 0
+    sidecar_payload = json.loads(sidecar_export.stdout)
+    assert sidecar_payload["command"] == "tag_sidecar_export"
+    assert sidecar_payload["report"]["tag_count"] > 0
+    assert sidecar_path.exists()
+
+    sidecar_import = runner.invoke(
+        app,
+        ["tag", "sidecar-import", str(sidecar_path), "--db", str(tmp_db), "--json"],
+    )
+    assert sidecar_import.exit_code == 0
+    import_payload = json.loads(sidecar_import.stdout)
+    assert import_payload["command"] == "tag_sidecar_import"
+    assert import_payload["result"]["planned"] == sidecar_payload["report"]["tag_count"]
+
 
 def test_similarity_cli_json_smoke(tmp_library, tmp_db, tmp_path) -> None:
     scan = runner.invoke(app, ["scan", str(tmp_library), "--db", str(tmp_db), "--json"])

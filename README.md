@@ -170,6 +170,8 @@ uv run sfx tag suggest PATH --use-ucs-catalog --min-confidence 0.8 --output ~/re
 uv run sfx tag plan PATH --from-suggestions ~/reports/tag_suggestions.json --output ~/reports/tag_plan.json
 uv run sfx tag review ~/reports/tag_plan.json --approve-all
 uv run sfx tag apply ~/reports/tag_plan.json --require-reviewed --apply --log ~/reports/tag_apply_log.json
+uv run sfx tag sidecar-export ~/reports/accepted_tags.sidecar.json --path PATH
+uv run sfx tag sidecar-import ~/reports/accepted_tags.sidecar.json --db ~/.wavwarden/index.db
 ```
 
 UCS catalog support:
