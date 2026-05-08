@@ -142,7 +142,10 @@ def cmd_organize_nesting_plan(
     output: Annotated[Path, typer.Option("--output", help="Write reviewed nesting plan JSON to this path.")],
     kind: Annotated[
         str,
-        typer.Option("--kind", help="Candidate kind to plan. Currently supported: 'repeated_folder_name'."),
+        typer.Option(
+            "--kind",
+            help="Candidate kind to plan. Supported: 'repeated_folder_name', 'single_child_chain'.",
+        ),
     ] = "repeated_folder_name",
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:

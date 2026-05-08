@@ -27,6 +27,12 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
   wrappers remain report-only.
 - Repeated-folder nesting plan: `/Users/mattwesdock/reports/repeated_folder_nesting_plan_20260508.json`
   is reviewed and dry-run clean: 12 folders, 240 child moves, 0 errors.
+- Repeated-folder nesting apply: done, 12 folders flattened, 240 child moves,
+  undo log at `/Users/mattwesdock/reports/repeated_folder_nesting_log_20260508.json`.
+- Single-child nesting apply: done, 18 useful wrappers collapsed across two logs;
+  generic child folders such as `Content`, `Designed`, `Source`, and `Sounds` stay report-only.
+- Final redundant nesting report: `/Users/mattwesdock/reports/redundant_nesting_report_final_20260508.json`
+  found 27 candidates: 23 low-value wrappers and 4 generic single-child chains.
 
 Current audit focus:
 
@@ -36,7 +42,7 @@ Current audit focus:
 
 ## Next
 
-1. Apply reviewed repeated-folder nesting plan if the dry-run result still looks right.
+1. Decide whether low-value wrapper folders should get a stricter reviewed plan/apply workflow.
 2. Add report-only related sound groups/collections audit.
 3. Review risky-character filename issues.
 

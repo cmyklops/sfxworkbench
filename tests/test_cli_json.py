@@ -141,3 +141,47 @@ def test_organize_redundant_nesting_json(tmp_library, tmp_path) -> None:
     apply_payload = json.loads(apply.stdout)
     assert apply_payload["command"] == "organize_nesting_apply"
     assert apply_payload["result"]["dry_run"] is True
+
+
+def test_organize_single_child_nesting_plan_json(tmp_library, tmp_path) -> None:
+    audio = tmp_library / "Wrapper" / "Real Pack" / "hit.wav"
+    audio.parent.mkdir(parents=True)
+    audio.write_bytes(b"audio")
+    report_path = tmp_path / "nesting.json"
+    plan_path = tmp_path / "single_child_plan.json"
+    audit = runner.invoke(
+        app,
+        [
+            "organize",
+            "audit",
+            str(tmp_library),
+            "--pattern",
+            "redundant-nesting",
+            "--depth",
+            "3",
+            "--output",
+            str(report_path),
+            "--json",
+        ],
+    )
+    assert audit.exit_code == 0
+
+    plan = runner.invoke(
+        app,
+        [
+            "organize",
+            "nesting-plan",
+            str(report_path),
+            "--kind",
+            "single_child_chain",
+            "--output",
+            str(plan_path),
+            "--json",
+        ],
+    )
+
+    assert plan.exit_code == 0
+    payload = json.loads(plan.stdout)
+    assert payload["command"] == "organize_nesting_plan"
+    assert payload["plan"]["entries"][0]["kind"] == "single_child_chain"
+    assert payload["plan"]["entries"][0]["action"] == "collapse_single_child_wrapper"

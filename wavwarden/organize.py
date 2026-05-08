@@ -40,6 +40,9 @@ _SEPARATOR_RE = re.compile(r"[\s._-]+")
 _LOW_VALUE_WRAPPER_NAMES = {
     "audio",
     "audios",
+    "content",
+    "contents",
+    "designed",
     "file",
     "files",
     "mono",
@@ -47,6 +50,8 @@ _LOW_VALUE_WRAPPER_NAMES = {
     "samples",
     "sound",
     "sounds",
+    "source",
+    "sources",
     "stereo",
     "wav",
     "wave",
@@ -291,57 +296,83 @@ def build_nesting_plan_from_report(
     report = OrganizeAuditReport.model_validate(raw_report)
     errors: list[dict] = list(report.errors)
     entries: list[NestingPlanEntry] = []
+    supported_kinds = {"repeated_folder_name", "single_child_chain"}
 
     if report.pattern != "redundant-nesting":
         errors.append({"path": report.root, "error": "source report must use pattern='redundant-nesting'"})
+    if kind not in supported_kinds:
+        errors.append({"path": report.root, "error": f"candidate kind '{kind}' is report-only"})
 
     for candidate in report.candidates:
         if candidate.kind != kind:
             continue
-        if candidate.kind != "repeated_folder_name":
-            errors.append({"path": candidate.path, "error": f"candidate kind '{candidate.kind}' is report-only"})
-            continue
         source = Path(candidate.path)
-        target = Path(candidate.target_path) if candidate.target_path is not None else source.parent
-        if source.parent != target:
-            errors.append({"path": str(source), "target": str(target), "error": "target must be source parent"})
-            continue
         if not source.exists() or not source.is_dir():
             errors.append({"path": str(source), "error": "source directory missing"})
             continue
-        if not target.exists() or not target.is_dir():
-            errors.append({"path": str(source), "target": str(target), "error": "target directory missing"})
-            continue
 
-        moves: list[NestingMove] = []
-        planned_targets: set[Path] = set()
-        for child in sorted(source.iterdir(), key=lambda path: path.name.casefold()):
-            destination = target / child.name
+        if candidate.kind == "repeated_folder_name":
+            target = Path(candidate.target_path) if candidate.target_path is not None else source.parent
+            if source.parent != target:
+                errors.append({"path": str(source), "target": str(target), "error": "target must be source parent"})
+                continue
+            if not target.exists() or not target.is_dir():
+                errors.append({"path": str(source), "target": str(target), "error": "target directory missing"})
+                continue
+
+            moves: list[NestingMove] = []
+            planned_targets: set[Path] = set()
+            for child in sorted(source.iterdir(), key=lambda path: path.name.casefold()):
+                destination = target / child.name
+                if destination.exists():
+                    errors.append({"path": str(child), "target": str(destination), "error": "target exists"})
+                    continue
+                if destination in planned_targets:
+                    errors.append(
+                        {"path": str(child), "target": str(destination), "error": "target planned more than once"}
+                    )
+                    continue
+                planned_targets.add(destination)
+                moves.append(
+                    NestingMove(
+                        old_path=str(child),
+                        new_path=str(destination),
+                        path_type="dir" if child.is_dir() else "file",
+                    )
+                )
+            action = "flatten_child_into_parent"
+            target_path = target
+        else:
+            children = sorted(source.iterdir(), key=lambda path: path.name.casefold())
+            if len(children) != 1 or not children[0].is_dir():
+                errors.append({"path": str(source), "error": "source must contain exactly one child directory"})
+                continue
+            child = children[0]
+            if _folder_key(child.name) in _LOW_VALUE_WRAPPER_NAMES:
+                continue
+            target_path = source.parent
+            destination = target_path / child.name
             if destination.exists():
                 errors.append({"path": str(child), "target": str(destination), "error": "target exists"})
                 continue
-            if destination in planned_targets:
-                errors.append(
-                    {"path": str(child), "target": str(destination), "error": "target planned more than once"}
-                )
-                continue
-            planned_targets.add(destination)
-            moves.append(
+            moves = [
                 NestingMove(
                     old_path=str(child),
                     new_path=str(destination),
-                    path_type="dir" if child.is_dir() else "file",
+                    path_type="dir",
                 )
-            )
+            ]
+            action = "collapse_single_child_wrapper"
+
         if not moves:
-            errors.append({"path": str(source), "error": "no children to flatten"})
+            errors.append({"path": str(source), "error": "no children to move"})
             continue
         entries.append(
             NestingPlanEntry(
                 source_path=str(source),
-                target_path=str(target),
+                target_path=str(target_path),
                 kind=candidate.kind,
-                action="flatten_child_into_parent",
+                action=action,
                 reason=candidate.reason,
                 audio_files=candidate.audio_files,
                 moves=moves,
@@ -353,7 +384,9 @@ def build_nesting_plan_from_report(
         tool_version=__version__,
         root=report.root,
         source_report=str(report_path),
-        entries=entries,
+        entries=sorted(
+            entries, key=lambda entry: (len(Path(entry.source_path).parts), entry.source_path), reverse=True
+        ),
         errors=errors,
     )
     if output_path is not None:
