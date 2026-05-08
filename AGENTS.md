@@ -108,8 +108,10 @@ Full phase spec: `docs/PHASES.md`. Current status:
 - **Phase 0** ✅ — `audit.py` standalone auditor
 - **Phase 1** ✅ — `sfx` CLI package (clean, scan, dedupe, audit, search, export, JSON output)
 - **Phase 2** 🔜 — metadata writing (`sfx tag`); `sfx rename` is now the first cleanup feature
+- **Pack/folder duplicate detection** 🔜 — reviewed report/plan/apply workflow for duplicated or overlapping commercial packs; quarantine-first, no default deletion
 - **Phase 3** ⬜ — Textual TUI first, Tauri later
 
 Additional planning docs:
 - `docs/UCS.md` — UCS catalog/import strategy; do not vendor official UCS data until redistribution terms are verified.
 - `docs/METADATA_TAGGING.md` — metadata write plan and audio-listening suggestion roadmap.
+- `docs/PACK_DEDUPLICATION.md` — pack/folder duplicate detection and consolidation plan.

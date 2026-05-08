@@ -11,6 +11,7 @@ Project docs:
 - [`docs/PHASES.md`](docs/PHASES.md): roadmap, safety model, JSON contracts
 - [`docs/UCS.md`](docs/UCS.md): UCS data and category integration plan
 - [`docs/METADATA_TAGGING.md`](docs/METADATA_TAGGING.md): metadata writing and audio-suggestion plan
+- [`docs/PACK_DEDUPLICATION.md`](docs/PACK_DEDUPLICATION.md): pack/folder duplicate detection plan
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): contribution policy during internal beta
 - [`SECURITY.md`](SECURITY.md): private reporting guidance
 
@@ -65,6 +66,8 @@ python3 audit.py ~/CommercialLibraries --json
 - `clean` is dry-run by default and can write a JSON log.
 - `dedupe --summary-only` reports counts without writing a plan.
 - `dedupe --output PLAN.json` writes a plan; `--review` stamps approvals and `--apply` quarantines by default.
+- Pack/folder duplicate detection is planned as a separate report-first workflow
+  for duplicated commercial packs and overlapping bundle folders.
 - `scan-errors` writes a plan for unreadable indexed files; only obvious
   artifacts are marked for quarantine automatically.
 - `rename` previews first, refuses collisions, writes an undo log on apply, and

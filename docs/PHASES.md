@@ -61,7 +61,19 @@ python3 audit.py ~/CommercialLibraries --json
 ## Phase 2 — Cleanup Tooling
 
 First priority is `sfx rename --pattern ucs`, with preview/apply/undo behavior.
-Metadata writing follows after rename stabilizes:
+Pack/folder duplicate detection is the next professional-grade safety layer
+after exact file dedupe and filename/path cleanup. It should ship as a reviewed
+report/plan/apply workflow before broad folder organization features:
+
+- `sfx packs audit`: detect exact duplicate folders and high-overlap packs.
+- `sfx packs plan`: create a reviewed consolidation/quarantine plan.
+- `sfx packs apply`: quarantine redundant folders by default, validate hashes
+  before moving, update SQLite paths, and write an undo log.
+
+Folder consolidation must not permanently delete by default. Merging unique
+files is a later explicit action and must never overwrite existing files.
+
+Metadata writing follows after rename and pack review workflows stabilize:
 
 - `sfx tag --from-filename`
 - `sfx tag --from-csv`
@@ -90,7 +102,8 @@ runtime cost controls are clear.
 
 See [`UCS.md`](UCS.md) for the UCS data plan and
 [`METADATA_TAGGING.md`](METADATA_TAGGING.md) for the metadata/audio-suggestion
-roadmap.
+roadmap. See [`PACK_DEDUPLICATION.md`](PACK_DEDUPLICATION.md) for the
+pack/folder duplicate detection and consolidation plan.
 
 `sfx normalize` is later/experimental because sample-rate and channel-layout
 changes modify audio content.
@@ -100,6 +113,7 @@ changes modify audio content.
 Build a Textual TUI before Tauri. The first TUI should focus on:
 
 - duplicate review
+- pack overlap/consolidation review
 - rename preview/apply/undo
 - audit drilldown
 - team-friendly approval workflows
@@ -114,6 +128,8 @@ Internal Studio Beta is reached when:
 - CI runs `uv run pytest tests/ -v`
 - scan/audit/dedupe/rename/export workflows have JSON output
 - filesystem-changing workflows have logs, quarantine, or undo
+- duplicated pack/folder detection can produce reviewed JSON evidence before
+  any consolidation action
 - tests cover the safety paths, not just happy paths
 
 ## Development Loop
