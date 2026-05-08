@@ -11,7 +11,7 @@ from rich.table import Table
 
 from wavwarden import __version__
 from wavwarden.db import get_connection
-from wavwarden.models import DedupeApplyResult, DedupeGroup, DedupeSummary
+from wavwarden.models import DedupeApplyResult, DedupeGroup, DedupeReviewResult, DedupeSummary
 from wavwarden.utils import fmt_bytes
 
 console = Console()
@@ -153,12 +153,65 @@ def write_dedupe_plan(
         console.print("[yellow]Review the plan, then run with --apply to quarantine duplicate removals.[/yellow]")
 
 
+def review_dedupe_plan(
+    plan_path: Path,
+    output_path: Path | None = None,
+    approve_all: bool = False,
+    groups: list[int] | None = None,
+    quiet: bool = False,
+) -> DedupeReviewResult:
+    """Stamp a dedupe plan with approved group indexes.
+
+    Group numbers are 1-based to match the preview table. The stored review
+    metadata is 0-based so it remains stable for list indexing.
+    """
+    plan = json.loads(plan_path.read_text())
+    total = len(plan.get("groups", []))
+    requested = set(groups or [])
+    invalid = sorted(group for group in requested if group < 1 or group > total)
+    if approve_all:
+        approved = set(range(total))
+    else:
+        approved = {group - 1 for group in requested if 1 <= group <= total}
+
+    existing_review = plan.get("review", {})
+    existing_approved = set(existing_review.get("approved_groups", []))
+    approved.update(existing_approved)
+    approved_groups = sorted(approved)
+
+    plan["review"] = {
+        "status": "approved" if len(approved_groups) == total and total else "partially_approved",
+        "approved_at": datetime.now(timezone.utc).isoformat(),
+        "approved_groups": approved_groups,
+    }
+
+    output = output_path or plan_path
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(plan, indent=2))
+    result = DedupeReviewResult(
+        plan_path=str(plan_path),
+        output_path=str(output),
+        total_groups=total,
+        approved_groups=len(approved_groups),
+        invalid_groups=invalid,
+    )
+    if not quiet:
+        console.print(
+            f"Approved [yellow]{result.approved_groups:,}[/yellow] of "
+            f"[yellow]{result.total_groups:,}[/yellow] group(s) in [cyan]{output}[/cyan]"
+        )
+        if invalid:
+            console.print(f"[red]Ignored invalid group number(s): {', '.join(str(i) for i in invalid)}[/red]")
+    return result
+
+
 def apply_dedupe_plan(
     plan_path: Path,
     db_path: Path | None = None,
     dry_run: bool = True,
     quarantine_dir: Path | None = None,
     permanent_delete: bool = False,
+    require_reviewed: bool = False,
     quiet: bool = False,
 ) -> DedupeApplyResult:
     """Execute a reviewed dedupe plan.
@@ -175,7 +228,17 @@ def apply_dedupe_plan(
     if quarantine_dir is not None:
         result.quarantine_dir = str(quarantine_dir)
 
-    for group in plan["groups"]:
+    approved_groups = set(plan.get("review", {}).get("approved_groups", []))
+    if require_reviewed and not approved_groups:
+        result.errors.append({"path": str(plan_path), "error": "plan has no approved groups"})
+        if not quiet:
+            console.print("[red]Refusing to apply: plan has no approved groups.[/red]")
+        return result
+
+    for group_index, group in enumerate(plan["groups"]):
+        if require_reviewed and group_index not in approved_groups:
+            result.errors.append({"path": str(plan_path), "error": f"group {group_index + 1} is not approved"})
+            continue
         for entry in group:
             if entry["action"] != "remove":
                 continue

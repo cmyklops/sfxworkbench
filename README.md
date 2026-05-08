@@ -34,7 +34,8 @@ uv run sfx search QUERY               # FTS filename search
 uv run sfx export --output library.csv
 uv run sfx dedupe --summary-only      # count duplicate groups without writing a plan
 uv run sfx dedupe --output ~/reports/dedupe_plan.json
-uv run sfx dedupe --apply PLAN.json   # quarantine duplicates by default
+uv run sfx dedupe --review PLAN.json --approve-all
+uv run sfx dedupe --apply PLAN.json --require-reviewed
 uv run sfx rename PATH --pattern ucs  # dry-run UCS-oriented rename preview
 uv run sfx rename PATH --pattern ucs --apply --log rename_log.json
 uv run sfx rename --undo rename_log.json --apply
@@ -57,7 +58,7 @@ python3 audit.py ~/CommercialLibraries --json
 
 - `clean` is dry-run by default and can write a JSON log.
 - `dedupe --summary-only` reports counts without writing a plan.
-- `dedupe --output PLAN.json` writes a reviewed plan; `--apply` quarantines by default.
+- `dedupe --output PLAN.json` writes a plan; `--review` stamps approvals and `--apply` quarantines by default.
 - `rename` previews first, refuses collisions, writes an undo log on apply, and
   can restore from that log.
 - `normalize` is intentionally not part of the beta safety promise yet because

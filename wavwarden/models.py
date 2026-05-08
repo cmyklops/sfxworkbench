@@ -101,6 +101,14 @@ class DedupeSummary(BaseModel):
     largest_group_copies: int = 0
 
 
+class DedupeReviewResult(BaseModel):
+    plan_path: str
+    output_path: str
+    total_groups: int = 0
+    approved_groups: int = 0
+    invalid_groups: list[int] = []
+
+
 class RenameEntry(BaseModel):
     old_path: str
     new_path: str

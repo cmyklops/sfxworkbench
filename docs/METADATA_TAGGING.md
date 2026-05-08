@@ -10,6 +10,12 @@ results.
 
 First, improve metadata reads before adding writers.
 
+Best immediate candidate:
+
+- `wavinfo` is MIT licensed and directly supports richer professional WAV
+  metadata reads, including BWF, iXML, RIFF INFO, RF64, ADM, cue markers, and
+  sampler chunks. Evaluate it before expanding wavwarden's custom RIFF parsing.
+
 Potential additive tables:
 
 - `metadata_fields`: normalized metadata by file, namespace, key, value, source
@@ -81,6 +87,11 @@ format itself is specified by EBU Tech 3285. Mutagen is useful for many tagged
 formats, but its license and WAV/BWF/iXML limits need evaluation before making
 it a dependency.
 
+Use BWF MetaEdit as the professional reference behavior first. If wavwarden
+wraps it, treat it as an external command with explicit version capture in tag
+plans/logs. Avoid hand-rolled binary metadata mutation until the read/plan/apply
+contracts are stable and backed by fixtures from real-world files.
+
 ## Audio Listening Suggestions
 
 Yes, wavwarden can eventually "listen" to files and suggest tags, but those
@@ -113,6 +124,16 @@ CLAP-style audio-text embedding models are promising for zero-shot sound-effect
 labels. AudioSet-style classifiers can provide broad sound-event categories.
 Speech models such as Whisper are useful for speech detection/transcription, not
 general SFX labeling.
+
+Concrete candidates:
+
+- PANNs inference: MIT licensed, useful for broad AudioSet-style sound-event
+  suggestions.
+- CLAP-style models: useful for text/audio similarity and label ranking, but
+  model licensing and runtime footprint must be checked per model.
+- aiSFX: relevant research direction for UCS-like sound-effect embeddings, but
+  treat as experimental until maintenance, license, and model provenance are
+  verified.
 
 All audio-model features need explicit privacy and cost controls before use on
 commercial libraries.

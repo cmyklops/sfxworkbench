@@ -140,3 +140,13 @@ def test_dedupe_summary_and_output_contract(tmp_library: Path, tmp_db: Path, tmp
     )
     assert plan_payload["plan_path"] == "<TMP>/review/dedupe_plan.json"
     assert out.exists()
+
+    review_payload = _normalize(
+        _load(runner.invoke(app, ["dedupe", "--review", str(out), "--approve-all", "--json"]).stdout),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert review_payload["schema_version"] == 1
+    assert review_payload["command"] == "dedupe_review"
+    assert review_payload["result"]["approved_groups"] >= 1

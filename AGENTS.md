@@ -24,7 +24,8 @@ uv run sfx clean ~/CommercialLibraries --apply   # actually remove junk
 uv run sfx scan ~/CommercialLibraries --db ~/.wavwarden/index.db
 uv run sfx dedupe --db ~/.wavwarden/index.db --summary-only
 uv run sfx dedupe --db ~/.wavwarden/index.db --output ~/reports/dedupe_plan.json
-uv run sfx dedupe --apply ~/reports/dedupe_plan.json --db ~/.wavwarden/index.db   # quarantines by default
+uv run sfx dedupe --review ~/reports/dedupe_plan.json --approve-all
+uv run sfx dedupe --apply ~/reports/dedupe_plan.json --db ~/.wavwarden/index.db --require-reviewed
 uv run sfx search "gunshot exterior"
 uv run sfx rename ~/CommercialLibraries --pattern ucs                   # dry-run
 uv run sfx rename ~/CommercialLibraries --pattern ucs --apply --log rename_log.json
@@ -53,6 +54,7 @@ sfx scan PATH  →  audio.read_audio_info()  →  SQLite (files + files_fts)
                   MD5 hash                 →  SQLite (files.md5)
 
 sfx dedupe     →  GROUP BY md5 WHERE count > 1  →  summary or reviewed plan JSON
+sfx dedupe --review PLAN → approve groups
 sfx dedupe --apply PLAN → validate size/hash → quarantine duplicates + update SQLite
 sfx rename PATH → preview/apply UCS-oriented names → rename_log_TIMESTAMP.json
 sfx audit      →  SELECT queries against index

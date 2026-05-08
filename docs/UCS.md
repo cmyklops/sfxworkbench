@@ -1,24 +1,45 @@
 # UCS Data Plan
 
 wavwarden currently detects UCS-looking names with a heuristic regex and does
-not ship official UCS category data.
+not yet ship official UCS category data.
 
 ## Current Behavior
 
 - `wavwarden/ucs.py` is the shared home for current UCS stem parsing.
 - `scan` stores `files.is_ucs` using the heuristic `^[A-Z]{2,5}_[A-Z]{2,8}(_|$)`.
 - `rename --pattern ucs` safely sanitizes filenames and falls back to `SFX_MISC_...`.
-- There is no category catalog, synonym list, or official UCS spreadsheet in the repo.
+- There is no category catalog, synonym list, or official UCS spreadsheet in the repo yet.
 
 ## License Posture
 
 The Universal Category System website describes UCS as a public-domain
-initiative and points users to a Dropbox repository for resources. Before
-bundling official spreadsheets or derived JSON, verify the redistribution terms
-of the exact resource file and version.
+initiative and points users to a Dropbox repository for resources. wavwarden
+will treat the official UCS category list as usable project data, while keeping
+source provenance and attribution visible.
 
-Until that is verified, wavwarden should support user-supplied UCS data rather
-than vendoring the official catalog.
+Research note from May 8, 2026:
+
+- The official site says UCS is a "public domain initiative" and says all UCS
+  resources are available from its Dropbox-backed repository.
+- The official resource download redirects to `UCS Release.zip`.
+- That zip includes `UCS v8.2.1 Full List.xlsx`,
+  `UCS v8.2.1 Top Level Categories.xlsx`, `Soundminer/_categorylist.csv`,
+  category-folder templates, logos, and tool resources.
+- The zip listing did not show a dedicated `LICENSE`, `COPYING`, `TERMS`, or
+  equivalent legal file.
+- The XLSX metadata and shared strings checked locally did not expose a more
+  specific license grant than the public-domain language on the official site.
+
+Conclusion: use the official UCS data, but credit it carefully. The repo should
+prefer a normalized derived catalog over copying the full upstream release
+bundle. Any bundled catalog must include source URL, UCS release version,
+generated timestamp, and an attribution note such as:
+
+> Category data derived from the Universal Category System (UCS), a public
+> domain initiative. See https://universalcategorysystem.com/.
+
+Keep user-supplied imports as a supported path so studios can update or replace
+the catalog without waiting for a wavwarden release.
 
 ## Integration Plan
 
@@ -45,10 +66,16 @@ uv run sfx rename PATH --pattern ucs --ucs-data ~/Downloads/ucs.csv
 
 Suggested data behavior:
 
-- Prefer user-supplied UCS CSV/JSON via `--ucs-data` or `WAVWARDEN_UCS_DATA`.
+- Support user-supplied UCS CSV/JSON via `--ucs-data` or `WAVWARDEN_UCS_DATA`.
 - Cache imported catalogs under `~/.wavwarden/` or in SQLite.
-- If redistribution is allowed, add a normalized `wavwarden/data/ucs_categories.json`.
-- If redistribution is not allowed, ship only schema/docs and keep the importer.
+- Add an importer for the official `Soundminer/_categorylist.csv` and
+  `UCS v8.2.1 Full List.xlsx` layouts.
+- Add a normalized `wavwarden/data/ucs_categories.json` generated from a pinned
+  UCS release, with source URL, release version, import timestamp, and
+  attribution.
+- Do not vendor the full upstream zip, app binaries, logos, videos, or tool
+  bundles unless there is a specific product need. The category catalog is the
+  useful runtime asset.
 
 Suggested DB additions:
 

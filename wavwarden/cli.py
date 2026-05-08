@@ -104,15 +104,25 @@ def cmd_scan(
 def cmd_dedupe(
     db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
     apply: Annotated[Path | None, typer.Option("--apply", help="Execute a reviewed dedupe plan JSON file.")] = None,
+    review: Annotated[Path | None, typer.Option("--review", help="Mark a dedupe plan as reviewed/approved.")] = None,
     output: Annotated[Path | None, typer.Option("--output", help="Write dedupe plan to this path.")] = None,
     summary_only: Annotated[
         bool, typer.Option("--summary-only", help="Show duplicate counts without writing a plan.")
     ] = False,
+    approve_all: Annotated[
+        bool, typer.Option("--approve-all", help="Approve every group when used with --review.")
+    ] = False,
+    group: Annotated[
+        list[int] | None, typer.Option("--group", help="Approve a 1-based group number when used with --review.")
+    ] = None,
     quarantine_dir: Annotated[
         Path | None, typer.Option("--quarantine-dir", help="Directory for quarantined duplicates.")
     ] = None,
     permanent_delete: Annotated[
         bool, typer.Option("--delete", help="Permanently delete instead of quarantining. Advanced/destructive.")
+    ] = False,
+    require_reviewed: Annotated[
+        bool, typer.Option("--require-reviewed", help="Apply only plans with approved dedupe groups.")
     ] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
@@ -120,10 +130,25 @@ def cmd_dedupe(
     from wavwarden.dedupe import (
         apply_dedupe_plan,
         find_duplicates,
+        review_dedupe_plan,
         show_duplicates,
         summarize_duplicates,
         write_dedupe_plan,
     )
+
+    if review is not None:
+        if not review.exists():
+            console.print(f"[red]Error: plan file not found: {review}[/red]")
+            raise typer.Exit(1)
+        if not approve_all and not group:
+            console.print("[red]Error: pass --approve-all or at least one --group with --review.[/red]")
+            raise typer.Exit(1)
+        result = review_dedupe_plan(
+            review, output_path=output, approve_all=approve_all, groups=group, quiet=json_output
+        )
+        if json_output:
+            print(json_dumps({"schema_version": 1, "command": "dedupe_review", "result": result}))
+        return
 
     if apply is not None:
         if not apply.exists():
@@ -135,6 +160,7 @@ def cmd_dedupe(
             dry_run=False,
             quarantine_dir=quarantine_dir,
             permanent_delete=permanent_delete,
+            require_reviewed=require_reviewed,
             quiet=json_output,
         )
         if json_output:

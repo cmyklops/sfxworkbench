@@ -4,7 +4,13 @@ import json
 from pathlib import Path
 
 from wavwarden.db import get_connection
-from wavwarden.dedupe import apply_dedupe_plan, find_duplicates, summarize_duplicates, write_dedupe_plan
+from wavwarden.dedupe import (
+    apply_dedupe_plan,
+    find_duplicates,
+    review_dedupe_plan,
+    summarize_duplicates,
+    write_dedupe_plan,
+)
 
 
 def _seed_files(tmp_db: Path, files: list[dict]) -> None:
@@ -159,6 +165,51 @@ def test_write_dedupe_plan(tmp_db: Path, tmp_path: Path) -> None:
     assert actions.count("remove") == 2
 
 
+def test_review_dedupe_plan_approves_all_groups(tmp_path: Path) -> None:
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "groups": [
+                    [{"path": "/a.wav", "action": "keep"}, {"path": "/b.wav", "action": "remove"}],
+                    [{"path": "/c.wav", "action": "keep"}, {"path": "/d.wav", "action": "remove"}],
+                ]
+            }
+        )
+    )
+
+    result = review_dedupe_plan(plan_path, approve_all=True)
+    plan = json.loads(plan_path.read_text())
+
+    assert result.total_groups == 2
+    assert result.approved_groups == 2
+    assert plan["review"]["status"] == "approved"
+    assert plan["review"]["approved_groups"] == [0, 1]
+
+
+def test_review_dedupe_plan_marks_selected_groups(tmp_path: Path) -> None:
+    plan_path = tmp_path / "plan.json"
+    output_path = tmp_path / "reviewed.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "groups": [
+                    [{"path": "/a.wav", "action": "keep"}],
+                    [{"path": "/b.wav", "action": "keep"}],
+                ]
+            }
+        )
+    )
+
+    result = review_dedupe_plan(plan_path, output_path=output_path, groups=[2, 9])
+    plan = json.loads(output_path.read_text())
+
+    assert result.approved_groups == 1
+    assert result.invalid_groups == [9]
+    assert plan["review"]["status"] == "partially_approved"
+    assert plan["review"]["approved_groups"] == [1]
+
+
 def test_apply_dedupe_dry_run_makes_no_changes(tmp_path: Path) -> None:
     a = tmp_path / "a.wav"
     b = tmp_path / "b.wav"
@@ -183,6 +234,38 @@ def test_apply_dedupe_dry_run_makes_no_changes(tmp_path: Path) -> None:
     assert result.dry_run is True
     assert result.removed == 1
     assert a.exists() and b.exists(), "Dry run should not delete anything"
+
+
+def test_apply_dedupe_can_require_reviewed_plan(tmp_path: Path) -> None:
+    a = tmp_path / "keep.wav"
+    b = tmp_path / "drop.wav"
+    a.write_bytes(b"audio")
+    b.write_bytes(b"audio")
+
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "groups": [
+                    [
+                        {"path": str(a), "action": "keep", "size_bytes": 5},
+                        {"path": str(b), "action": "remove", "size_bytes": 5},
+                    ]
+                ]
+            }
+        )
+    )
+
+    blocked = apply_dedupe_plan(plan_path, dry_run=False, quarantine_dir=tmp_path / "q", require_reviewed=True)
+    assert blocked.errors
+    assert b.exists()
+
+    review_dedupe_plan(plan_path, approve_all=True)
+    applied = apply_dedupe_plan(plan_path, dry_run=False, quarantine_dir=tmp_path / "q", require_reviewed=True)
+
+    assert applied.errors == []
+    assert applied.quarantined == 1
+    assert not b.exists()
 
 
 def test_apply_dedupe_removes_files_and_updates_db(tmp_db: Path, tmp_path: Path) -> None:

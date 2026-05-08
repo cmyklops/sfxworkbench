@@ -23,7 +23,8 @@ uv run sfx search QUERY
 uv run sfx export --output library.csv
 uv run sfx dedupe --summary-only
 uv run sfx dedupe --output ~/reports/dedupe_plan.json
-uv run sfx dedupe --apply dedupe_plan.json
+uv run sfx dedupe --review dedupe_plan.json --approve-all
+uv run sfx dedupe --apply dedupe_plan.json --require-reviewed
 uv run sfx rename PATH --pattern ucs
 uv run sfx rename PATH --pattern ucs --apply --log rename_log.json
 uv run sfx rename --undo rename_log.json --apply
@@ -47,7 +48,8 @@ python3 audit.py ~/CommercialLibraries --json
 - `scan`: indexes audio files into SQLite and skips junk.
 - `dedupe --summary-only`: finds exact MD5 duplicate groups and prints counts without writing a plan.
 - `dedupe --output PLAN.json`: writes a reviewed duplicate plan to an explicit path.
-- `dedupe --apply`: validates size/hash and quarantines by default.
+- `dedupe --review PLAN.json`: stamps all or selected duplicate groups as approved.
+- `dedupe --apply`: validates size/hash and quarantines by default; use `--require-reviewed` to refuse unapproved plans.
 - `rename`: previews UCS-oriented names, refuses collisions, applies with undo log.
 
 ## Phase 2 — Cleanup Tooling
@@ -60,6 +62,25 @@ Metadata writing follows after rename stabilizes:
 
 Both should use mature libraries/tools for BWAV/iXML writes rather than
 hand-rolled binary mutation.
+
+### Directly Useful Open-Source Tools
+
+These projects are strong candidates for supporting wavwarden's planned feature
+set without copying unclear or incompatible code into the repo:
+
+| Tool | License posture | wavwarden use |
+| --- | --- | --- |
+| `wavinfo` | MIT | Richer WAV/RF64/BWF/iXML metadata reads for `scan`, `audit`, and tag planning. |
+| BWF MetaEdit | Public domain project | Reference behavior or external backend for BWF metadata validation/writing. |
+| `pyacoustid` | MIT | Optional perceptual duplicate candidate detection after exact MD5 dedupe. |
+| Textual | MIT | First review UI: duplicate review, rename preview, audit drilldown, approval flows. |
+| PANNs inference | MIT | Optional reviewed audio-listening tag suggestions. |
+| `pyloudnorm` | MIT | Later loudness analysis for the experimental normalize track. |
+
+Use Chromaprint via `pyacoustid`/`fpcalc` as an optional external capability
+rather than vendoring Chromaprint code. Keep ML tagging review-only and outside
+the Internal Studio Beta safety promise until privacy, model provenance, and
+runtime cost controls are clear.
 
 See [`UCS.md`](UCS.md) for the UCS data plan and
 [`METADATA_TAGGING.md`](METADATA_TAGGING.md) for the metadata/audio-suggestion
@@ -124,6 +145,7 @@ Command contracts:
 - `export --json`: includes `db_path`, `output`, and exported row `count`.
 - `dedupe --summary-only --json`: includes duplicate `summary`, `groups`, and no `plan_path`.
 - `dedupe --output PLAN --json`: includes duplicate `summary`, `groups`, and explicit `plan_path`.
+- `dedupe --review PLAN --json`: includes review counts and output path.
 - `dedupe --apply PLAN --json`: includes `result`; default apply quarantines files.
 - `rename PATH --json`: includes a dry-run `plan`.
 - `rename PATH --apply --json`: includes `plan` and `result`.
