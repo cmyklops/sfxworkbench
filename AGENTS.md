@@ -80,6 +80,9 @@ uv run sfx tag apply ~/reports/tag_plan.json --db ~/.wavwarden/index.db --requir
 uv run sfx tag sidecar-export ~/reports/accepted_tags.sidecar.json --db ~/.wavwarden/index.db --path ~/CommercialLibraries
 uv run sfx tag sidecar-import ~/reports/accepted_tags.sidecar.json --db ~/.wavwarden/index.db
 uv run sfx tag sidecar-import ~/reports/accepted_tags.sidecar.json --db ~/.wavwarden/index.db --apply
+uv run sfx metadata write-plan ~/reports/metadata_write_plan.json --db ~/.wavwarden/index.db --path ~/CommercialLibraries --bwfmetaedit /path/to/bwfmetaedit
+uv run sfx metadata write-review ~/reports/metadata_write_plan.json --approve-all
+uv run sfx metadata write-preview ~/reports/metadata_write_plan.json --db ~/.wavwarden/index.db --require-reviewed
 uv run sfx ucs import ~/Desktop/_categorylist.csv --release-version v8.2.1
 uv run sfx ucs info
 uv run sfx ucs categories --cat-short AMB
@@ -113,6 +116,7 @@ sfx scan PATH  →  audio.read_audio_info()  →  SQLite (files + files_fts)
 
 sfx metadata audit → list missing BWF/iXML metadata and unusual sample-rate files
 sfx metadata backends → report installed external metadata write backends, no audio mutation
+sfx metadata write-plan/review/preview → reviewed dry-run embedded metadata write plans, no audio mutation
 sfx groups audit PATH → infer numbered takes and channel sets → report JSON
 sfx format audit PATH → flag mixed sample rate / bit depth / channels inside related groups
 sfx scan-errors → classify scan_error rows → review/quarantine obvious artifacts
@@ -152,6 +156,7 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 - **`scan.py`** — incremental: skips files where `mtime + size_bytes` match the existing DB row. Junk detection uses shared `junk.py`; junk files are never indexed.
 - **`metadata_audit.py`** — report-only metadata coverage and unusual sample-rate audit for planning future tagging work.
 - **`metadata_backends.py`** — report-only discovery for future embedded metadata writer backends. Probes BWF MetaEdit path/version and records capability shape without mutating audio.
+- **`metadata_write.py`** — reviewed dry-run embedded metadata write plans. Consumes DB-only `accepted_tags`, maps conservative BWF MetaEdit fields, stamps review status, and previews anchor validation without mutating audio.
 - **`groups.py`** — report-only related sound group detection from indexed filename patterns.
 - **`format_audit.py`** — report-only format consistency audit inside related groups. It never converts audio.
 - **`scan_errors.py`** — plans quarantine for unreadable indexed files. Only all-zero blobs and AppleDouble artifacts are auto-marked `quarantine`; broken RIFF files stay `review`.
@@ -201,7 +206,7 @@ Fixtures in `tests/conftest.py`:
 Full phase spec: `docs/PHASES.md`. Current status:
 - **Phase 0** ✅ — `audit.py` standalone auditor
 - **Phase 1** ✅ — `sfx` CLI package (clean, scan, dedupe, audit, search, export, JSON output)
-- **Phase 2** 🔜 — embedded metadata writing; DB-only `sfx tag plan/review/apply`, tag sidecars, cleanup, rename, organize, pack review, UCS import/validate, and tag suggestions are implemented
+- **Phase 2** 🔜 — embedded metadata writing; DB-only `sfx tag plan/review/apply`, tag sidecars, embedded-write dry-run plans, cleanup, rename, organize, pack review, UCS import/validate, and tag suggestions are implemented
 - **Pack/folder duplicate detection** ✅ — `sfx packs audit/plan/review/apply/undo` is implemented for exact duplicate folders and fully-covered overlaps
 - **Phase 3** ⬜ — Textual TUI first, Tauri later
 

@@ -622,6 +622,119 @@ def cmd_metadata_backends(
         )
 
 
+@metadata_app.command("write-plan")
+def cmd_metadata_write_plan(
+    output: Annotated[Path, typer.Argument(help="Output embedded metadata write plan JSON path.")],
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    path: Annotated[Path | None, typer.Option("--path", help="Optional indexed library root to include.")] = None,
+    backend: Annotated[
+        str, typer.Option("--backend", help="Metadata writer backend to plan for. Currently: bwfmetaedit.")
+    ] = "bwfmetaedit",
+    bwfmetaedit: Annotated[
+        Path | None,
+        typer.Option("--bwfmetaedit", help="Explicit path to the BWF MetaEdit CLI executable."),
+    ] = None,
+    limit: Annotated[int, typer.Option("--limit", help="Maximum accepted tag entries to include; 0 writes all.")] = 0,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Build a reviewed dry-run plan for future embedded metadata writes."""
+    from wavwarden.metadata_write import build_metadata_write_plan, show_metadata_write_plan, write_metadata_write_plan
+
+    try:
+        plan = build_metadata_write_plan(db_path=db, root=path, backend=backend, bwfmetaedit=bwfmetaedit, limit=limit)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+    plan_path = write_metadata_write_plan(plan, output, quiet=json_output)
+    if not json_output:
+        show_metadata_write_plan(plan)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "metadata_write_plan",
+                    "db_path": db,
+                    "root": path,
+                    "plan_path": plan_path,
+                    "plan": plan,
+                }
+            )
+        )
+
+
+@metadata_app.command("write-review")
+def cmd_metadata_write_review(
+    plan: Annotated[Path, typer.Argument(help="Embedded metadata write plan JSON to review.")],
+    output: Annotated[Path | None, typer.Option("--output", help="Write reviewed plan to this path.")] = None,
+    approve_all: Annotated[bool, typer.Option("--approve-all", help="Approve every write plan entry.")] = False,
+    entry: Annotated[list[int] | None, typer.Option("--entry", help="Approve a 1-based entry id.")] = None,
+    reject_entry: Annotated[list[int] | None, typer.Option("--reject-entry", help="Reject a 1-based entry id.")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Mark embedded metadata write plan entries as approved or rejected."""
+    from wavwarden.metadata_write import review_metadata_write_plan
+
+    if not plan.exists():
+        console.print(f"[red]Error: plan file not found: {plan}[/red]")
+        raise typer.Exit(1)
+    if not approve_all and not entry and not reject_entry:
+        console.print("[red]Error: pass --approve-all, --entry, or --reject-entry.[/red]")
+        raise typer.Exit(1)
+    result = review_metadata_write_plan(
+        plan,
+        output_path=output,
+        approve_all=approve_all,
+        entries=entry,
+        reject_entries=reject_entry,
+        quiet=json_output,
+    )
+    if result.invalid_entries:
+        raise typer.Exit(1)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "metadata_write_review",
+                    "plan_path": plan,
+                    "output_path": output or plan,
+                    "result": result,
+                }
+            )
+        )
+
+
+@metadata_app.command("write-preview")
+def cmd_metadata_write_preview(
+    plan: Annotated[Path, typer.Argument(help="Reviewed embedded metadata write plan JSON to validate.")],
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index. Defaults to plan db_path.")] = None,
+    require_reviewed: Annotated[
+        bool, typer.Option("--require-reviewed", help="Only count approved write plan entries.")
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Preview a reviewed embedded metadata write plan. No audio files are modified."""
+    from wavwarden.metadata_write import preview_metadata_write_plan
+
+    if not plan.exists():
+        console.print(f"[red]Error: plan file not found: {plan}[/red]")
+        raise typer.Exit(1)
+    result = preview_metadata_write_plan(plan, db_path=db, require_reviewed=require_reviewed, quiet=json_output)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "metadata_write_preview",
+                    "plan_path": plan,
+                    "db_path": db,
+                    "result": result,
+                }
+            )
+        )
+
+
 # ---------------------------------------------------------------------------
 # sfx ucs
 # ---------------------------------------------------------------------------

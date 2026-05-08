@@ -966,6 +966,77 @@ def test_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
     assert sidecar_import_payload["result"]["planned"] == 1
     assert sidecar_import_payload["result"]["skipped"] == 1
 
+    fake_bwfmetaedit = tmp_path / "bwfmetaedit"
+    fake_bwfmetaedit.write_text("#!/bin/sh\necho 'BWF MetaEdit 24.04'\n", encoding="utf-8")
+    fake_bwfmetaedit.chmod(0o755)
+    write_plan_out = tmp_path / "metadata_write_plan.json"
+    write_plan_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "metadata",
+                    "write-plan",
+                    str(write_plan_out),
+                    "--db",
+                    str(tmp_db),
+                    "--path",
+                    str(tmp_library),
+                    "--bwfmetaedit",
+                    str(fake_bwfmetaedit),
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert write_plan_payload["schema_version"] == 1
+    assert write_plan_payload["command"] == "metadata_write_plan"
+    assert write_plan_payload["db_path"] == "<DB>"
+    assert write_plan_payload["root"] == "<ROOT>"
+    assert write_plan_payload["plan_path"] == "<TMP>/metadata_write_plan.json"
+    assert write_plan_payload["plan"]["dry_run_only"] is True
+    assert write_plan_payload["plan"]["backend"]["available"] is True
+    assert write_plan_payload["plan"]["backend"]["executable"] == "<TMP>/bwfmetaedit"
+    assert write_plan_payload["plan"]["summary"]["candidate_entries"] == 1
+    assert write_plan_payload["plan"]["summary"]["supported_entries"] <= 1
+
+    write_review_payload = _normalize(
+        _load(runner.invoke(app, ["metadata", "write-review", str(write_plan_out), "--approve-all", "--json"]).stdout),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert write_review_payload["schema_version"] == 1
+    assert write_review_payload["command"] == "metadata_write_review"
+    assert write_review_payload["result"]["approved_entries"] == 1
+
+    write_preview_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "metadata",
+                    "write-preview",
+                    str(write_plan_out),
+                    "--db",
+                    str(tmp_db),
+                    "--require-reviewed",
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert write_preview_payload["schema_version"] == 1
+    assert write_preview_payload["command"] == "metadata_write_preview"
+    assert write_preview_payload["result"]["dry_run"] is True
+    assert write_preview_payload["result"]["planned"] == 1
+
 
 def test_ucs_validate_and_catalog_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
     src = tmp_path / "_categorylist.csv"

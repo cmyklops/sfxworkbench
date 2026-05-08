@@ -149,6 +149,41 @@ def test_tag_plan_review_apply_json(tmp_library, tmp_db, tmp_path) -> None:
     assert import_payload["command"] == "tag_sidecar_import"
     assert import_payload["result"]["planned"] == sidecar_payload["report"]["tag_count"]
 
+    fake_bwfmetaedit = tmp_path / "bwfmetaedit"
+    fake_bwfmetaedit.write_text("#!/bin/sh\necho 'BWF MetaEdit 24.04'\n", encoding="utf-8")
+    fake_bwfmetaedit.chmod(0o755)
+    metadata_write_plan = tmp_path / "metadata_write_plan.json"
+    write_plan = runner.invoke(
+        app,
+        [
+            "metadata",
+            "write-plan",
+            str(metadata_write_plan),
+            "--db",
+            str(tmp_db),
+            "--path",
+            str(tmp_library),
+            "--bwfmetaedit",
+            str(fake_bwfmetaedit),
+            "--json",
+        ],
+    )
+    assert write_plan.exit_code == 0
+    write_plan_payload = json.loads(write_plan.stdout)
+    assert write_plan_payload["command"] == "metadata_write_plan"
+    assert metadata_write_plan.exists()
+
+    write_review = runner.invoke(app, ["metadata", "write-review", str(metadata_write_plan), "--approve-all", "--json"])
+    assert write_review.exit_code == 0
+    assert json.loads(write_review.stdout)["command"] == "metadata_write_review"
+
+    write_preview = runner.invoke(
+        app,
+        ["metadata", "write-preview", str(metadata_write_plan), "--db", str(tmp_db), "--require-reviewed", "--json"],
+    )
+    assert write_preview.exit_code == 0
+    assert json.loads(write_preview.stdout)["command"] == "metadata_write_preview"
+
 
 def test_similarity_cli_json_smoke(tmp_library, tmp_db, tmp_path) -> None:
     scan = runner.invoke(app, ["scan", str(tmp_library), "--db", str(tmp_db), "--json"])

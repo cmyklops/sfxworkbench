@@ -85,6 +85,9 @@ uv run sfx scan PATH
 uv run sfx audit
 uv run sfx metadata audit --output ~/reports/metadata_report.json
 uv run sfx metadata backends --json
+uv run sfx metadata write-plan ~/reports/metadata_write_plan.json --path PATH --bwfmetaedit /path/to/bwfmetaedit
+uv run sfx metadata write-review ~/reports/metadata_write_plan.json --approve-all
+uv run sfx metadata write-preview ~/reports/metadata_write_plan.json --require-reviewed
 uv run sfx groups audit PATH --output ~/reports/related_groups_report.json
 uv run sfx format audit PATH --output ~/reports/format_report.json
 uv run sfx scan-errors --output ~/reports/scan_error_plan.json
@@ -171,6 +174,9 @@ python3 audit.py ~/CommercialLibraries --json
 - `metadata audit`: report-only metadata coverage and unusual sample-rate review.
 - `metadata backends`: report-only external metadata writer discovery. It
   captures BWF MetaEdit availability/version without modifying audio.
+- `metadata write-plan/review/preview`: reviewed dry-run embedded metadata
+  write workflow. It consumes accepted tags and validates anchors without
+  modifying audio.
 - `groups audit`: report-only related sound groups inferred from numbered takes
   and channel-set filename patterns.
 - `format audit`: report-only sample-rate, bit-depth, and channel-count consistency
@@ -383,6 +389,7 @@ Metadata writing follows the reviewed-plan model:
 
 - `sfx metadata audit`
 - `sfx metadata backends`, implemented as BWF MetaEdit availability/version preflight
+- `sfx metadata write-plan/review/preview`, implemented as dry-run-only embedded write planning
 - `sfx tag suggest`
 - `sfx tag plan/review/apply`, implemented for DB-only accepted tags
 - `sfx tag sidecar-export/import`, implemented for portable JSON accepted tags
@@ -627,6 +634,9 @@ Command contracts:
 - `metadata audit --json`: includes `db_path`, optional `report_path`, and a versioned report with missing BWF/iXML metadata entries and unusual sample-rate entries.
 - `metadata backends --json`: includes discovered external metadata writer
   backends, executable paths, version command output, and capability flags.
+- `metadata write-plan/review/preview --json`: includes backend capture,
+  accepted-tag-to-BWF mapping entries, review counts, and dry-run validation
+  counts.
 - `groups audit PATH --json`: includes `root`, `db_path`, optional `report_path`, and a versioned report of inferred related sound groups.
 - `format audit PATH --json`: includes `root`, `db_path`, optional `report_path`, and a versioned report of format inconsistencies within related groups.
 - `scan-errors --json`: includes a scan-error `plan` with classifications and actions.

@@ -105,6 +105,9 @@ uv run sfx tag apply tag_plan.json --db ~/.wavwarden/index.db --require-reviewed
 uv run sfx tag sidecar-export accepted_tags.sidecar.json --db ~/.wavwarden/index.db --path PATH
 uv run sfx tag sidecar-import accepted_tags.sidecar.json --db ~/.wavwarden/index.db
 uv run sfx metadata backends --json
+uv run sfx metadata write-plan metadata_write_plan.json --db ~/.wavwarden/index.db --path PATH --bwfmetaedit /path/to/bwfmetaedit
+uv run sfx metadata write-review metadata_write_plan.json --approve-all
+uv run sfx metadata write-preview metadata_write_plan.json --db ~/.wavwarden/index.db --require-reviewed
 ```
 
 Each plan entry should include validation anchors:
@@ -132,21 +135,24 @@ uv run sfx tag apply tag_plan.json --require-reviewed
 The initial implementation is DB-only: approved entries are written to
 `accepted_tags`, and apply writes `tag_apply_log` rows plus an external JSON log.
 Accepted tags can also be exported and re-imported as JSON sidecars. Embedded
-metadata writes remain a later step.
+metadata writes are currently plan/review/preview only and never mutate audio.
 
 ## Phase D: Metadata Writes
 
 Start with DB-only accepted tags and portable export. This first slice is
 implemented: `sfx export` includes an `accepted_tags` JSON column, and
 `sfx tag sidecar-export/import` round-trips accepted tags through a validated
-JSON sidecar. Binary audio mutation comes last.
+JSON sidecar. `sfx metadata write-plan/review/preview` builds a dry-run embedded
+write plan from accepted tags and validates anchors, but does not write audio.
+Binary audio mutation comes last.
 
 Preferred write ladder:
 
 1. DB-only accepted tags
 2. sidecar JSON export/import, then XML only if another tool needs it
-3. BWF/iXML writes for proven-safe formats
-4. optional overwrite mode with original-file backup/quarantine
+3. reviewed dry-run embedded-write plans
+4. BWF/iXML writes for proven-safe formats
+5. optional overwrite mode with original-file backup/quarantine
 
 BWF MetaEdit is the leading candidate for Broadcast WAV metadata because it is
 designed for importing, editing, embedding, and exporting BWF metadata. The BWF
@@ -169,6 +175,20 @@ uv run sfx metadata backends --bwfmetaedit /path/to/bwfmetaedit --json
 This command only probes writer availability and version. It does not read or
 modify audio files. Future embedded-write plans should copy the discovered
 backend executable and version into plan/log records before any write is allowed.
+
+Current embedded-write preview:
+
+```bash
+uv run sfx metadata write-plan metadata_write_plan.json --db ~/.wavwarden/index.db --path PATH --bwfmetaedit /path/to/bwfmetaedit
+uv run sfx metadata write-review metadata_write_plan.json --approve-all
+uv run sfx metadata write-preview metadata_write_plan.json --db ~/.wavwarden/index.db --require-reviewed
+```
+
+The first supported mapping is deliberately narrow: accepted `description`,
+`originator`, and `originator_reference` tags can target BWF `bext` fields via
+BWF MetaEdit. Other accepted tags, such as UCS category/subcategory/take fields,
+remain visible in the plan as `unsupported_field` instead of being silently
+dropped.
 
 ## Audio Listening Suggestions
 

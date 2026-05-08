@@ -431,6 +431,72 @@ class MetadataWriteBackendsReport(BaseModel):
     backends: list[MetadataWriteBackend] = []
 
 
+class MetadataWritePlanEntry(BaseModel):
+    entry_id: int
+    file_id: int
+    path: str
+    filename: str
+    size_bytes: int | None = None
+    mtime: float | None = None
+    md5: str | None = None
+    field: str
+    value: str
+    source: str
+    method: str | None = None
+    confidence: float | None = None
+    evidence: list[str] = []
+    backend: str = "bwfmetaedit"
+    target_namespace: str | None = None
+    target_key: str | None = None
+    action: str = "unsupported_field"
+    supported: bool = False
+    review_status: str = "pending"
+
+
+class MetadataWritePlanSummary(BaseModel):
+    files_considered: int = 0
+    accepted_tags_considered: int = 0
+    candidate_entries: int = 0
+    supported_entries: int = 0
+    unsupported_entries: int = 0
+    approved_entries: int = 0
+    rejected_entries: int = 0
+    backend_available: bool = False
+
+
+class MetadataWritePlan(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    root: str | None = None
+    db_path: str
+    target: str = "embedded_metadata"
+    dry_run_only: bool = True
+    backend: MetadataWriteBackend
+    summary: MetadataWritePlanSummary
+    entries: list[MetadataWritePlanEntry] = []
+    errors: list[dict] = []
+
+
+class MetadataWriteReviewResult(BaseModel):
+    plan_path: str
+    output_path: str
+    total_entries: int = 0
+    approved_entries: int = 0
+    rejected_entries: int = 0
+    invalid_entries: list[int] = []
+
+
+class MetadataWritePreviewResult(BaseModel):
+    planned: int = 0
+    would_write: int = 0
+    skipped: int = 0
+    errors: list[dict] = []
+    dry_run: bool = True
+    target: str = "embedded_metadata"
+
+
 class RelatedSoundFile(BaseModel):
     path: str
     filename: str
