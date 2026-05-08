@@ -1,5 +1,6 @@
 """Tests for pack/folder duplicate reports."""
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -41,6 +42,16 @@ def _write_pack_files(files: list[dict]) -> None:
         path = Path(f["path"])
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"x" * f.get("size", 100))
+
+
+def _pack_plan_for_files(tmp_path: Path, tmp_db: Path, root: Path, files: list[dict]) -> Path:
+    _write_pack_files(files)
+    _seed_files(tmp_db, files)
+    report_path = tmp_path / "pack_report.json"
+    plan_path = tmp_path / "pack_plan.json"
+    write_pack_audit_report(audit_packs(root, tmp_db, min_files=1), report_path, quiet=True)
+    build_pack_plan(report_path, output_path=plan_path, quiet=True)
+    return plan_path
 
 
 def test_pack_audit_finds_exact_duplicate_folders(tmp_path: Path, tmp_db: Path) -> None:
@@ -259,3 +270,172 @@ def test_pack_plan_marks_partial_overlap_review_only(tmp_path: Path, tmp_db: Pat
     assert plan.summary.review_entries == 1
     assert plan.entries[0].action == "review"
     assert plan.entries[0].reason.startswith("folder overlap is not complete")
+
+
+def test_pack_apply_rejects_changed_size_before_quarantine(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    keep = root / "A Pack"
+    duplicate = root / "B Pack"
+    files = [
+        {"path": keep / "one.wav", "md5": "A", "size": 10},
+        {"path": duplicate / "one.wav", "md5": "A", "size": 10},
+    ]
+    plan_path = _pack_plan_for_files(tmp_path, tmp_db, root, files)
+    review_pack_plan(plan_path, approve_all=True, quiet=True)
+    (duplicate / "one.wav").write_bytes(b"changed-size")
+
+    result = apply_pack_plan(plan_path, require_reviewed=True, dry_run=False, quiet=True)
+
+    assert result.quarantined == 0
+    assert duplicate.exists()
+    assert result.errors[0]["error"].startswith("size changed")
+
+
+def test_pack_apply_rejects_changed_hash_before_quarantine(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    keep = root / "A Pack"
+    duplicate = root / "B Pack"
+    expected_hash = hashlib.md5(b"x" * 10).hexdigest()
+    files = [
+        {"path": keep / "one.wav", "md5": expected_hash, "size": 10},
+        {"path": duplicate / "one.wav", "md5": expected_hash, "size": 10},
+    ]
+    plan_path = _pack_plan_for_files(tmp_path, tmp_db, root, files)
+    review_pack_plan(plan_path, approve_all=True, quiet=True)
+    (duplicate / "one.wav").write_bytes(b"y" * 10)
+
+    result = apply_pack_plan(plan_path, require_reviewed=True, dry_run=False, quiet=True)
+
+    assert result.quarantined == 0
+    assert duplicate.exists()
+    assert result.errors == [{"path": str(duplicate / "one.wav"), "error": "md5 changed"}]
+
+
+def test_pack_apply_rejects_missing_planned_file(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    keep = root / "A Pack"
+    duplicate = root / "B Pack"
+    files = [
+        {"path": keep / "one.wav", "md5": "A", "size": 10},
+        {"path": duplicate / "one.wav", "md5": "A", "size": 10},
+    ]
+    plan_path = _pack_plan_for_files(tmp_path, tmp_db, root, files)
+    review_pack_plan(plan_path, approve_all=True, quiet=True)
+    (duplicate / "one.wav").unlink()
+
+    result = apply_pack_plan(plan_path, require_reviewed=True, dry_run=False, quiet=True)
+
+    assert result.quarantined == 0
+    assert duplicate.exists()
+    assert result.errors == [{"path": str(duplicate / "one.wav"), "error": "file does not exist"}]
+
+
+def test_pack_apply_rejects_unplanned_indexed_file(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    keep = root / "A Pack"
+    duplicate = root / "B Pack"
+    files = [
+        {"path": keep / "one.wav", "md5": "A", "size": 10},
+        {"path": duplicate / "one.wav", "md5": "A", "size": 10},
+    ]
+    plan_path = _pack_plan_for_files(tmp_path, tmp_db, root, files)
+    review_pack_plan(plan_path, approve_all=True, quiet=True)
+    extra = {"path": duplicate / "new.wav", "md5": "NEW", "size": 10}
+    _write_pack_files([extra])
+    _seed_files(tmp_db, [extra])
+
+    result = apply_pack_plan(plan_path, db_path=tmp_db, require_reviewed=True, dry_run=False, quiet=True)
+
+    assert result.quarantined == 0
+    assert duplicate.exists()
+    assert result.errors == [{"path": str(duplicate / "new.wav"), "error": "indexed file was not in plan"}]
+
+
+def test_pack_apply_partial_approval_moves_only_approved_group(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    keep = root / "A Pack"
+    duplicate_b = root / "B Pack"
+    duplicate_c = root / "C Pack"
+    files = [
+        {"path": keep / "one.wav", "md5": "A", "size": 10},
+        {"path": duplicate_b / "one.wav", "md5": "A", "size": 10},
+        {"path": duplicate_c / "one.wav", "md5": "A", "size": 10},
+    ]
+    plan_path = _pack_plan_for_files(tmp_path, tmp_db, root, files)
+    review_pack_plan(plan_path, groups=[1], quiet=True)
+
+    result = apply_pack_plan(
+        plan_path,
+        db_path=tmp_db,
+        quarantine_dir=tmp_path / "quarantine",
+        log_path=tmp_path / "pack_log.json",
+        require_reviewed=True,
+        dry_run=False,
+        quiet=True,
+    )
+
+    assert result.quarantined == 1
+    assert not duplicate_b.exists()
+    assert duplicate_c.exists()
+    assert result.errors == [{"path": str(duplicate_c), "error": "group 2 is not approved"}]
+
+
+def test_pack_apply_uses_non_overwriting_quarantine_target(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    keep = root / "A Pack"
+    duplicate = root / "B Pack"
+    quarantine_dir = tmp_path / "quarantine"
+    existing_target = quarantine_dir / duplicate.resolve().relative_to("/")
+    existing_target.mkdir(parents=True)
+    files = [
+        {"path": keep / "one.wav", "md5": "A", "size": 10},
+        {"path": duplicate / "one.wav", "md5": "A", "size": 10},
+    ]
+    plan_path = _pack_plan_for_files(tmp_path, tmp_db, root, files)
+    review_pack_plan(plan_path, approve_all=True, quiet=True)
+    log_path = tmp_path / "pack_log.json"
+
+    result = apply_pack_plan(
+        plan_path,
+        db_path=tmp_db,
+        quarantine_dir=quarantine_dir,
+        log_path=log_path,
+        require_reviewed=True,
+        dry_run=False,
+        quiet=True,
+    )
+
+    quarantined_path = Path(json.loads(log_path.read_text())["entries"][0]["quarantine_path"])
+    assert result.quarantined == 1
+    assert existing_target.exists()
+    assert quarantined_path.name == "B Pack__1"
+    assert quarantined_path.exists()
+
+
+def test_pack_apply_moves_non_indexed_sidecars_with_folder(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    keep = root / "A Pack"
+    duplicate = root / "B Pack"
+    files = [
+        {"path": keep / "one.wav", "md5": "A", "size": 10},
+        {"path": duplicate / "one.wav", "md5": "A", "size": 10},
+    ]
+    plan_path = _pack_plan_for_files(tmp_path, tmp_db, root, files)
+    sidecar = duplicate / "notes.txt"
+    sidecar.write_text("vendor notes")
+    review_pack_plan(plan_path, approve_all=True, quiet=True)
+    log_path = tmp_path / "pack_log.json"
+
+    result = apply_pack_plan(
+        plan_path,
+        db_path=tmp_db,
+        quarantine_dir=tmp_path / "quarantine",
+        log_path=log_path,
+        require_reviewed=True,
+        dry_run=False,
+        quiet=True,
+    )
+
+    quarantined_path = Path(json.loads(log_path.read_text())["entries"][0]["quarantine_path"])
+    assert result.quarantined == 1
+    assert (quarantined_path / "notes.txt").read_text() == "vendor notes"

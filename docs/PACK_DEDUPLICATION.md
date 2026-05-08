@@ -108,11 +108,15 @@ Current apply behavior:
 
 - Refuse unreviewed groups when `--require-reviewed` is set.
 - Validate every planned path still exists.
-- Recheck file count, size, and hashes before moving anything.
+- Recheck planned file size and hashes before moving anything.
+- Refuse stale plans when the SQLite index now contains additional files under
+  the source folder that were not present in the plan.
 - Quarantine redundant folders by default.
 - Never permanently delete folders by default.
 - Never move partial-overlap unique files by default; partial overlaps stay
   review-only in the generated plan.
+- Move non-indexed sidecars together with the quarantined folder, preserving the
+  source folder as a whole while validating indexed audio anchors.
 - Never overwrite existing quarantine targets.
 - Update SQLite rows after successful folder moves.
 - Write an undo log for folder moves and merge operations.
@@ -142,4 +146,5 @@ Pack/folder duplicate detection is beta-ready when:
 - SQLite paths remain accurate after apply
 - undo logs can restore quarantined folder moves
 - tests cover exact match, partial overlap, missing files, changed hashes,
-  sidecars, collisions, quarantine, undo, and JSON contracts
+  stale indexed files, sidecars, collisions, partial approvals, quarantine,
+  undo, and JSON contracts

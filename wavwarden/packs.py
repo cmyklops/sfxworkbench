@@ -580,7 +580,22 @@ def _validate_plan_file(file: PackPlanFile) -> str | None:
     return None
 
 
-def _validate_pack_entry(entry: PackPlanEntry) -> list[dict]:
+def _indexed_folder_paths(db_path: Path, folder: Path) -> set[str]:
+    conn = get_connection(db_path)
+    rows = conn.execute(
+        """
+        SELECT path
+        FROM files
+        WHERE path = ? OR path LIKE ?
+        ORDER BY path
+        """,
+        (str(folder), str(folder) + "/%"),
+    ).fetchall()
+    conn.close()
+    return {row["path"] for row in rows}
+
+
+def _validate_pack_entry(entry: PackPlanEntry, db_path: Path | None = None) -> list[dict]:
     errors: list[dict] = []
     folder = Path(entry.folder_path)
     keep = Path(entry.keep_folder_path)
@@ -590,6 +605,11 @@ def _validate_pack_entry(entry: PackPlanEntry) -> list[dict]:
         errors.append({"path": str(keep), "error": "keep folder missing"})
     if errors:
         return errors
+    planned_paths = {file.path for file in entry.files}
+    if db_path is not None:
+        indexed_paths = _indexed_folder_paths(db_path, folder)
+        for path in sorted(indexed_paths - planned_paths):
+            errors.append({"path": path, "error": "indexed file was not in plan"})
     for file in entry.files:
         path = Path(file.path)
         if not _is_relative_to(path, folder):
@@ -648,7 +668,7 @@ def apply_pack_plan(
         if require_reviewed and index not in approved:
             result.errors.append({"path": entry.folder_path, "error": f"group {index + 1} is not approved"})
             continue
-        validation_errors = _validate_pack_entry(entry)
+        validation_errors = _validate_pack_entry(entry, db_path=db_path)
         if validation_errors:
             result.errors.extend(validation_errors)
             continue
@@ -678,7 +698,7 @@ def apply_pack_plan(
         except OSError as e:
             result.errors.append({"path": str(source), "target": str(target), "error": str(e)})
 
-    if not dry_run:
+    if not dry_run and applied:
         if log_path is None:
             log_path = _default_pack_log_path()
         log_plan = plan.model_copy(update={"entries": applied, "errors": []})
