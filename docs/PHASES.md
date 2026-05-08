@@ -21,7 +21,8 @@ uv run sfx scan PATH
 uv run sfx audit
 uv run sfx search QUERY
 uv run sfx export --output library.csv
-uv run sfx dedupe
+uv run sfx dedupe --summary-only
+uv run sfx dedupe --output ~/reports/dedupe_plan.json
 uv run sfx dedupe --apply dedupe_plan.json
 uv run sfx rename PATH --pattern ucs
 uv run sfx rename PATH --pattern ucs --apply --log rename_log.json
@@ -44,7 +45,8 @@ python3 audit.py ~/CommercialLibraries --json
 
 - `clean`: dry-run by default; `--apply` removes known junk only.
 - `scan`: indexes audio files into SQLite and skips junk.
-- `dedupe`: finds exact MD5 duplicate groups and writes a reviewed plan.
+- `dedupe --summary-only`: finds exact MD5 duplicate groups and prints counts without writing a plan.
+- `dedupe --output PLAN.json`: writes a reviewed duplicate plan to an explicit path.
 - `dedupe --apply`: validates size/hash and quarantines by default.
 - `rename`: previews UCS-oriented names, refuses collisions, applies with undo log.
 
@@ -58,6 +60,10 @@ Metadata writing follows after rename stabilizes:
 
 Both should use mature libraries/tools for BWAV/iXML writes rather than
 hand-rolled binary mutation.
+
+See [`UCS.md`](UCS.md) for the UCS data plan and
+[`METADATA_TAGGING.md`](METADATA_TAGGING.md) for the metadata/audio-suggestion
+roadmap.
 
 `sfx normalize` is later/experimental because sample-rate and channel-layout
 changes modify audio content.
@@ -93,6 +99,39 @@ uv run --extra dev poe json-smoke
 uv run --extra dev poe bench-scan --files 1000 --no-hash
 ```
 
-The JSON automation surface is documented in [`json-contracts.md`](json-contracts.md).
-Synthetic scan benchmarking lives in `scripts/bench_large_library.py`; real-library
-sampling lives in `scripts/bench_scan.py`.
+The JSON automation surface is documented below. Synthetic scan benchmarking
+lives in `scripts/bench_large_library.py`; real-library sampling lives in
+`scripts/bench_scan.py`.
+
+## JSON Contracts
+
+JSON output is the stable automation surface for future Textual/Tauri review
+tools. Core commands use a common envelope:
+
+```json
+{
+  "schema_version": 1,
+  "command": "scan"
+}
+```
+
+Command contracts:
+
+- `clean --json`: includes `result.dry_run`, `removed_files`, `removed_dirs`, and `bytes_freed`.
+- `scan --json`: includes `root`, `db_path`, and `result.total/scanned/skipped/errors`.
+- `audit --json`: includes `db_path` and aggregate `AuditResult` fields.
+- `search QUERY --json`: includes `query`, `db_path`, and `results`.
+- `export --json`: includes `db_path`, `output`, and exported row `count`.
+- `dedupe --summary-only --json`: includes duplicate `summary`, `groups`, and no `plan_path`.
+- `dedupe --output PLAN --json`: includes duplicate `summary`, `groups`, and explicit `plan_path`.
+- `dedupe --apply PLAN --json`: includes `result`; default apply quarantines files.
+- `rename PATH --json`: includes a dry-run `plan`.
+- `rename PATH --apply --json`: includes `plan` and `result`.
+- `rename --undo LOG --apply --json`: includes undo `result`.
+
+Compatibility rules:
+
+- Add fields without removing existing fields when possible.
+- Bump `schema_version` for breaking changes.
+- Do not require consumers to parse Rich terminal output.
+- Treat timestamps, absolute paths, mtime values, generated plan names, and quarantine/log directory names as volatile.

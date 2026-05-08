@@ -113,3 +113,30 @@ def test_rename_json_contract(tmp_library: Path, tmp_db: Path, tmp_path: Path) -
     assert payload["plan"]["pattern"] == "ucs"
     assert any(entry["old_filename"] == "BOOM.wav" for entry in payload["plan"]["entries"])
     assert any(entry["new_filename"].startswith("SFX_MISC_") for entry in payload["plan"]["entries"])
+
+
+def test_dedupe_summary_and_output_contract(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
+    runner.invoke(app, ["scan", str(tmp_library), "--db", str(tmp_db), "--json"])
+
+    summary_payload = _normalize(
+        _load(runner.invoke(app, ["dedupe", "--db", str(tmp_db), "--summary-only", "--json"]).stdout),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert summary_payload["schema_version"] == 1
+    assert summary_payload["command"] == "dedupe"
+    assert summary_payload["db_path"] == "<DB>"
+    assert summary_payload["plan_path"] is None
+    assert summary_payload["summary"]["duplicate_groups"] >= 1
+    assert summary_payload["summary"]["extra_copies"] >= 1
+
+    out = tmp_path / "review" / "dedupe_plan.json"
+    plan_payload = _normalize(
+        _load(runner.invoke(app, ["dedupe", "--db", str(tmp_db), "--output", str(out), "--json"]).stdout),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert plan_payload["plan_path"] == "<TMP>/review/dedupe_plan.json"
+    assert out.exists()

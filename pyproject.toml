@@ -6,7 +6,22 @@ build-backend = "hatchling.build"
 name = "wavwarden"
 version = "0.1.0"
 description = "Sound library hygiene — audit, clean, deduplicate, scan, search"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Matt Wesdock" }]
 requires-python = ">=3.10"
+keywords = ["audio", "sound-effects", "wav", "library-management", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Typing :: Typed",
+]
 dependencies = [
     "typer[all]>=0.12",
     "pydantic>=2.0",
@@ -15,6 +30,12 @@ dependencies = [
 
 [project.scripts]
 sfx = "wavwarden.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/cmyklops/wavwarden"
+Repository = "https://github.com/cmyklops/wavwarden"
+Issues = "https://github.com/cmyklops/wavwarden/issues"
+Changelog = "https://github.com/cmyklops/wavwarden/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-cov", "ruff>=0.8", "poethepoet>=0.30"]

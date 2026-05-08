@@ -104,6 +104,10 @@ def cmd_scan(
 def cmd_dedupe(
     db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
     apply: Annotated[Path | None, typer.Option("--apply", help="Execute a reviewed dedupe plan JSON file.")] = None,
+    output: Annotated[Path | None, typer.Option("--output", help="Write dedupe plan to this path.")] = None,
+    summary_only: Annotated[
+        bool, typer.Option("--summary-only", help="Show duplicate counts without writing a plan.")
+    ] = False,
     quarantine_dir: Annotated[
         Path | None, typer.Option("--quarantine-dir", help="Directory for quarantined duplicates.")
     ] = None,
@@ -113,7 +117,13 @@ def cmd_dedupe(
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
     """Find duplicate files or execute a dedupe plan."""
-    from wavwarden.dedupe import apply_dedupe_plan, find_duplicates, show_duplicates, write_dedupe_plan
+    from wavwarden.dedupe import (
+        apply_dedupe_plan,
+        find_duplicates,
+        show_duplicates,
+        summarize_duplicates,
+        write_dedupe_plan,
+    )
 
     if apply is not None:
         if not apply.exists():
@@ -132,15 +142,28 @@ def cmd_dedupe(
         return
 
     groups = find_duplicates(db)
-    show_duplicates(groups, quiet=json_output)
+    summary = summarize_duplicates(groups)
+    show_duplicates(groups, quiet=json_output or summary_only)
 
     plan_path = None
-    if groups:
-        from datetime import datetime
+    if groups and not summary_only:
+        if output is not None:
+            plan_path = output
+        else:
+            from datetime import datetime
 
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        plan_path = Path(f"dedupe_plan_{ts}.json")
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            plan_path = Path(f"dedupe_plan_{ts}.json")
+        plan_path.parent.mkdir(parents=True, exist_ok=True)
         write_dedupe_plan(groups, plan_path, db_path=db, quiet=json_output)
+    elif summary_only and not json_output:
+        console.print(
+            f"Duplicate groups: [yellow]{summary.duplicate_groups:,}[/yellow]\n"
+            f"Duplicate files: [yellow]{summary.duplicate_files:,}[/yellow]\n"
+            f"Extra copies: [yellow]{summary.extra_copies:,}[/yellow]\n"
+            f"Wasted bytes: [yellow]{summary.wasted_bytes:,}[/yellow] "
+            f"([yellow]{summary.wasted_bytes / (1024**3):.2f} GB[/yellow])"
+        )
     if json_output:
         print(
             json_dumps(
@@ -149,6 +172,7 @@ def cmd_dedupe(
                     "command": "dedupe",
                     "db_path": db,
                     "plan_path": plan_path,
+                    "summary": summary,
                     "groups": groups,
                 }
             )

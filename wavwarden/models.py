@@ -83,6 +83,15 @@ class DedupeGroup(BaseModel):
     files: list[str]
 
 
+class DedupeSummary(BaseModel):
+    duplicate_groups: int = 0
+    duplicate_files: int = 0
+    extra_copies: int = 0
+    wasted_bytes: int = 0
+    largest_group_bytes: int = 0
+    largest_group_copies: int = 0
+
+
 class RenameEntry(BaseModel):
     old_path: str
     new_path: str

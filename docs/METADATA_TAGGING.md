@@ -1,0 +1,128 @@
+# Metadata Tagging Plan
+
+Tagging should follow wavwarden's existing safety model:
+
+`scan` observes files -> `audit` reports gaps -> `tag/suggest` creates reviewed
+plans -> `tag --apply` validates and writes metadata -> `scan --force` confirms
+results.
+
+## Phase A: Inventory, No Writes
+
+First, improve metadata reads before adding writers.
+
+Potential additive tables:
+
+- `metadata_fields`: normalized metadata by file, namespace, key, value, source
+- `metadata_raw`: raw or parsed bext/iXML/XML snippets for debugging
+- `tag_suggestions`: proposed tags with confidence, evidence, and status
+- `tag_apply_log`: immutable write attempts and outcomes
+
+Keep `files.has_bext` and `files.has_ixml` as fast audit booleans.
+
+## Phase B: Filename and UCS Suggestions
+
+Add a pure parser module, separate from `rename.py`, that suggests metadata from:
+
+- UCS-like filename stems
+- parent folders
+- common take/version suffixes
+- known abbreviations such as `AMB`, `SFX`, and `FOLEY`
+- optional user dictionaries
+
+Suggestions should be data, not writes:
+
+```json
+{
+  "field": "description",
+  "value": "Gunshot 01",
+  "source": "filename",
+  "method": "ucs_heuristic",
+  "confidence": 0.86,
+  "evidence": ["SFX_GUNSHOT_01.wav"]
+}
+```
+
+## Phase C: Reviewed Tag Plans
+
+Suggested CLI:
+
+```bash
+uv run sfx tag PATH --from-filename --output tag_plan.json
+uv run sfx tag --from-csv metadata.csv --output tag_plan.json
+uv run sfx tag --apply tag_plan.json --db ~/.wavwarden/index.db
+```
+
+Each plan entry should include validation anchors:
+
+- path
+- file id when indexed
+- size and mtime
+- MD5 when available
+- target metadata fields
+- source, confidence, and evidence
+
+Apply should refuse or warn when files changed after the plan was created.
+
+## Phase D: Metadata Writes
+
+Start with DB-only accepted tags and CSV export. Then add sidecar output. Binary
+audio mutation comes last.
+
+Preferred write ladder:
+
+1. DB-only accepted tags
+2. sidecar JSON/XML export
+3. BWF/iXML writes for proven-safe formats
+4. optional overwrite mode with original-file backup/quarantine
+
+BWF MetaEdit is the leading candidate for Broadcast WAV metadata because it is
+designed for importing, editing, embedding, and exporting BWF metadata. The BWF
+format itself is specified by EBU Tech 3285. Mutagen is useful for many tagged
+formats, but its license and WAV/BWF/iXML limits need evaluation before making
+it a dependency.
+
+## Audio Listening Suggestions
+
+Yes, wavwarden can eventually "listen" to files and suggest tags, but those
+suggestions should never be applied automatically.
+
+Recommended design:
+
+```bash
+uv run sfx suggest PATH --from-audio --output suggestions.json
+uv run sfx suggest PATH --from-filename --from-audio --merge --output tag_plan.json
+```
+
+Store model outputs in SQLite with:
+
+- file path plus size/mtime/hash key
+- model/tool name and version
+- analyzed duration/window
+- labels, confidence, and evidence
+- failure reason
+- generated timestamp
+
+Likely suggestion classes:
+
+- content labels: rain, gunshot, whoosh, footsteps
+- scene labels: interior, exterior, city, forest
+- technical tags: mono/stereo, long/short, possible loop
+- quality flags: silence, clipping, hum, low level, truncation
+
+CLAP-style audio-text embedding models are promising for zero-shot sound-effect
+labels. AudioSet-style classifiers can provide broad sound-event categories.
+Speech models such as Whisper are useful for speech detection/transcription, not
+general SFX labeling.
+
+All audio-model features need explicit privacy and cost controls before use on
+commercial libraries.
+
+## References
+
+- BWF MetaEdit / FADGI help: https://www.digitizationguidelines.gov/audio-visual/documents/help_home.html
+- BWF MetaEdit project: https://bwfmetaedit.sourceforge.net/
+- EBU Tech 3285 Broadcast Wave Format: https://tech.ebu.ch/publications/tech3285
+- Mutagen documentation: https://mutagen.readthedocs.io/
+- CLAP paper: https://www.microsoft.com/en-us/research/publication/clap-learning-audio-concepts-from-natural-language-supervision/
+- Microsoft CLAP implementation: https://github.com/microsoft/CLAP
+- AudioSet ontology: https://github.com/audioset/ontology

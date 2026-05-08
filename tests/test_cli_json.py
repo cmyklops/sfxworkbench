@@ -36,9 +36,12 @@ def test_clean_dedupe_rename_json(tmp_library, tmp_db, tmp_path) -> None:
     assert scan.exit_code == 0
 
     with runner.isolated_filesystem(temp_dir=tmp_path):
-        dedupe = runner.invoke(app, ["dedupe", "--db", str(tmp_db), "--json"])
+        dedupe = runner.invoke(app, ["dedupe", "--db", str(tmp_db), "--summary-only", "--json"])
         assert dedupe.exit_code == 0
-        assert json.loads(dedupe.stdout)["command"] == "dedupe"
+        payload = json.loads(dedupe.stdout)
+        assert payload["command"] == "dedupe"
+        assert payload["plan_path"] is None
+        assert "summary" in payload
 
     rename = runner.invoke(app, ["rename", str(tmp_library), "--db", str(tmp_db), "--json"])
     assert rename.exit_code == 0

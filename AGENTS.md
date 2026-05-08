@@ -22,8 +22,9 @@ uv run sfx --help
 uv run sfx clean ~/CommercialLibraries           # dry-run
 uv run sfx clean ~/CommercialLibraries --apply   # actually remove junk
 uv run sfx scan ~/CommercialLibraries --db ~/.wavwarden/index.db
-uv run sfx dedupe --db ~/.wavwarden/index.db
-uv run sfx dedupe --apply dedupe_plan.json --db ~/.wavwarden/index.db   # quarantines by default
+uv run sfx dedupe --db ~/.wavwarden/index.db --summary-only
+uv run sfx dedupe --db ~/.wavwarden/index.db --output ~/reports/dedupe_plan.json
+uv run sfx dedupe --apply ~/reports/dedupe_plan.json --db ~/.wavwarden/index.db   # quarantines by default
 uv run sfx search "gunshot exterior"
 uv run sfx rename ~/CommercialLibraries --pattern ucs                   # dry-run
 uv run sfx rename ~/CommercialLibraries --pattern ucs --apply --log rename_log.json
@@ -51,7 +52,7 @@ sfx scan PATH  →  audio.read_audio_info()  →  SQLite (files + files_fts)
                   health.check_path()      →  SQLite (fn_issues)
                   MD5 hash                 →  SQLite (files.md5)
 
-sfx dedupe     →  GROUP BY md5 WHERE count > 1  →  dedupe_plan_TIMESTAMP.json
+sfx dedupe     →  GROUP BY md5 WHERE count > 1  →  summary or reviewed plan JSON
 sfx dedupe --apply PLAN → validate size/hash → quarantine duplicates + update SQLite
 sfx rename PATH → preview/apply UCS-oriented names → rename_log_TIMESTAMP.json
 sfx audit      →  SELECT queries against index
@@ -98,3 +99,7 @@ Full phase spec: `docs/PHASES.md`. Current status:
 - **Phase 1** ✅ — `sfx` CLI package (clean, scan, dedupe, audit, search, export, JSON output)
 - **Phase 2** 🔜 — metadata writing (`sfx tag`); `sfx rename` is now the first cleanup feature
 - **Phase 3** ⬜ — Textual TUI first, Tauri later
+
+Additional planning docs:
+- `docs/UCS.md` — UCS catalog/import strategy; do not vendor official UCS data until redistribution terms are verified.
+- `docs/METADATA_TAGGING.md` — metadata write plan and audio-listening suggestion roadmap.

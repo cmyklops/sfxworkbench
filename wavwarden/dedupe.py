@@ -11,7 +11,7 @@ from rich.table import Table
 
 from wavwarden import __version__
 from wavwarden.db import get_connection
-from wavwarden.models import DedupeApplyResult, DedupeGroup
+from wavwarden.models import DedupeApplyResult, DedupeGroup, DedupeSummary
 from wavwarden.utils import fmt_bytes
 
 console = Console()
@@ -91,6 +91,24 @@ def find_duplicates(db_path: Path) -> list[DedupeGroup]:
             )
         )
     return groups
+
+
+def summarize_duplicates(groups: list[DedupeGroup]) -> DedupeSummary:
+    """Return aggregate duplicate counts for review and JSON output."""
+    if not groups:
+        return DedupeSummary()
+    extra_copies = sum(len(group.files) - 1 for group in groups)
+    wasted_bytes = sum(group.size_bytes * (len(group.files) - 1) for group in groups)
+    duplicate_files = sum(len(group.files) for group in groups)
+    largest = max(groups, key=lambda group: group.size_bytes * (len(group.files) - 1))
+    return DedupeSummary(
+        duplicate_groups=len(groups),
+        duplicate_files=duplicate_files,
+        extra_copies=extra_copies,
+        wasted_bytes=wasted_bytes,
+        largest_group_bytes=largest.size_bytes * (len(largest.files) - 1),
+        largest_group_copies=len(largest.files),
+    )
 
 
 def write_dedupe_plan(
@@ -258,13 +276,12 @@ def show_duplicates(groups: list[DedupeGroup], quiet: bool = False) -> None:
         console.print("[green]No duplicates found.[/green]")
         return
 
-    total_extra = sum(len(g.files) - 1 for g in groups)
-    total_wasted = sum(g.size_bytes * (len(g.files) - 1) for g in groups)
+    summary = summarize_duplicates(groups)
 
     console.print(
-        f"\nFound [yellow]{len(groups)}[/yellow] duplicate group(s), "
-        f"[yellow]{total_extra:,}[/yellow] extra copies, "
-        f"[yellow]{fmt_bytes(total_wasted)}[/yellow] wasted.\n"
+        f"\nFound [yellow]{summary.duplicate_groups}[/yellow] duplicate group(s), "
+        f"[yellow]{summary.extra_copies:,}[/yellow] extra copies, "
+        f"[yellow]{fmt_bytes(summary.wasted_bytes)}[/yellow] wasted.\n"
     )
 
     table = Table(title="Duplicate Groups (top 25)", show_lines=True)

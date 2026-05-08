@@ -6,6 +6,14 @@ libraries before broader public-product polish.
 
 See [`docs/PHASES.md`](docs/PHASES.md) for the roadmap.
 
+Project docs:
+
+- [`docs/PHASES.md`](docs/PHASES.md): roadmap, safety model, JSON contracts
+- [`docs/UCS.md`](docs/UCS.md): UCS data and category integration plan
+- [`docs/METADATA_TAGGING.md`](docs/METADATA_TAGGING.md): metadata writing and audio-suggestion plan
+- [`CONTRIBUTING.md`](CONTRIBUTING.md): contribution policy during internal beta
+- [`SECURITY.md`](SECURITY.md): private reporting guidance
+
 ## Install
 
 ```bash
@@ -24,7 +32,8 @@ uv run sfx scan PATH                  # index audio files into SQLite
 uv run sfx audit                      # report index health
 uv run sfx search QUERY               # FTS filename search
 uv run sfx export --output library.csv
-uv run sfx dedupe                     # write reviewed duplicate plan
+uv run sfx dedupe --summary-only      # count duplicate groups without writing a plan
+uv run sfx dedupe --output ~/reports/dedupe_plan.json
 uv run sfx dedupe --apply PLAN.json   # quarantine duplicates by default
 uv run sfx rename PATH --pattern ucs  # dry-run UCS-oriented rename preview
 uv run sfx rename PATH --pattern ucs --apply --log rename_log.json
@@ -47,7 +56,8 @@ python3 audit.py ~/CommercialLibraries --json
 ## Safety Model
 
 - `clean` is dry-run by default and can write a JSON log.
-- `dedupe` writes a plan first; `--apply` quarantines by default.
+- `dedupe --summary-only` reports counts without writing a plan.
+- `dedupe --output PLAN.json` writes a reviewed plan; `--apply` quarantines by default.
 - `rename` previews first, refuses collisions, writes an undo log on apply, and
   can restore from that log.
 - `normalize` is intentionally not part of the beta safety promise yet because
@@ -81,4 +91,8 @@ make json-smoke
 make bench-scan BENCH_LIMIT=1000
 ```
 
-JSON output contracts are documented in [`docs/json-contracts.md`](docs/json-contracts.md).
+Roadmap details and JSON output contracts live in [`docs/PHASES.md`](docs/PHASES.md).
+
+## License
+
+wavwarden is licensed under the MIT License. See [`LICENSE`](LICENSE).

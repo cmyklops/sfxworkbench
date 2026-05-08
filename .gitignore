@@ -5,5 +5,10 @@ dist/
 build/
 .venv/
 venv/
+.ruff_cache/
+.pytest_cache/
 audit_*.json
 audit_*.md
+dedupe_plan_*.json
+rename_log_*.json
+library.csv

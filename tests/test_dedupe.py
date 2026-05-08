@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from wavwarden.db import get_connection
-from wavwarden.dedupe import apply_dedupe_plan, find_duplicates, write_dedupe_plan
+from wavwarden.dedupe import apply_dedupe_plan, find_duplicates, summarize_duplicates, write_dedupe_plan
 
 
 def _seed_files(tmp_db: Path, files: list[dict]) -> None:
@@ -113,6 +113,27 @@ def test_find_duplicates_handles_pipe_in_path(tmp_db: Path) -> None:
     assert len(groups) == 1
     assert "/odd/with|||pipe.wav" in groups[0].files
     assert "/odd/normal.wav" in groups[0].files
+
+
+def test_summarize_duplicates(tmp_db: Path) -> None:
+    _seed_files(
+        tmp_db,
+        [
+            {"path": "/a/one.wav", "md5": "A", "size": 100},
+            {"path": "/b/one.wav", "md5": "A", "size": 100},
+            {"path": "/c/two.wav", "md5": "B", "size": 250},
+            {"path": "/d/two.wav", "md5": "B", "size": 250},
+            {"path": "/e/two.wav", "md5": "B", "size": 250},
+        ],
+    )
+    summary = summarize_duplicates(find_duplicates(tmp_db))
+
+    assert summary.duplicate_groups == 2
+    assert summary.duplicate_files == 5
+    assert summary.extra_copies == 3
+    assert summary.wasted_bytes == 600
+    assert summary.largest_group_bytes == 500
+    assert summary.largest_group_copies == 3
 
 
 def test_write_dedupe_plan(tmp_db: Path, tmp_path: Path) -> None:
