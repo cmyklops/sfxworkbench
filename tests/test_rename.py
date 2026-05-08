@@ -60,3 +60,81 @@ def test_rename_refuses_collision(tmp_path: Path) -> None:
 
     assert plan.errors
     assert plan.errors[0]["error"] == "target exists"
+
+
+def test_safe_rename_plan_preserves_names_without_ucs_prefix(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    root.mkdir()
+    bad = root / "bad:name.wav"
+    bad.write_bytes(b"audio")
+
+    plan = build_rename_plan(root, pattern="safe")
+
+    assert len(plan.entries) == 1
+    assert plan.entries[0].new_filename == "bad_name.wav"
+    assert "illegal_chars" in plan.entries[0].issue_fixes
+    assert "ucs_prefix" not in plan.entries[0].issue_fixes
+
+
+def test_safe_rename_applies_directory_and_file_updates_db(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "lib"
+    bad_dir = root / "Bad: Folder "
+    bad_dir.mkdir(parents=True)
+    bad_file = bad_dir / "bad:file.wav"
+    bad_file.write_bytes(
+        b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x44\xac\x00\x00\x88X\x01\x00\x02\x00\x10\x00data\x04\x00\x00\x00\x00\x00\x00\x00"
+    )
+    scan_library(root, tmp_db, skip_hash=True, quiet=True)
+
+    plan = build_rename_plan(root, pattern="safe")
+    log_path = tmp_path / "safe_rename_log.json"
+    result = apply_rename_plan(plan, db_path=tmp_db, log_path=log_path, dry_run=False, quiet=True)
+
+    assert result.renamed == 2
+    new_file = root / "Bad_ Folder" / "bad_file.wav"
+    assert new_file.exists()
+    assert not bad_file.exists()
+
+    conn = get_connection(tmp_db)
+    rows = conn.execute("SELECT path FROM files").fetchall()
+    issues = conn.execute("SELECT issue FROM fn_issues").fetchall()
+    conn.close()
+    assert [row["path"] for row in rows] == [str(new_file)]
+    assert [row["issue"] for row in issues] == []
+
+    undo = undo_rename_log(log_path, db_path=tmp_db, dry_run=False, quiet=True)
+    assert undo.undone == 2
+    assert bad_file.exists()
+
+
+def test_apply_rename_plan_allows_partial_when_requested(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    root.mkdir()
+    valid_source = root / "bad:name.wav"
+    blocked_source = root / "blocked.wav"
+    valid_source.write_bytes(b"audio")
+    blocked_source.write_bytes(b"audio")
+
+    plan = build_rename_plan(root, pattern="safe")
+    valid_entry = next(e for e in plan.entries if e.old_filename == "bad:name.wav")
+    blocked_target = root / "already-there.wav"
+    blocked_target.write_bytes(b"audio")
+    focused = plan.model_copy(
+        update={
+            "entries": [valid_entry],
+            "errors": [{"path": str(blocked_source), "target": str(blocked_target), "error": "target exists"}],
+        }
+    )
+
+    refused = apply_rename_plan(focused, dry_run=False, quiet=True)
+
+    assert refused.renamed == 0
+    assert valid_source.exists()
+
+    allowed = apply_rename_plan(
+        focused, log_path=tmp_path / "partial_log.json", dry_run=False, quiet=True, allow_partial=True
+    )
+
+    assert allowed.renamed == 1
+    assert allowed.errors == focused.errors
+    assert Path(valid_entry.new_path).exists()

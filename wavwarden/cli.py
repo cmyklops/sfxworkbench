@@ -348,9 +348,13 @@ def cmd_export(
 @app.command("rename")
 def cmd_rename(
     path: Annotated[Path | None, typer.Argument(help="Root path of the library to rename.")] = None,
-    pattern: Annotated[str, typer.Option("--pattern", help="Rename pattern. Currently only 'ucs'.")] = "ucs",
+    pattern: Annotated[str, typer.Option("--pattern", help="Rename pattern. Supported: 'ucs', 'safe'.")] = "ucs",
     db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
     apply: Annotated[bool, typer.Option("--apply", help="Actually rename files (default is dry-run).")] = False,
+    allow_partial: Annotated[
+        bool,
+        typer.Option("--allow-partial", help="Apply valid entries even when the plan has unresolved errors."),
+    ] = False,
     log: Annotated[Path | None, typer.Option("--log", help="Write/read rename log path.")] = None,
     undo: Annotated[Path | None, typer.Option("--undo", help="Undo a previous rename log.")] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
@@ -380,7 +384,14 @@ def cmd_rename(
             print(json_dumps({"schema_version": 1, "command": "rename", "plan": plan}))
         return
 
-    result = apply_rename_plan(plan, db_path=db, log_path=log, dry_run=False, quiet=json_output)
+    result = apply_rename_plan(
+        plan,
+        db_path=db,
+        log_path=log,
+        dry_run=False,
+        quiet=json_output,
+        allow_partial=allow_partial,
+    )
     if json_output:
         print(json_dumps({"schema_version": 1, "command": "rename_apply", "result": result, "plan": plan}))
 

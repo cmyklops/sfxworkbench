@@ -1,4 +1,4 @@
-"""sfx rename command — reversible UCS-oriented file renames."""
+"""sfx rename command — reversible file and UCS-oriented renames."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from wavwarden.ucs import looks_ucs_casefold, normalize_stem
 console = Console()
 
 _BAD_CHARS_RE = re.compile(r"[:*?\"<>|#&;'\\!]+")
+_SAFE_BAD_CHARS_RE = re.compile(r"[:*?\"<>|]+")
 _SEPARATOR_RE = re.compile(r"[\s\-]+")
 _UNDERSCORE_RE = re.compile(r"_+")
 
@@ -57,13 +58,42 @@ def _ucs_filename(path: Path) -> tuple[str, list[str]]:
     return f"SFX_MISC_{stem}{suffix}", fixes
 
 
+def _safe_component(name: str) -> tuple[str, list[str]]:
+    fixes: list[str] = []
+    normalized = normalize_stem(name)
+    if normalized != name:
+        fixes.append("unicode_normalization")
+    cleaned = _SAFE_BAD_CHARS_RE.sub("_", normalized)
+    if cleaned != normalized:
+        fixes.append("illegal_chars")
+    stripped = cleaned.strip()
+    if stripped != cleaned:
+        fixes.append("leading_trailing_space")
+    cleaned = _UNDERSCORE_RE.sub("_", stripped)
+    if not cleaned or cleaned in {".", ".."}:
+        cleaned = "UNTITLED"
+        fixes.append("empty_name")
+    return cleaned, fixes
+
+
+def _safe_paths_for_audio(path: Path, root: Path) -> list[tuple[Path, Path, list[str]]]:
+    planned: list[tuple[Path, Path, list[str]]] = []
+    for component_path in [path, *path.parents]:
+        if component_path == root or root not in component_path.parents:
+            break
+        safe_name, fixes = _safe_component(component_path.name)
+        if fixes:
+            planned.append((component_path, component_path.with_name(safe_name), fixes))
+    return planned
+
+
 def build_rename_plan(root: Path, pattern: str = "ucs") -> RenamePlan:
     """Build a dry-run rename plan for audio files under root."""
-    if pattern != "ucs":
-        raise ValueError("Only pattern='ucs' is currently supported")
+    if pattern not in {"ucs", "safe"}:
+        raise ValueError("Only pattern='ucs' and pattern='safe' are currently supported")
 
     root = root.resolve()
-    entries: list[RenameEntry] = []
+    entries_by_path: dict[Path, RenameEntry] = {}
     errors: list[dict] = []
     planned_targets: set[Path] = set()
 
@@ -75,32 +105,37 @@ def build_rename_plan(root: Path, pattern: str = "ucs") -> RenamePlan:
         if path.suffix.lower() not in junk.AUDIO_EXTENSIONS:
             continue
 
-        new_filename, fixes = _ucs_filename(path)
-        target = path.with_name(new_filename)
-        if target == path:
-            continue
-        if target.exists():
-            errors.append({"path": str(path), "target": str(target), "error": "target exists"})
-            continue
-        if target in planned_targets:
-            errors.append({"path": str(path), "target": str(target), "error": "target planned more than once"})
-            continue
-        planned_targets.add(target)
-        entries.append(
-            RenameEntry(
-                old_path=str(path),
+        if pattern == "ucs":
+            new_filename, fixes = _ucs_filename(path)
+            candidates = [(path, path.with_name(new_filename), fixes)]
+        else:
+            candidates = _safe_paths_for_audio(path, root)
+
+        for source, target, fixes in candidates:
+            if source == target or source in entries_by_path:
+                continue
+            if target.exists():
+                errors.append({"path": str(source), "target": str(target), "error": "target exists"})
+                continue
+            if target in planned_targets:
+                errors.append({"path": str(source), "target": str(target), "error": "target planned more than once"})
+                continue
+            planned_targets.add(target)
+            entries_by_path[source] = RenameEntry(
+                old_path=str(source),
                 new_path=str(target),
-                old_filename=path.name,
-                new_filename=new_filename,
+                old_filename=source.name,
+                new_filename=target.name,
                 issue_fixes=fixes,
             )
-        )
 
     return RenamePlan(
         generated_at=_now_iso(),
         root=str(root),
         pattern=pattern,
-        entries=entries,
+        entries=sorted(
+            entries_by_path.values(), key=lambda entry: (len(Path(entry.old_path).parts), entry.old_path), reverse=True
+        ),
         errors=errors,
     )
 
@@ -123,20 +158,78 @@ def write_rename_log(plan: RenamePlan, log_path: Path) -> None:
     log_path.write_text(json.dumps(plan.model_dump(), indent=2))
 
 
+def _refresh_fn_issues(conn, file_id: int, path: Path, root: Path) -> None:
+    conn.execute("DELETE FROM fn_issues WHERE file_id = ?", (file_id,))
+    issues = health.check_path(path, root)
+    if issues:
+        conn.executemany(
+            "INSERT INTO fn_issues (file_id, component, issue, detail) VALUES (?, ?, ?, ?)",
+            [(file_id, i.component, i.issue, i.detail) for i in issues],
+        )
+
+
+def _update_file_row(conn, old: Path, new: Path, root: Path) -> None:
+    stat = new.stat()
+    conn.execute(
+        """
+        UPDATE files
+        SET path = ?, filename = ?, stem = ?, extension = ?, size_bytes = ?, mtime = ?
+        WHERE path = ?
+        """,
+        (str(new), new.name, new.stem, new.suffix.lower(), stat.st_size, stat.st_mtime, str(old)),
+    )
+    row = conn.execute("SELECT id FROM files WHERE path = ?", (str(new),)).fetchone()
+    if row is not None:
+        _refresh_fn_issues(conn, row["id"], new, root)
+
+
+def _update_directory_rows(conn, old: Path, new: Path, root: Path) -> None:
+    old_prefix = str(old)
+    new_prefix = str(new)
+    rows = conn.execute(
+        "SELECT id, path FROM files WHERE path = ? OR path LIKE ?",
+        (old_prefix, old_prefix + "/%"),
+    ).fetchall()
+    updates: list[tuple[str, str, str, str, int]] = []
+    refreshed: list[tuple[int, Path]] = []
+    for row in rows:
+        old_file = Path(row["path"])
+        suffix = str(old_file)[len(old_prefix) :]
+        new_file = Path(new_prefix + suffix)
+        updates.append((str(new_file), new_file.name, new_file.stem, new_file.suffix.lower(), row["id"]))
+        refreshed.append((row["id"], new_file))
+    conn.executemany(
+        """
+        UPDATE files
+        SET path = ?, filename = ?, stem = ?, extension = ?
+        WHERE id = ?
+        """,
+        updates,
+    )
+    for file_id, path in refreshed:
+        _refresh_fn_issues(conn, file_id, path, root)
+
+
 def apply_rename_plan(
     plan: RenamePlan,
     db_path: Path | None = None,
     log_path: Path | None = None,
     dry_run: bool = True,
     quiet: bool = False,
+    allow_partial: bool = False,
 ) -> RenameResult:
     """Apply a rename plan, refusing collisions and writing an undo log."""
     result = RenameResult(planned=len(plan.entries), dry_run=dry_run)
     if plan.errors:
         result.errors.extend(plan.errors)
+        if not allow_partial:
+            if not quiet:
+                console.print("[red]Refusing to apply rename plan with unresolved errors.[/red]")
+            return result
         if not quiet:
-            console.print("[red]Refusing to apply rename plan with unresolved errors.[/red]")
-        return result
+            console.print(
+                "[yellow]Plan has unresolved errors; applying valid entries because --allow-partial was provided.[/yellow]"
+            )
     if dry_run:
         if not quiet:
             show_rename_plan(plan)
@@ -146,6 +239,7 @@ def apply_rename_plan(
         log_path = _default_log_path()
     conn = get_connection(db_path) if db_path is not None else None
     applied: list[RenameEntry] = []
+    root = Path(plan.root)
 
     for entry in plan.entries:
         old = Path(entry.old_path)
@@ -161,24 +255,10 @@ def apply_rename_plan(
             applied.append(entry)
             result.renamed += 1
             if conn is not None:
-                stat = new.stat()
-                conn.execute(
-                    """
-                    UPDATE files
-                    SET path = ?, filename = ?, stem = ?, extension = ?, size_bytes = ?, mtime = ?
-                    WHERE path = ?
-                    """,
-                    (str(new), new.name, new.stem, new.suffix.lower(), stat.st_size, stat.st_mtime, str(old)),
-                )
-                row = conn.execute("SELECT id FROM files WHERE path = ?", (str(new),)).fetchone()
-                if row is not None:
-                    conn.execute("DELETE FROM fn_issues WHERE file_id = ?", (row["id"],))
-                    issues = health.check_path(new, Path(plan.root))
-                    if issues:
-                        conn.executemany(
-                            "INSERT INTO fn_issues (file_id, component, issue, detail) VALUES (?, ?, ?, ?)",
-                            [(row["id"], i.component, i.issue, i.detail) for i in issues],
-                        )
+                if new.is_dir():
+                    _update_directory_rows(conn, old, new, root)
+                else:
+                    _update_file_row(conn, old, new, root)
             if not quiet:
                 console.print(f"[green]Renamed:[/green] {old} -> {new}")
         except OSError as e:
@@ -206,6 +286,7 @@ def undo_rename_log(
     plan = RenamePlan.model_validate(json.loads(log_path.read_text()))
     result = RenameResult(planned=len(plan.entries), dry_run=dry_run, log_path=str(log_path))
     conn = get_connection(db_path) if db_path is not None and not dry_run else None
+    root = Path(plan.root)
 
     for entry in reversed(plan.entries):
         old = Path(entry.old_path)
@@ -225,15 +306,10 @@ def undo_rename_log(
             new.rename(old)
             result.undone += 1
             if conn is not None:
-                stat = old.stat()
-                conn.execute(
-                    """
-                    UPDATE files
-                    SET path = ?, filename = ?, stem = ?, extension = ?, size_bytes = ?, mtime = ?
-                    WHERE path = ?
-                    """,
-                    (str(old), old.name, old.stem, old.suffix.lower(), stat.st_size, stat.st_mtime, str(new)),
-                )
+                if old.is_dir():
+                    _update_directory_rows(conn, new, old, root)
+                else:
+                    _update_file_row(conn, new, old, root)
             if not quiet:
                 console.print(f"[green]Restored:[/green] {new} -> {old}")
         except OSError as e:

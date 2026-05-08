@@ -41,7 +41,9 @@ uv run sfx dedupe --output ~/reports/dedupe_plan.json
 uv run sfx dedupe --review PLAN.json --approve-all
 uv run sfx dedupe --apply PLAN.json --require-reviewed
 uv run sfx rename PATH --pattern ucs  # dry-run UCS-oriented rename preview
+uv run sfx rename PATH --pattern safe # dry-run safe filename/path cleanup
 uv run sfx rename PATH --pattern ucs --apply --log rename_log.json
+uv run sfx rename PATH --pattern safe --apply --allow-partial --log safe_rename_log.json
 uv run sfx rename --undo rename_log.json --apply
 ```
 

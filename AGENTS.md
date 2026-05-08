@@ -31,7 +31,9 @@ uv run sfx dedupe --review ~/reports/dedupe_plan.json --approve-all
 uv run sfx dedupe --apply ~/reports/dedupe_plan.json --db ~/.wavwarden/index.db --require-reviewed
 uv run sfx search "gunshot exterior"
 uv run sfx rename ~/CommercialLibraries --pattern ucs                   # dry-run
+uv run sfx rename ~/CommercialLibraries --pattern safe                  # dry-run
 uv run sfx rename ~/CommercialLibraries --pattern ucs --apply --log rename_log.json
+uv run sfx rename ~/CommercialLibraries --pattern safe --apply --allow-partial --log safe_rename_log.json
 
 # Run the standalone Phase 0 auditor (no install required, Python 3.9+)
 python3 audit.py ~/CommercialLibraries --output-dir ~/reports
@@ -60,7 +62,7 @@ sfx scan-errors → classify scan_error rows → review/quarantine obvious artif
 sfx dedupe     →  GROUP BY md5 WHERE count > 1  →  summary or reviewed plan JSON
 sfx dedupe --review PLAN → approve groups
 sfx dedupe --apply PLAN → validate size/hash → quarantine duplicates + update SQLite
-sfx rename PATH → preview/apply UCS-oriented names → rename_log_TIMESTAMP.json
+sfx rename PATH → preview/apply UCS-oriented or safe names → rename_log_TIMESTAMP.json
 sfx audit      →  SELECT queries against index
 sfx search Q   →  FTS5 MATCH query on files_fts
 ```
@@ -74,7 +76,7 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 - **`scan.py`** — incremental: skips files where `mtime + size_bytes` match the existing DB row. Junk detection uses shared `junk.py`; junk files are never indexed.
 - **`scan_errors.py`** — plans quarantine for unreadable indexed files. Only all-zero blobs and AppleDouble artifacts are auto-marked `quarantine`; broken RIFF files stay `review`.
 - **`dedupe.py`** — exact MD5 duplicate grouping. Writes versioned JSON plans and quarantines by default on apply.
-- **`rename.py`** — UCS-oriented rename preview/apply/undo. Refuses collisions and updates SQLite paths after apply.
+- **`rename.py`** — UCS-oriented and safe filename/path rename preview/apply/undo. Refuses collisions and updates SQLite paths after apply.
 - **`ucs.py`** — shared UCS-looking filename heuristic/parser. This is not a full official UCS catalog validator yet.
 
 ### Critical design constraints

@@ -28,7 +28,9 @@ uv run sfx dedupe --output ~/reports/dedupe_plan.json
 uv run sfx dedupe --review dedupe_plan.json --approve-all
 uv run sfx dedupe --apply dedupe_plan.json --require-reviewed
 uv run sfx rename PATH --pattern ucs
+uv run sfx rename PATH --pattern safe
 uv run sfx rename PATH --pattern ucs --apply --log rename_log.json
+uv run sfx rename PATH --pattern safe --apply --allow-partial --log safe_rename_log.json
 uv run sfx rename --undo rename_log.json --apply
 ```
 
@@ -54,7 +56,7 @@ python3 audit.py ~/CommercialLibraries --json
 - `dedupe --output PLAN.json`: writes a reviewed duplicate plan to an explicit path.
 - `dedupe --review PLAN.json`: stamps all or selected duplicate groups as approved.
 - `dedupe --apply`: validates size/hash and quarantines by default; use `--require-reviewed` to refuse unapproved plans.
-- `rename`: previews UCS-oriented names, refuses collisions, applies with undo log.
+- `rename`: previews UCS-oriented or safe filename/path changes, refuses collisions, applies with undo log. `--allow-partial` can apply valid entries while keeping unresolved collisions visible in the result.
 
 ## Phase 2 — Cleanup Tooling
 
