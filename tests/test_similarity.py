@@ -6,7 +6,11 @@ from pathlib import Path
 
 from wavwarden.db import get_connection
 from wavwarden.scan import scan_library
-from wavwarden.similarity import crawl_similarity_descriptors, search_similarity_descriptors
+from wavwarden.similarity import (
+    audit_similarity_descriptors,
+    crawl_similarity_descriptors,
+    search_similarity_descriptors,
+)
 
 
 def _make_tone(path: Path, *, sample_rate: int = 44100, frequency: float = 440.0, frames: int = 44100) -> Path:
@@ -136,3 +140,46 @@ def test_similarity_search_requires_matching_analysis_window(tmp_path: Path, tmp
 
     assert default_window.candidates_considered == 0
     assert matching_window.candidates_considered == 1
+
+
+def test_similarity_audit_reports_groups_and_excludes_exact_md5_pairs(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    original = _make_tone(root / "tone_a.wav", frequency=220.0)
+    near = _make_tone(root / "tone_b.wav", frequency=221.0)
+    exact_copy = root / "tone_copy.wav"
+    exact_copy.write_bytes(original.read_bytes())
+    scan_library(root, tmp_db, skip_hash=False, quiet=True)
+    crawl_similarity_descriptors(root, db_path=tmp_db, cache_path=None, quiet=True)
+
+    report = audit_similarity_descriptors(root, db_path=tmp_db, threshold=0.95, quiet=True)
+
+    assert report.summary.descriptors_considered == 3
+    assert report.summary.exact_md5_pairs_excluded == 1
+    assert report.summary.candidate_pairs == 2
+    assert report.summary.candidate_groups == 1
+    assert report.groups[0].file_count == 3
+    assert {file.path for file in report.groups[0].files} == {str(original), str(near), str(exact_copy)}
+    assert all(pair.score >= 0.95 for pair in report.groups[0].pairs)
+
+    with_exact = audit_similarity_descriptors(root, db_path=tmp_db, threshold=0.95, exclude_exact_md5=False, quiet=True)
+    assert with_exact.summary.exact_md5_pairs_excluded == 0
+    assert with_exact.summary.candidate_pairs == 3
+
+
+def test_similarity_audit_writes_limited_report(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    _make_tone(root / "one.wav", frequency=220.0)
+    _make_tone(root / "two.wav", frequency=221.0)
+    _make_tone(root / "three.wav", frequency=880.0)
+    _make_tone(root / "four.wav", frequency=881.0)
+    scan_library(root, tmp_db, skip_hash=False, quiet=True)
+    crawl_similarity_descriptors(root, db_path=tmp_db, cache_path=None, quiet=True)
+    out = tmp_path / "reports" / "similarity_audit.json"
+
+    report = audit_similarity_descriptors(root, db_path=tmp_db, threshold=0.95, limit=1, output_path=out, quiet=True)
+
+    assert report.summary.candidate_groups == 2
+    assert report.summary.reported_groups == 1
+    payload = json.loads(out.read_text())
+    assert payload["summary"]["candidate_groups"] == 2
+    assert len(payload["groups"]) == 1

@@ -92,6 +92,7 @@ uv run sfx search QUERY
 uv run sfx export --output library.csv
 uv run sfx similarity crawl PATH --db ~/.wavwarden/index.db --cache ~/.wavwarden/similarity
 uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --limit 20 --json
+uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --threshold 0.92 --output ~/reports/similarity_audit.json
 uv run sfx dedupe --summary-only
 uv run sfx dedupe --output ~/reports/dedupe_plan.json
 uv run sfx dedupe --output ~/reports/dedupe_plan.json --safe-folder ~/CommercialLibraries/Master
@@ -157,6 +158,9 @@ python3 audit.py ~/CommercialLibraries --json
   run report, and skips unchanged files by size/mtime/hash anchors.
 - `similarity search`: experimental nearest-neighbor search over cached
   deterministic descriptor rows using a query audio file.
+- `similarity audit`: experimental report-only near-duplicate grouping over
+  cached deterministic descriptor rows. Exact MD5 duplicate pairs are excluded
+  by default because `dedupe` owns exact duplicate cleanup.
 - `dedupe --summary-only`: finds exact MD5 duplicate groups and prints counts without writing a plan.
 - `dedupe --output PLAN.json`: writes a reviewed duplicate plan to an explicit path. Repeated `--safe-folder PATH` options prefer protected duplicate files as keep copies and mark protected extra copies as ignored. Repeated `--prefer-folder PATH` and `--prefer-extension EXT` options store preservation-priority evidence and choose keep copies accordingly.
 - `dedupe --review PLAN.json`: stamps all or selected duplicate groups as approved.
@@ -372,7 +376,7 @@ JSON-first:
 ```bash
 uv run sfx similarity crawl PATH --db ~/.wavwarden/index.db --cache ~/.wavwarden/similarity
 uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --limit 50 --json
-uv run sfx similarity audit --near-duplicates --output similarity_report.json
+uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --threshold 0.92 --output similarity_report.json
 ```
 
 First useful slice:

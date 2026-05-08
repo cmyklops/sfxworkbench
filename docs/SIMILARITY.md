@@ -41,6 +41,7 @@ Implemented first slice:
 
 - `sfx similarity crawl PATH`
 - `sfx similarity search --file QUERY`
+- `sfx similarity audit PATH`
 - deterministic backend name: `deterministic_v1`
 - SQLite-backed `analysis_runs` and `audio_descriptors` tables
 - optional cache directory for run report JSON
@@ -49,6 +50,8 @@ Implemented first slice:
   zero-crossing rate, transient density, and duration bucket
 - nearest-neighbor search over cached descriptor vectors with distance and
   0-1 score output
+- report-only near-duplicate groups from cached descriptors, with exact MD5
+  duplicate pairs excluded by default
 
 ## Product Lessons
 
@@ -83,7 +86,8 @@ The first implementation should be boring and report-first:
    sound can produce multiple searchable moments.
 3. Optional embeddings:
    store per-file and per-segment vectors from a clearly named model/backend.
-4. Search/report commands: first search command implemented.
+4. Search/report commands: first search and near-duplicate audit commands
+   implemented.
    return nearest neighbors as JSON with distances, anchors, and caveats.
 
 Do not let the first crawler quarantine, rename, delete, retag, or mutate audio.

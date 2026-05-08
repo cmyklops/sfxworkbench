@@ -197,6 +197,42 @@ def test_similarity_crawl_json_contract(tmp_library: Path, tmp_db: Path, tmp_pat
     assert len(search_payload["report"]["results"]) == 2
     assert search_payload["report"]["results"][0]["score"] >= search_payload["report"]["results"][1]["score"]
 
+    audit_out = tmp_path / "similarity_audit.json"
+    audit_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "similarity",
+                    "audit",
+                    str(tmp_library),
+                    "--db",
+                    str(tmp_db),
+                    "--threshold",
+                    "0.9",
+                    "--output",
+                    str(audit_out),
+                    "--limit",
+                    "2",
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert audit_payload["schema_version"] == 1
+    assert audit_payload["command"] == "similarity_audit"
+    assert audit_payload["root"] == "<ROOT>"
+    assert audit_payload["db_path"] == "<DB>"
+    assert audit_payload["report_path"] == "<TMP>/similarity_audit.json"
+    assert audit_payload["report"]["threshold"] == 0.9
+    assert audit_payload["report"]["summary"]["descriptors_considered"] == 4
+    assert audit_payload["report"]["summary"]["reported_groups"] <= 2
+    assert audit_out.exists()
+
 
 def test_rename_json_contract(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
     runner.invoke(app, ["scan", str(tmp_library), "--db", str(tmp_db), "--no-hash", "--json"])

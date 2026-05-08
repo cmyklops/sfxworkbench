@@ -197,6 +197,60 @@ def cmd_similarity_search(
         )
 
 
+@similarity_app.command("audit")
+def cmd_similarity_audit(
+    path: Annotated[Path, typer.Argument(help="Root path of the indexed library to audit.")],
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    threshold: Annotated[
+        float, typer.Option("--threshold", help="Minimum similarity score for near-duplicate candidate pairs.")
+    ] = 0.92,
+    max_duration: Annotated[
+        float | None,
+        typer.Option("--max-duration", help="Descriptor analysis window to audit; 0 uses full-file descriptors."),
+    ] = 30.0,
+    include_exact_md5: Annotated[
+        bool,
+        typer.Option("--include-exact-md5", help="Include exact MD5 duplicate pairs in the similarity report."),
+    ] = False,
+    output: Annotated[
+        Path | None, typer.Option("--output", help="Write near-duplicate similarity report JSON to this path.")
+    ] = None,
+    limit: Annotated[int, typer.Option("--limit", help="Maximum groups to include; 0 writes all groups.")] = 200,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Report near-duplicate groups from cached deterministic descriptors."""
+    from wavwarden.similarity import audit_similarity_descriptors
+
+    effective_max_duration = None if max_duration == 0 else max_duration
+    try:
+        report = audit_similarity_descriptors(
+            path,
+            db_path=db,
+            threshold=threshold,
+            max_duration_s=effective_max_duration,
+            exclude_exact_md5=not include_exact_md5,
+            limit=limit,
+            output_path=output,
+            quiet=json_output,
+        )
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "similarity_audit",
+                    "root": path,
+                    "db_path": db,
+                    "report_path": output,
+                    "report": report,
+                }
+            )
+        )
+
+
 # ---------------------------------------------------------------------------
 # sfx format
 # ---------------------------------------------------------------------------

@@ -141,6 +141,62 @@ class SimilaritySearchReport(BaseModel):
     results: list[SimilaritySearchResult] = []
 
 
+class SimilarityAuditFile(BaseModel):
+    file_id: int
+    path: str
+    filename: str
+    md5: str | None = None
+    duration_s: float | None = None
+    sample_rate: int | None = None
+    bit_depth: int | None = None
+    channels: int | None = None
+    duration_bucket: str | None = None
+
+
+class SimilarityAuditPair(BaseModel):
+    left_file_id: int
+    right_file_id: int
+    left_path: str
+    right_path: str
+    distance: float
+    score: float
+    shared_duration_bucket: bool = False
+
+
+class SimilarityAuditGroup(BaseModel):
+    group_id: int
+    file_count: int = 0
+    pair_count: int = 0
+    min_score: float
+    max_score: float
+    files: list[SimilarityAuditFile] = []
+    pairs: list[SimilarityAuditPair] = []
+
+
+class SimilarityAuditSummary(BaseModel):
+    descriptors_considered: int = 0
+    candidate_pairs: int = 0
+    exact_md5_pairs_excluded: int = 0
+    candidate_groups: int = 0
+    reported_groups: int = 0
+
+
+class SimilarityAuditReport(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    backend: str = "deterministic_v1"
+    root: str
+    db_path: str
+    threshold: float = 0.92
+    max_duration_s: float | None = None
+    exclude_exact_md5: bool = True
+    limit: int = 200
+    summary: SimilarityAuditSummary
+    groups: list[SimilarityAuditGroup] = []
+
+
 class ScanErrorEntry(BaseModel):
     path: str
     action: str = "review"

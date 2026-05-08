@@ -12,6 +12,11 @@ from rich.table import Table
 from wavwarden import __version__
 from wavwarden.db import DEFAULT_DB_PATH, get_connection
 from wavwarden.models import (
+    SimilarityAuditFile,
+    SimilarityAuditGroup,
+    SimilarityAuditPair,
+    SimilarityAuditReport,
+    SimilarityAuditSummary,
     SimilarityCrawlReport,
     SimilarityCrawlSummary,
     SimilarityDescriptor,
@@ -203,6 +208,10 @@ def _distance(left: tuple[float, ...], right: tuple[float, ...]) -> float:
     return math.sqrt(sum((a - b) ** 2 for a, b in zip(left, right, strict=True)))
 
 
+def _score(distance: float) -> float:
+    return 1.0 / (1.0 + distance)
+
+
 def _write_descriptor(conn, descriptor: SimilarityDescriptor) -> None:
     conn.execute(
         """
@@ -376,6 +385,28 @@ def crawl_similarity_descriptors(
     return report
 
 
+def _descriptor_rows(conn, *, root: Path | None, max_duration_s: float | None):
+    rows = conn.execute(
+        """
+        SELECT f.id AS file_id, f.path, f.filename, f.md5, f.sample_rate,
+               f.bit_depth, f.channels, f.duration_s, d.analyzed_duration_s,
+               d.peak, d.rms, d.crest_factor, d.silence_ratio,
+               d.clipping_count, d.zero_crossing_rate, d.transient_density,
+               d.duration_bucket, d.error
+        FROM audio_descriptors d
+        JOIN files f ON f.id = d.file_id
+        WHERE d.backend = ?
+          AND d.error IS NULL
+          AND ((? IS NULL AND d.max_duration_s IS NULL) OR d.max_duration_s = ?)
+        ORDER BY f.path
+        """,
+        (DETERMINISTIC_BACKEND, max_duration_s, max_duration_s),
+    ).fetchall()
+    if root is None:
+        return rows
+    return [row for row in rows if Path(row["path"]) == root or _is_relative_to(Path(row["path"]), root)]
+
+
 def search_similarity_descriptors(
     query_path: Path,
     db_path: Path = DEFAULT_DB_PATH,
@@ -404,21 +435,7 @@ def search_similarity_descriptors(
         raise ValueError(f"could not analyze query file: {query_descriptor.error}")
 
     conn = get_connection(db_path)
-    rows = conn.execute(
-        """
-        SELECT f.id AS file_id, f.path, f.filename, f.sample_rate, f.bit_depth,
-               f.channels, f.duration_s, d.analyzed_duration_s, d.peak, d.rms,
-               d.crest_factor, d.silence_ratio, d.clipping_count,
-               d.zero_crossing_rate, d.transient_density, d.duration_bucket, d.error
-        FROM audio_descriptors d
-        JOIN files f ON f.id = d.file_id
-        WHERE d.backend = ?
-          AND d.error IS NULL
-          AND ((? IS NULL AND d.max_duration_s IS NULL) OR d.max_duration_s = ?)
-        ORDER BY f.path
-        """,
-        (DETERMINISTIC_BACKEND, max_duration_s, max_duration_s),
-    ).fetchall()
+    rows = _descriptor_rows(conn, root=None, max_duration_s=max_duration_s)
     conn.close()
 
     scored: list[SimilaritySearchResult] = []
@@ -428,14 +445,13 @@ def search_similarity_descriptors(
         if candidate_vector is None:
             continue
         distance = _distance(query_vector, candidate_vector)
-        score = 1.0 / (1.0 + distance)
         scored.append(
             SimilaritySearchResult(
                 file_id=row["file_id"],
                 path=row["path"],
                 filename=row["filename"],
                 distance=distance,
-                score=score,
+                score=_score(distance),
                 duration_s=row["duration_s"],
                 sample_rate=row["sample_rate"],
                 bit_depth=row["bit_depth"],
@@ -469,6 +485,149 @@ def search_similarity_descriptors(
     return report
 
 
+def audit_similarity_descriptors(
+    root: Path,
+    db_path: Path = DEFAULT_DB_PATH,
+    threshold: float = 0.92,
+    max_duration_s: float | None = 30.0,
+    exclude_exact_md5: bool = True,
+    limit: int = 200,
+    output_path: Path | None = None,
+    quiet: bool = False,
+) -> SimilarityAuditReport:
+    """Report near-duplicate groups from cached deterministic descriptors."""
+    root = root.expanduser().resolve()
+    if not root.exists():
+        raise ValueError(f"path not found: {root}")
+    if not 0 < threshold <= 1:
+        raise ValueError("threshold must be greater than 0 and less than or equal to 1")
+    if limit < 0:
+        raise ValueError("limit must be 0 or greater")
+
+    conn = get_connection(db_path)
+    rows = _descriptor_rows(conn, root=root, max_duration_s=max_duration_s)
+    conn.close()
+
+    vectors: dict[int, tuple[float, ...]] = {}
+    by_id = {int(row["file_id"]): row for row in rows}
+    for row in rows:
+        vector = _descriptor_vector(dict(row))
+        if vector is not None:
+            vectors[int(row["file_id"])] = vector
+
+    parent: dict[int, int] = {file_id: file_id for file_id in vectors}
+
+    def find(file_id: int) -> int:
+        while parent[file_id] != file_id:
+            parent[file_id] = parent[parent[file_id]]
+            file_id = parent[file_id]
+        return file_id
+
+    def union(left: int, right: int) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            parent[max(left_root, right_root)] = min(left_root, right_root)
+
+    pairs: list[SimilarityAuditPair] = []
+    exact_md5_pairs_excluded = 0
+    file_ids = sorted(vectors)
+    for left_index, left_id in enumerate(file_ids):
+        left = by_id[left_id]
+        for right_id in file_ids[left_index + 1 :]:
+            right = by_id[right_id]
+            left_md5 = left["md5"]
+            right_md5 = right["md5"]
+            if exclude_exact_md5 and left_md5 and left_md5 == right_md5:
+                exact_md5_pairs_excluded += 1
+                continue
+            distance = _distance(vectors[left_id], vectors[right_id])
+            score = _score(distance)
+            if score < threshold:
+                continue
+            pair = SimilarityAuditPair(
+                left_file_id=left_id,
+                right_file_id=right_id,
+                left_path=left["path"],
+                right_path=right["path"],
+                distance=distance,
+                score=score,
+                shared_duration_bucket=left["duration_bucket"] == right["duration_bucket"],
+            )
+            pairs.append(pair)
+            union(left_id, right_id)
+
+    group_pairs: dict[int, list[SimilarityAuditPair]] = {}
+    group_file_ids: dict[int, set[int]] = {}
+    for pair in pairs:
+        root_id = find(pair.left_file_id)
+        group_pairs.setdefault(root_id, []).append(pair)
+        group_file_ids.setdefault(root_id, set()).update({pair.left_file_id, pair.right_file_id})
+
+    groups: list[SimilarityAuditGroup] = []
+    for group_index, root_id in enumerate(sorted(group_pairs), start=1):
+        group_pair_list = sorted(group_pairs[root_id], key=lambda pair: (-pair.score, pair.left_path, pair.right_path))
+        file_rows = [
+            by_id[file_id] for file_id in sorted(group_file_ids[root_id], key=lambda file_id: by_id[file_id]["path"])
+        ]
+        files = [
+            SimilarityAuditFile(
+                file_id=row["file_id"],
+                path=row["path"],
+                filename=row["filename"],
+                md5=row["md5"],
+                duration_s=row["duration_s"],
+                sample_rate=row["sample_rate"],
+                bit_depth=row["bit_depth"],
+                channels=row["channels"],
+                duration_bucket=row["duration_bucket"],
+            )
+            for row in file_rows
+        ]
+        scores = [pair.score for pair in group_pair_list]
+        groups.append(
+            SimilarityAuditGroup(
+                group_id=group_index,
+                file_count=len(files),
+                pair_count=len(group_pair_list),
+                min_score=min(scores),
+                max_score=max(scores),
+                files=files,
+                pairs=group_pair_list,
+            )
+        )
+
+    groups.sort(key=lambda group: (-group.max_score, -group.pair_count, group.files[0].path if group.files else ""))
+    for index, group in enumerate(groups, start=1):
+        group.group_id = index
+    reported_groups = groups if limit == 0 else groups[:limit]
+    report = SimilarityAuditReport(
+        generated_at=_utc_now(),
+        tool_version=__version__,
+        backend=DETERMINISTIC_BACKEND,
+        root=str(root),
+        db_path=str(db_path),
+        threshold=threshold,
+        max_duration_s=max_duration_s,
+        exclude_exact_md5=exclude_exact_md5,
+        limit=limit,
+        summary=SimilarityAuditSummary(
+            descriptors_considered=len(vectors),
+            candidate_pairs=len(pairs),
+            exact_md5_pairs_excluded=exact_md5_pairs_excluded,
+            candidate_groups=len(groups),
+            reported_groups=len(reported_groups),
+        ),
+        groups=reported_groups,
+    )
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json_dumps(report), encoding="utf-8")
+    if not quiet:
+        show_similarity_audit_report(report)
+    return report
+
+
 def show_similarity_crawl_report(report: SimilarityCrawlReport) -> None:
     table = Table(title="Similarity descriptor crawl", show_lines=False)
     table.add_column("Metric")
@@ -491,3 +650,33 @@ def show_similarity_search_report(report: SimilaritySearchReport) -> None:
     for result in report.results:
         table.add_row(f"{result.score:.3f}", f"{result.distance:.4f}", result.filename, result.path)
     console.print(table)
+
+
+def show_similarity_audit_report(report: SimilarityAuditReport) -> None:
+    table = Table(title="Similarity near-duplicate audit", show_lines=False)
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_row("Descriptors considered", f"{report.summary.descriptors_considered:,}")
+    table.add_row("Candidate pairs", f"{report.summary.candidate_pairs:,}")
+    table.add_row("Candidate groups", f"{report.summary.candidate_groups:,}")
+    table.add_row("Reported groups", f"{report.summary.reported_groups:,}")
+    table.add_row("Exact MD5 pairs excluded", f"{report.summary.exact_md5_pairs_excluded:,}")
+    console.print(table)
+    if not report.groups:
+        return
+    group_table = Table(title="Top similarity groups", show_lines=False)
+    group_table.add_column("Group", justify="right")
+    group_table.add_column("Files", justify="right")
+    group_table.add_column("Pairs", justify="right")
+    group_table.add_column("Max score", justify="right")
+    group_table.add_column("First file")
+    for group in report.groups[:20]:
+        first_file = group.files[0].path if group.files else ""
+        group_table.add_row(
+            str(group.group_id),
+            str(group.file_count),
+            str(group.pair_count),
+            f"{group.max_score:.3f}",
+            first_file,
+        )
+    console.print(group_table)
