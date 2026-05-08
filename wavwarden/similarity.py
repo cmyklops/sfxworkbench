@@ -432,6 +432,41 @@ def _score(distance: float) -> float:
     return 1.0 / (1.0 + distance)
 
 
+def _segment_audit_bucket(row: dict) -> tuple[str | None, int, int, int]:
+    return (
+        row.get("duration_bucket"),
+        int(math.log1p(float(row.get("zero_crossing_rate") or 0.0)) * 1.5),
+        int(math.log1p(float(row.get("spectral_centroid") or 0.0)) * 1.5),
+        int(math.log1p(float(row.get("spectral_rolloff") or 0.0)) * 1.5),
+    )
+
+
+def _audit_candidate_unit_pairs(unit_ids: list[int], by_id: dict[int, dict], *, scope: str) -> list[tuple[int, int]]:
+    if scope == "file":
+        return [
+            (left_id, right_id)
+            for left_index, left_id in enumerate(unit_ids)
+            for right_id in unit_ids[left_index + 1 :]
+        ]
+
+    buckets: dict[tuple[str | None, int, int, int], list[int]] = {}
+    for unit_id in unit_ids:
+        buckets.setdefault(_segment_audit_bucket(by_id[unit_id]), []).append(unit_id)
+
+    pairs: set[tuple[int, int]] = set()
+    for bucket_ids in buckets.values():
+        if len(bucket_ids) < 2:
+            continue
+        ordered_ids = sorted(bucket_ids)
+        for left_index, left_id in enumerate(ordered_ids):
+            left = by_id[left_id]
+            for right_id in ordered_ids[left_index + 1 :]:
+                if left["file_id"] == by_id[right_id]["file_id"]:
+                    continue
+                pairs.add((left_id, right_id))
+    return sorted(pairs)
+
+
 def _write_descriptor(conn, descriptor: SimilarityDescriptor) -> None:
     conn.execute(
         """
@@ -879,6 +914,9 @@ def audit_similarity_descriptors(
 
     vectors: dict[int, tuple[float, ...]] = {}
     by_id = {int(row["unit_id"]): row for row in rows}
+    file_row_by_id: dict[int, dict] = {}
+    for row in rows:
+        file_row_by_id.setdefault(int(row["file_id"]), row)
     for row in rows:
         vector = _segment_vector(row) if scope == "segment" else _descriptor_vector(row)
         if vector is not None:
@@ -898,51 +936,44 @@ def audit_similarity_descriptors(
         if left_root != right_root:
             parent[max(left_root, right_root)] = min(left_root, right_root)
 
-    pairs: list[SimilarityAuditPair] = []
+    pair_units: list[tuple[int, int, SimilarityAuditPair]] = []
     exact_md5_pairs_excluded = 0
     unit_ids = sorted(vectors)
-    for left_index, left_id in enumerate(unit_ids):
+    candidate_unit_pairs = _audit_candidate_unit_pairs(unit_ids, by_id, scope=scope)
+    for left_id, right_id in candidate_unit_pairs:
         left = by_id[left_id]
-        for right_id in unit_ids[left_index + 1 :]:
-            right = by_id[right_id]
-            if scope == "segment" and left["file_id"] == right["file_id"]:
-                continue
-            left_md5 = left["md5"]
-            right_md5 = right["md5"]
-            if exclude_exact_md5 and left_md5 and left_md5 == right_md5:
-                exact_md5_pairs_excluded += 1
-                continue
-            distance = _distance(vectors[left_id], vectors[right_id])
-            score = _score(distance)
-            if score < threshold:
-                continue
-            pair = SimilarityAuditPair(
-                scope=scope,
-                left_file_id=left["file_id"],
-                right_file_id=right["file_id"],
-                left_path=left["path"],
-                right_path=right["path"],
-                left_segment_index=left.get("segment_index"),
-                left_segment_start_s=left.get("start_s"),
-                left_segment_end_s=left.get("end_s"),
-                right_segment_index=right.get("segment_index"),
-                right_segment_start_s=right.get("start_s"),
-                right_segment_end_s=right.get("end_s"),
-                distance=distance,
-                score=score,
-                shared_duration_bucket=left["duration_bucket"] == right["duration_bucket"],
-            )
-            pairs.append(pair)
-            union(left_id, right_id)
+        right = by_id[right_id]
+        left_md5 = left["md5"]
+        right_md5 = right["md5"]
+        if exclude_exact_md5 and left_md5 and left_md5 == right_md5:
+            exact_md5_pairs_excluded += 1
+            continue
+        distance = _distance(vectors[left_id], vectors[right_id])
+        score = _score(distance)
+        if score < threshold:
+            continue
+        pair = SimilarityAuditPair(
+            scope=scope,
+            left_file_id=left["file_id"],
+            right_file_id=right["file_id"],
+            left_path=left["path"],
+            right_path=right["path"],
+            left_segment_index=left.get("segment_index"),
+            left_segment_start_s=left.get("start_s"),
+            left_segment_end_s=left.get("end_s"),
+            right_segment_index=right.get("segment_index"),
+            right_segment_start_s=right.get("start_s"),
+            right_segment_end_s=right.get("end_s"),
+            distance=distance,
+            score=score,
+            shared_duration_bucket=left["duration_bucket"] == right["duration_bucket"],
+        )
+        pair_units.append((left_id, right_id, pair))
+        union(left_id, right_id)
 
     group_pairs: dict[int, list[SimilarityAuditPair]] = {}
     group_file_ids: dict[int, set[int]] = {}
-    for pair in pairs:
-        left_unit_id = next(
-            unit_id
-            for unit_id, row in by_id.items()
-            if row["file_id"] == pair.left_file_id and row.get("segment_index") == pair.left_segment_index
-        )
+    for left_unit_id, _right_unit_id, pair in pair_units:
         root_id = find(left_unit_id)
         group_pairs.setdefault(root_id, []).append(pair)
         group_file_ids.setdefault(root_id, set()).update({pair.left_file_id, pair.right_file_id})
@@ -951,10 +982,10 @@ def audit_similarity_descriptors(
     for group_index, root_id in enumerate(sorted(group_pairs), start=1):
         group_pair_list = sorted(group_pairs[root_id], key=lambda pair: (-pair.score, pair.left_path, pair.right_path))
         file_rows = [
-            next(row for row in rows if row["file_id"] == file_id)
+            file_row_by_id[file_id]
             for file_id in sorted(
                 group_file_ids[root_id],
-                key=lambda file_id: next(row["path"] for row in rows if row["file_id"] == file_id),
+                key=lambda file_id: file_row_by_id[file_id]["path"],
             )
         ]
         files = [
@@ -1001,7 +1032,8 @@ def audit_similarity_descriptors(
         limit=limit,
         summary=SimilarityAuditSummary(
             descriptors_considered=len(vectors),
-            candidate_pairs=len(pairs),
+            candidate_comparisons=len(candidate_unit_pairs),
+            candidate_pairs=len(pair_units),
             exact_md5_pairs_excluded=exact_md5_pairs_excluded,
             candidate_groups=len(groups),
             reported_groups=len(reported_groups),
@@ -1133,6 +1165,7 @@ def show_similarity_audit_report(report: SimilarityAuditReport) -> None:
     table.add_column("Value", justify="right")
     table.add_row("Scope", report.scope)
     table.add_row("Descriptors considered", f"{report.summary.descriptors_considered:,}")
+    table.add_row("Candidate comparisons", f"{report.summary.candidate_comparisons:,}")
     table.add_row("Candidate pairs", f"{report.summary.candidate_pairs:,}")
     table.add_row("Candidate groups", f"{report.summary.candidate_groups:,}")
     table.add_row("Reported groups", f"{report.summary.reported_groups:,}")

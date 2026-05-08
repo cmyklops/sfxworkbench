@@ -59,6 +59,8 @@ Implemented first slice:
   with distance and 0-1 score output
 - report-only near-duplicate groups from cached whole-file descriptors or
   segment descriptors, with exact MD5 duplicate pairs excluded by default
+- segment audit candidate pruning via coarse descriptor buckets, with
+  `candidate_comparisons` in the report summary
 
 ## Product Lessons
 

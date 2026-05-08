@@ -244,6 +244,7 @@ class SimilarityAuditGroup(BaseModel):
 
 class SimilarityAuditSummary(BaseModel):
     descriptors_considered: int = 0
+    candidate_comparisons: int = 0
     candidate_pairs: int = 0
     exact_md5_pairs_excluded: int = 0
     candidate_groups: int = 0

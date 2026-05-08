@@ -263,6 +263,7 @@ def test_similarity_audit_reports_groups_and_excludes_exact_md5_pairs(tmp_path: 
 
     assert report.scope == "file"
     assert report.summary.descriptors_considered == 3
+    assert report.summary.candidate_comparisons == 3
     assert report.summary.exact_md5_pairs_excluded == 1
     assert report.summary.candidate_pairs == 2
     assert report.summary.candidate_groups == 1
@@ -288,6 +289,7 @@ def test_similarity_audit_can_compare_cached_segments(tmp_path: Path, tmp_db: Pa
 
     assert report.scope == "segment"
     assert report.summary.descriptors_considered == 4
+    assert report.summary.candidate_comparisons == 2
     assert report.summary.candidate_pairs >= 2
     assert report.summary.candidate_groups >= 1
     assert {file.path for group in report.groups for file in group.files} == {str(first), str(second)}

@@ -165,7 +165,8 @@ python3 audit.py ~/CommercialLibraries --json
 - `similarity audit`: experimental report-only near-duplicate grouping over
   cached deterministic whole-file descriptors or event segments. Exact MD5
   duplicate pairs are excluded by default because `dedupe` owns exact duplicate
-  cleanup.
+  cleanup. Segment audit uses coarse descriptor buckets to reduce candidate
+  comparisons.
 - `dedupe --summary-only`: finds exact MD5 duplicate groups and prints counts without writing a plan.
 - `dedupe --output PLAN.json`: writes a reviewed duplicate plan to an explicit path. Repeated `--safe-folder PATH` options prefer protected duplicate files as keep copies and mark protected extra copies as ignored. Repeated `--prefer-folder PATH` and `--prefer-extension EXT` options store preservation-priority evidence and choose keep copies accordingly.
 - `dedupe --review PLAN.json`: stamps all or selected duplicate groups as approved.

@@ -294,6 +294,7 @@ def test_similarity_crawl_json_contract(tmp_library: Path, tmp_db: Path, tmp_pat
     assert audit_payload["report"]["scope"] == "file"
     assert audit_payload["report"]["threshold"] == 0.9
     assert audit_payload["report"]["summary"]["descriptors_considered"] == 4
+    assert "candidate_comparisons" in audit_payload["report"]["summary"]
     assert audit_payload["report"]["summary"]["reported_groups"] <= 2
     assert audit_out.exists()
 

@@ -189,6 +189,8 @@ files on later runs. It captures loudness, silence, transient, zero-crossing,
 basic spectral-shape evidence, and RMS-based event windows, then can rank
 cached whole-file or segment descriptors against a query file and produce
 report-only near-duplicate groups at either whole-file or event-window scope.
+Segment audit uses coarse descriptor buckets to keep comparisons bounded and
+reports how many candidate comparisons were evaluated.
 The larger roadmap folds Sononym-style descriptor discovery together with a
 Soundminer-style resumable cache builder. See
 [`docs/SIMILARITY.md`](docs/SIMILARITY.md).
