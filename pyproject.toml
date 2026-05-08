@@ -69,3 +69,4 @@ fmt-check = "ruff format --check ."
 json-smoke = "pytest tests/test_cli_json.py tests/test_json_contracts.py -v"
 check = ["lint", "fmt-check", "test"]
 bench-scan = "python scripts/bench_large_library.py"
+beta-audit = "python scripts/internal_beta_audit.py"

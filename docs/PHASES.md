@@ -241,6 +241,20 @@ uv run sfx workflow apply workflow_plan.json --require-reviewed
 Each workflow step must preserve its own report, plan, quarantine, or undo log
 so large batch runs remain explainable and recoverable.
 
+A developer-facing dry-run harness now exercises the current beta-safe audit
+path without modifying the library:
+
+```bash
+uv run --extra dev poe beta-audit ~/CommercialLibraries --output-dir ~/reports/wavwarden_beta_audit
+python scripts/internal_beta_audit.py ~/CommercialLibraries --output-dir ~/reports/wavwarden_beta_audit
+```
+
+The harness runs `scan`, `audit`, `metadata audit`, `groups audit`,
+`format audit`, `packs audit`, `packs plan`, and a dry-run pack apply preview.
+It writes a self-contained report bundle plus `manifest.json`. By default the
+SQLite index lives inside the output directory; pass `--db` to reuse another
+index explicitly.
+
 Metadata writing follows after rename and pack review workflows stabilize:
 
 - `sfx metadata audit`
@@ -393,11 +407,13 @@ Local and CI validation should use the same Poe tasks:
 uv run --extra dev poe check
 uv run --extra dev poe json-smoke
 uv run --extra dev poe bench-scan --files 1000 --no-hash
+uv run --extra dev poe beta-audit PATH --output-dir ~/reports/wavwarden_beta_audit
 ```
 
 The JSON automation surface is documented below. Synthetic scan benchmarking
 lives in `scripts/bench_large_library.py`; real-library sampling lives in
-`scripts/bench_scan.py`.
+`scripts/bench_scan.py`. The report-only Internal Studio Beta audit harness
+lives in `scripts/internal_beta_audit.py`.
 
 ## JSON Contracts
 
