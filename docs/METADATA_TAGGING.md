@@ -12,6 +12,11 @@ terms, and private tagging conventions. wavwarden should preserve existing
 human-entered metadata by default and propose additions as reviewed suggestions,
 not replacements.
 
+Professional Soundminer-oriented tools reinforce a useful lesson: metadata
+workflows need field-level review controls. wavwarden should support bulk
+find/replace and CSV-backed updates eventually, but they should pass through the
+same reviewed-plan model as tag suggestions.
+
 Default metadata-write policy:
 
 - read existing embedded tags before planning writes
@@ -98,6 +103,17 @@ Each plan entry should include validation anchors:
 - source, confidence, and evidence
 
 Apply should refuse or warn when files changed after the plan was created.
+
+Bulk find/replace should use the same plan format:
+
+```bash
+uv run sfx tag plan --find-replace metadata.csv --output tag_plan.json
+uv run sfx tag review tag_plan.json --approve-entry 1
+uv run sfx tag apply tag_plan.json --require-reviewed
+```
+
+The initial implementation should be DB-only or sidecar-only. Embedded metadata
+writes remain a later step.
 
 ## Phase D: Metadata Writes
 

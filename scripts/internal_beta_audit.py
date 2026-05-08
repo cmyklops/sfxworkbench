@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from wavwarden.audit_cmd import run_audit
-from wavwarden.format_audit import build_format_audit_report, write_format_audit_report
 from wavwarden.groups import audit_related_groups, write_related_groups_report
 from wavwarden.metadata_audit import build_metadata_audit_report, write_metadata_audit_report
 from wavwarden.packs import apply_pack_plan, audit_packs, build_pack_plan, write_pack_audit_report
@@ -32,6 +31,7 @@ def run_internal_beta_audit(
     skip_hash: bool = False,
     force_rescan: bool = True,
     limit: int = 200,
+    include_format: bool = False,
 ) -> dict:
     """Run the beta-safe audit path and return a manifest of generated artifacts."""
     root = root.expanduser().resolve()
@@ -79,9 +79,14 @@ def run_internal_beta_audit(
     groups_path = output_dir / "related_groups_report.json"
     write_related_groups_report(groups_report, groups_path, quiet=True)
 
-    format_report = build_format_audit_report(root, db_path=db_path, limit=limit)
-    format_path = output_dir / "format_report.json"
-    write_format_audit_report(format_report, format_path, quiet=True)
+    format_report = None
+    format_path = None
+    if include_format:
+        from wavwarden.format_audit import build_format_audit_report, write_format_audit_report
+
+        format_report = build_format_audit_report(root, db_path=db_path, limit=limit)
+        format_path = output_dir / "format_report.json"
+        write_format_audit_report(format_report, format_path, quiet=True)
 
     pack_report = audit_packs(root, db_path=db_path)
     pack_report_path = output_dir / "pack_overlap_report.json"
@@ -113,12 +118,12 @@ def run_internal_beta_audit(
         "db_path": db_path,
         "skip_hash": skip_hash,
         "force_rescan": force_rescan,
+        "include_format": include_format,
         "artifacts": {
             "scan_result": scan_path,
             "audit_result": audit_path,
             "metadata_report": metadata_path,
             "related_groups_report": groups_path,
-            "format_report": format_path,
             "pack_overlap_report": pack_report_path,
             "pack_consolidation_plan": pack_plan_path,
             "pack_apply_dry_run": pack_apply_path,
@@ -128,12 +133,14 @@ def run_internal_beta_audit(
             "audit": audit_result,
             "metadata": metadata_report.summary,
             "related_groups": groups_report.summary,
-            "format": format_report.summary,
             "packs": pack_report.summary,
             "pack_plan": pack_plan.summary,
             "pack_apply_dry_run": pack_apply_dry_run,
         },
     }
+    if format_report is not None and format_path is not None:
+        manifest["artifacts"]["format_report"] = format_path
+        manifest["summary"]["format"] = format_report.summary
     manifest_path = output_dir / "manifest.json"
     _write_json(manifest_path, manifest)
     manifest["artifacts"]["manifest"] = manifest_path
@@ -153,6 +160,11 @@ def main() -> int:
     parser.add_argument("--no-hash", action="store_true", help="Skip MD5 hashing. Pack reports will be less useful.")
     parser.add_argument("--incremental", action="store_true", help="Use incremental scan instead of force rescan.")
     parser.add_argument("--limit", type=int, default=200, help="Maximum rows/groups per report section; 0 writes all.")
+    parser.add_argument(
+        "--include-format",
+        action="store_true",
+        help="Also run the advanced mixed-format report. Skipped by default because mixed formats are often intentional.",
+    )
     args = parser.parse_args()
 
     root = args.path.expanduser()
@@ -169,6 +181,7 @@ def main() -> int:
         skip_hash=args.no_hash,
         force_rescan=not args.incremental,
         limit=args.limit,
+        include_format=args.include_format,
     )
     print(json_dumps(manifest))
     return 0

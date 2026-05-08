@@ -6,7 +6,9 @@ duplicated or overlapping packs, bundles, vendor folders, and import dumps.
 
 Pack duplicate detection is a review workflow, not an automatic delete
 workflow. The default action should be report or quarantine, with merge behavior
-reserved for explicitly reviewed plans.
+reserved for explicitly reviewed plans. Future permanent deletion must be
+advanced-only and should operate first on reviewed quarantine logs, not directly
+on live library paths.
 
 ## Problem Shape
 
@@ -38,6 +40,7 @@ Planned later:
 
 ```bash
 uv run sfx packs apply ~/reports/pack_consolidation_plan.json --merge-unique-files
+uv run sfx delete plan pack_quarantine_log.json --output delete_plan.json
 ```
 
 The workflow is intentionally staged: audit first, plan second, reviewed apply
@@ -97,6 +100,7 @@ Pack consolidation plans are versioned JSON and include:
 - candidate group id and source type
 - source folder path
 - recommended keep folder path
+- preservation-priority rule scores when configured
 - overlap metrics when applicable
 - action: `quarantine_folder`, `review`, or `ignore`
 - per-file validation anchors: path, relative path, hash, and size
@@ -107,6 +111,7 @@ Pack consolidation plans are versioned JSON and include:
 Current apply behavior:
 
 - Refuse unreviewed groups when `--require-reviewed` is set.
+- Skip or mark candidates protected by safe folders.
 - Validate every planned path still exists.
 - Recheck planned file size and hashes before moving anything.
 - Refuse stale plans when the SQLite index now contains additional files under
@@ -122,7 +127,34 @@ Current apply behavior:
 - Write an undo log for folder moves and merge operations.
 
 Permanent deletion should remain an advanced, explicit action after the
-quarantine workflow is proven on copied libraries.
+quarantine workflow is proven on copied libraries. The first deletion workflow
+should delete only from wavwarden quarantine logs, require reviewed delete
+plans, and write immutable delete logs with path, size, hash, quarantine source,
+and timestamp.
+
+## Preservation Priority
+
+Future pack and duplicate plans should explain why a folder/file is recommended
+as the keep copy. The rules should be configurable and stored in the plan.
+
+Useful rule candidates:
+
+- prefer safe folders
+- prefer paths outside imports/downloads/staging folders
+- prefer files with richer embedded metadata
+- prefer higher sample rate or bit depth only as a tie-breaker
+- prefer UCS-valid or catalog-verified filenames
+- prefer cleaner/shorter paths when technical evidence is otherwise equal
+
+Every keep recommendation should include the winning rule evidence so reviewers
+can override it confidently.
+
+## Safe Folders
+
+Safe folders are a cross-cutting protection layer. Pack plans should report when
+a duplicate or overlap candidate was skipped because either source or keep path
+is protected. Apply should refuse to move protected paths even if an older plan
+attempts to do so.
 
 ## TUI Direction
 
@@ -132,7 +164,10 @@ The future Textual review UI should make pack overlap understandable:
 - overlap percent by files and bytes
 - same/unique/missing file tabs
 - keep-folder recommendation with rationale
+- safe-folder badges
+- preservation-priority score details
 - approve, ignore, or quarantine controls
+- quarantine age and permanent-delete eligibility controls
 - exportable JSON report for team review
 
 ## Acceptance Criteria
@@ -142,6 +177,8 @@ Pack/folder duplicate detection is beta-ready when:
 - exact duplicate folders can be reported without filesystem changes
 - overlapping packs produce stable JSON evidence
 - reviewed plans can quarantine redundant folders safely
+- safe folders prevent protected paths from being planned or moved
+- preservation-priority rules are stored in plans and visible in review output
 - merge operations never overwrite existing files
 - SQLite paths remain accurate after apply
 - undo logs can restore quarantined folder moves

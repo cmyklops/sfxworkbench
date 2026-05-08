@@ -10,9 +10,30 @@ target is an **Internal Studio Beta** before public v1.0.
 - CLI behavior is the source of truth; future TUI/GUI layers consume CLI JSON.
 - Reports, plans, and logs are plain JSON/Markdown.
 - Audio-content mutation is high risk and stays experimental until proven.
+- Permanent disk deletion is advanced-only and should first operate on reviewed
+  quarantine plans, not live libraries.
 - `sfx` stays the user-facing command for the Internal Studio Beta. `wavwarden`
   remains the project/package name; no `wavwarden` CLI alias is planned before
   beta unless user testing shows confusion.
+
+## Product Lessons From SMDB Companion
+
+SMDB Companion is a useful reference point for professional duplicate-heavy
+Soundminer workflows. wavwarden should learn from its practical trust controls
+without copying its product shape. The main lessons to adopt are:
+
+- safe folders that block automated cleanup plans
+- preservation-priority rules that explain which duplicate copy should be kept
+- repeatable presets for common review workflows
+- database/import comparison before adding new libraries to a master index
+- processed-file and AudioSuite-style pattern detection
+- optional audio-content comparison with cached evidence
+- advanced dual-mono detection/conversion
+- permanent disk deletion for already-reviewed quarantine content
+
+The wavwarden version of these features should remain filesystem-first,
+JSON-first, and review-first. See `docs/ADVANCED_OPERATIONS.md` for the detailed
+plan.
 
 ## Current Phase — Hardened CLI Core
 
@@ -129,6 +150,8 @@ candidates:
 
 Folder consolidation must not permanently delete by default. Merging unique
 files is a later explicit action and must never overwrite existing files.
+The next pack/dedupe planning layer should add safe folders and preservation
+priority so keep/quarantine recommendations are tunable and explainable.
 
 Folder organization follows the same safety model. First workflow:
 `sfx organize audit PATH --depth 1 --pattern strip-leading-numbers`, reporting
@@ -219,11 +242,13 @@ Related group detection is implemented first as report-only:
 filenames. Future versions can layer in path tokens, UCS categories, metadata,
 and exact/perceptual similarity.
 
-Format consistency is also report-only:
+Format consistency is an advanced, report-only diagnostic:
 `sfx format audit PATH`, flagging related groups where files differ in sample
-rate, bit depth, or channel count. These differences are treated as preservation
-evidence for review, not cleanup instructions. Automatic format conversion and
-loudness normalization are out of scope for the Internal Studio Beta.
+rate, bit depth, or channel count. These differences are often intentional
+vendor/source/design choices and should be treated as preservation evidence, not
+cleanup instructions. Format audit is not a default Internal Studio Beta cleanup
+gate. Automatic format conversion and loudness normalization are out of scope
+for the Internal Studio Beta.
 
 Physical folder cleanup is useful for browsing and bulk edits, but future
 integrations should primarily consume indexed metadata and inferred group
@@ -250,10 +275,11 @@ python scripts/internal_beta_audit.py ~/CommercialLibraries --output-dir ~/repor
 ```
 
 The harness runs `scan`, `audit`, `metadata audit`, `groups audit`,
-`format audit`, `packs audit`, `packs plan`, and a dry-run pack apply preview.
-It writes a self-contained report bundle plus `manifest.json`. By default the
-SQLite index lives inside the output directory; pass `--db` to reuse another
-index explicitly.
+`packs audit`, `packs plan`, and a dry-run pack apply preview. It writes a
+self-contained report bundle plus `manifest.json`. By default the SQLite index
+lives inside the output directory; pass `--db` to reuse another index
+explicitly. Pass `--include-format` only when doing a deeper mixed-format
+diagnostic pass.
 
 Metadata writing follows after rename and pack review workflows stabilize:
 
@@ -263,6 +289,22 @@ Metadata writing follows after rename and pack review workflows stabilize:
 
 Both should use mature libraries/tools for BWAV/iXML writes rather than
 hand-rolled binary mutation.
+
+Advanced operations planned after the beta-safe workflows stabilize:
+
+- safe-folder configuration shared by all cleanup planners
+- preservation-priority scoring for duplicate keep recommendations
+- database/import compare workflows
+- processed-file detection for rendered/plugin variants
+- optional audio fingerprint matching
+- dual-mono audit/plan/copy-output conversion
+- permanent deletion from reviewed quarantine plans
+
+Dual-mono conversion and permanent disk deletion are explicitly planned, but
+they are not part of the default Internal Studio Beta path. Dual-mono starts as
+report-only, then copy-output conversion, with in-place replacement only after
+fixtures and copied-library tests prove the workflow. Permanent deletion starts
+from reviewed quarantine logs and requires an explicit irreversible-delete flag.
 
 ### Directly Useful Open-Source Tools
 
@@ -285,7 +327,10 @@ runtime cost controls are clear.
 See [`UCS.md`](UCS.md) for the UCS data plan and
 [`METADATA_TAGGING.md`](METADATA_TAGGING.md) for the metadata/audio-suggestion
 roadmap. See [`PACK_DEDUPLICATION.md`](PACK_DEDUPLICATION.md) for the
-pack/folder duplicate detection and consolidation plan.
+pack/folder duplicate detection and consolidation plan. See
+[`ADVANCED_OPERATIONS.md`](ADVANCED_OPERATIONS.md) for safe folders,
+preservation priority, dual-mono conversion, disk deletion, import compare, and
+other advanced workflows.
 
 Audio format conversion and loudness normalization are not part of the beta
 roadmap because wavwarden should preserve original audio content.
@@ -298,6 +343,9 @@ Build a Textual TUI before Tauri. The first TUI should focus on:
 - pack overlap/consolidation review
 - rename preview/apply/undo
 - audit drilldown
+- safe-folder and preservation-priority controls
+- quarantine age and permanent-delete eligibility review
+- dual-mono candidate review
 - team-friendly approval workflows
 
 Tauri remains a later option after CLI JSON contracts are stable.
@@ -338,6 +386,8 @@ Target workflows:
   `organize nesting-undo`
 - `packs apply` and `packs undo`
 - future metadata/tag apply workflows
+- future dual-mono conversion workflows
+- future permanent-delete workflows
 
 ### JSON Contract Audit
 
