@@ -345,6 +345,118 @@ def test_format_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: P
     assert out.exists()
 
 
+def test_ucs_import_info_categories_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
+    src = tmp_path / "_categorylist.csv"
+    src.write_text(
+        "\n".join(
+            [
+                "Category,SubCategory,CatID,CatShort,Explanations,Synonyms - Comma Separated",
+                'AIR,BLOW,AIRBlow,AIR,"Steady air blows.","Aerate, Air"',
+                'AMBIENCE,BACKYRD,AMBBack,AMB,"Backyard ambience.","Yard, Garden"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    cache = tmp_path / "ucs_catalog.json"
+
+    import_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "ucs",
+                    "import",
+                    str(src),
+                    "--output",
+                    str(cache),
+                    "--release-version",
+                    "v8.2.1",
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert import_payload["schema_version"] == 1
+    assert import_payload["command"] == "ucs_import"
+    assert import_payload["catalog_path"] == "<TMP>/ucs_catalog.json"
+    assert import_payload["source"] == "<TMP>/_categorylist.csv"
+    assert import_payload["result"]["entry_count"] == 2
+    assert import_payload["result"]["unique_cat_shorts"] == 2
+    assert import_payload["result"]["release_version"] == "v8.2.1"
+    assert cache.exists()
+
+    info_payload = _normalize(
+        _load(runner.invoke(app, ["ucs", "info", "--catalog", str(cache), "--json"]).stdout),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert info_payload["schema_version"] == 1
+    assert info_payload["command"] == "ucs_info"
+    assert info_payload["loaded"] is True
+    assert info_payload["catalog_path"] == "<TMP>/ucs_catalog.json"
+    assert info_payload["entry_count"] == 2
+    assert info_payload["provenance"]["release_version"] == "v8.2.1"
+
+    cat_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                ["ucs", "categories", "--catalog", str(cache), "--cat-short", "AIR", "--json"],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert cat_payload["schema_version"] == 1
+    assert cat_payload["command"] == "ucs_categories"
+    assert cat_payload["result"]["matched"] == 1
+    assert cat_payload["result"]["total_loaded"] == 2
+    assert cat_payload["result"]["entries"][0]["subcategory"] == "BLOW"
+
+
+def test_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
+    runner.invoke(app, ["scan", str(tmp_library), "--db", str(tmp_db), "--no-hash", "--json"])
+
+    out = tmp_path / "tag_suggestions.json"
+    payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                ["tag", "suggest", str(tmp_library), "--db", str(tmp_db), "--output", str(out), "--json"],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "tag_suggest"
+    assert payload["root"] == "<ROOT>"
+    assert payload["db_path"] == "<DB>"
+    assert payload["report_path"] == "<TMP>/tag_suggestions.json"
+    assert payload["report"]["schema_version"] == 1
+    assert payload["report"]["tool"] == "wavwarden"
+    assert payload["report"]["min_confidence"] == 0.0
+    assert payload["report"]["summary"]["files_considered"] >= 1
+
+    # Confirm UCS-named fixtures (AMB_RAIN_01, SFX_GUNSHOT_01) yield ucs_stem suggestions.
+    ucs_entries = [
+        entry for entry in payload["report"]["entries"] if any(s["source"] == "ucs_stem" for s in entry["suggestions"])
+    ]
+    assert ucs_entries, "expected at least one UCS-derived suggestion entry"
+    sample = ucs_entries[0]
+    fields = {s["field"] for s in sample["suggestions"]}
+    assert {"category", "subcategory", "description"} <= fields
+    assert out.exists()
+
+
 def test_organize_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
     folder = tmp_library / "01 Pack"
     folder.mkdir()

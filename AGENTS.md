@@ -52,6 +52,11 @@ uv run sfx rename ~/CommercialLibraries --pattern portable              # dry-ru
 uv run sfx rename ~/CommercialLibraries --pattern ucs --apply --log rename_log.json
 uv run sfx rename ~/CommercialLibraries --pattern safe --apply --allow-partial --log safe_rename_log.json
 uv run sfx rename ~/CommercialLibraries --pattern portable --apply --log portable_rename_log.json
+uv run sfx tag suggest ~/CommercialLibraries --db ~/.wavwarden/index.db --output ~/reports/tag_suggestions.json
+uv run sfx tag suggest ~/CommercialLibraries --db ~/.wavwarden/index.db --min-confidence 0.6 --json
+uv run sfx ucs import ~/Desktop/_categorylist.csv --release-version v8.2.1
+uv run sfx ucs info
+uv run sfx ucs categories --cat-short AMB
 
 # Run the standalone Phase 0 auditor (no install required, Python 3.9+)
 python3 audit.py ~/CommercialLibraries --output-dir ~/reports
@@ -88,6 +93,10 @@ sfx organize audit/review/apply/undo PATH → folder-structure cleanup with undo
 sfx organize audit --pattern redundant-nesting PATH → report-only nested-folder review
 sfx organize nesting-plan/apply/undo → reviewed repeated-folder, non-generic single-child, and strict leaf-wrapper flatten workflow
 sfx rename PATH → preview/apply UCS-oriented, safe, or portable names → rename_log_TIMESTAMP.json
+sfx tag suggest PATH → report-only tag suggestions from filename/path/group evidence (Phase B)
+sfx ucs import SOURCE → parse Soundminer/_categorylist.csv → ~/.wavwarden/ucs_catalog.json
+sfx ucs info → show provenance and entry count of the loaded UCS catalog
+sfx ucs categories [--category | --cat-short] → list/filter UCS entries
 sfx audit      →  SELECT queries against index
 sfx search Q   →  FTS5 MATCH query on files_fts
 ```
@@ -107,6 +116,8 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 - **`packs.py`** — report-only pack/folder duplicate detection. Computes recursive folder signatures from indexed MD5 hashes and reports exact duplicate folders plus high-overlap pack candidates.
 - **`organize.py`** — folder organization preview/review/apply/undo. Conservative numeric sort-prefix removal reuses the rename engine for apply; repeated-folder nesting and non-generic one-child chains have reviewed plan/apply/undo; generic wrappers remain report-only.
 - **`rename.py`** — UCS-oriented, safe, and portable filename/path rename preview/apply/undo. Refuses collisions and updates SQLite paths after apply.
+- **`tag_suggest.py`** — Phase B report-only tag suggestions. Pure suggestor: composes UCS stem parsing, filename heuristics (abbreviation expansion, take-number extraction), parent-folder evidence, and related-group membership into versioned JSON suggestion plans. No filesystem or DB writes.
+- **`ucs_catalog.py`** — UCS catalog import, cache, and lookup. Parses the official `Soundminer/_categorylist.csv` from `UCS Release.zip`, writes a normalized JSON cache at `~/.wavwarden/ucs_catalog.json` with provenance (source URL, release version, import timestamp, attribution). Discovery chain for `load_catalog()`: explicit path → `WAVWARDEN_UCS_DATA` env var → default cache → `None`. XLSX import is deferred. Catalog data is not yet wired into rename/tag_suggest — those integrations come in follow-up slices.
 - **`ucs.py`** — shared UCS-looking filename heuristic/parser. This is not a full official UCS catalog validator yet.
 
 ### Critical design constraints

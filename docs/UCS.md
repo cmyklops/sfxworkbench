@@ -46,22 +46,44 @@ the catalog without waiting for a wavwarden release.
 Keep expanding the dedicated `wavwarden/ucs.py` module so UCS parsing does not
 live separately in feature modules.
 
-Implemented API:
+Implemented API (heuristic, in `wavwarden/ucs.py`):
 
 - `looks_ucs(stem: str) -> bool`
 - `parse_ucs_stem(stem: str) -> UcsParseResult`
 
-Suggested API:
+Implemented API (catalog import, in `wavwarden/ucs_catalog.py`):
 
-- `load_ucs_catalog(path: Path | None = None) -> UcsCatalog`
-- `suggest_category(filename: str, folders: list[str]) -> UcsSuggestion`
+- `parse_soundminer_csv(path, *, release_version=None) -> tuple[UcsCatalog, int]`
+- `import_catalog(source_path, *, output_path=None, release_version=None) -> tuple[UcsImportResult, UcsCatalog]`
+- `save_catalog(catalog, output_path) -> None`
+- `load_catalog(path=None) -> UcsCatalog | None` — discovery chain:
+  explicit path → `WAVWARDEN_UCS_DATA` env var → `~/.wavwarden/ucs_catalog.json`
+  cache → `None`
+- `query_categories(catalog, *, category=None, cat_short=None) -> UcsCategoriesQuery`
+- `default_cache_path() -> Path` — returns `~/.wavwarden/ucs_catalog.json`
 
-Suggested CLI:
+Suggested API (still pending):
+
+- `suggest_category(filename: str, folders: list[str]) -> UcsSuggestion` —
+  catalog-aware suggestion that boosts `tag_suggest` confidence from 0.75 to
+  0.95 on a verified `(cat_short, subcategory)` pair.
+- `validate_indexed_files(db_path) -> ValidationReport` — count files whose
+  parsed `(cat_short, subcategory)` matches the loaded catalog.
+
+Implemented CLI:
+
+```bash
+uv run sfx ucs import ~/Desktop/_categorylist.csv --release-version v8.2.1
+uv run sfx ucs info
+uv run sfx ucs categories --cat-short AMB
+uv run sfx ucs categories --category AMBIENCE --json
+```
+
+Suggested CLI (still pending):
 
 ```bash
 uv run sfx ucs validate --db ~/.wavwarden/index.db --json
-uv run sfx ucs import ~/Downloads/ucs.csv --json
-uv run sfx rename PATH --pattern ucs --ucs-data ~/Downloads/ucs.csv
+uv run sfx rename PATH --pattern ucs --ucs-data ~/.wavwarden/ucs_catalog.json
 ```
 
 Suggested data behavior:

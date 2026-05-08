@@ -434,3 +434,100 @@ class RenameResult(BaseModel):
     errors: list[dict] = []
     log_path: str | None = None
     dry_run: bool = True
+
+
+# ---------------------------------------------------------------------------
+# UCS catalog (imported from official Soundminer CSV / XLSX release)
+# ---------------------------------------------------------------------------
+
+
+class UcsEntry(BaseModel):
+    cat_short: str  # e.g. "AIR" — uppercase filename prefix (3–5 chars in v8.2.1)
+    category: str  # e.g. "AIR" or "NATURAL DISASTER" (long form, may contain spaces)
+    subcategory: str  # e.g. "BLOW", "EARTHQUAKE" — uppercase in-filename token
+    cat_id: str  # e.g. "AIRBlow" — Soundminer identifier (kept for provenance)
+    explanations: str | None = None
+    synonyms: list[str] = []
+
+
+class UcsCatalogProvenance(BaseModel):
+    source_url: str
+    source_path: str
+    source_format: str  # "soundminer_csv" | "official_xlsx" | "user_json"
+    release_version: str | None = None  # e.g. "v8.2.1"
+    imported_at: str
+    attribution: str
+    entry_count: int
+
+
+class UcsCatalog(BaseModel):
+    schema_version: int = 1
+    tool: str = "wavwarden"
+    tool_version: str
+    provenance: UcsCatalogProvenance
+    entries: list[UcsEntry] = []
+
+
+class UcsImportResult(BaseModel):
+    catalog_path: str
+    source_path: str
+    source_format: str
+    release_version: str | None = None
+    entry_count: int = 0
+    unique_cat_shorts: int = 0
+    unique_categories: int = 0
+    skipped_rows: int = 0
+
+
+class UcsCategoriesQuery(BaseModel):
+    category: str | None = None
+    cat_short: str | None = None
+    total_loaded: int = 0
+    matched: int = 0
+    entries: list[UcsEntry] = []
+
+
+# ---------------------------------------------------------------------------
+# Tag suggestions (Phase B — report-only)
+# ---------------------------------------------------------------------------
+
+
+class TagSuggestion(BaseModel):
+    field: str
+    value: str
+    source: str
+    method: str
+    confidence: float
+    evidence: list[str] = []
+
+
+class TagSuggestionEntry(BaseModel):
+    file_id: int
+    path: str
+    filename: str
+    size_bytes: int | None = None
+    mtime: float | None = None
+    md5: str | None = None
+    suggestions: list[TagSuggestion] = []
+
+
+class TagSuggestionSummary(BaseModel):
+    files_considered: int = 0
+    files_with_suggestions: int = 0
+    total_suggestions: int = 0
+    by_source: dict[str, int] = {}
+    by_field: dict[str, int] = {}
+    by_confidence_bucket: dict[str, int] = {}
+
+
+class TagSuggestionReport(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    root: str
+    db_path: str
+    min_confidence: float = 0.0
+    limit: int = 200
+    summary: TagSuggestionSummary
+    entries: list[TagSuggestionEntry] = []

@@ -53,6 +53,20 @@ organize_app = typer.Typer(
     rich_markup_mode="rich",
 )
 app.add_typer(organize_app, name="organize")
+tag_app = typer.Typer(
+    name="tag",
+    help="Suggest metadata tags from filename, path, and group evidence (report-only).",
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+)
+app.add_typer(tag_app, name="tag")
+ucs_app = typer.Typer(
+    name="ucs",
+    help="Import and inspect the Universal Category System (UCS) catalog.",
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+)
+app.add_typer(ucs_app, name="ucs")
 
 console = Console()
 
@@ -210,6 +224,188 @@ def cmd_metadata_audit(
                 {
                     "schema_version": 1,
                     "command": "metadata_audit",
+                    "db_path": db,
+                    "report_path": output,
+                    "report": report,
+                }
+            )
+        )
+
+
+# ---------------------------------------------------------------------------
+# sfx ucs
+# ---------------------------------------------------------------------------
+
+
+@ucs_app.command("import")
+def cmd_ucs_import(
+    source: Annotated[Path, typer.Argument(help="UCS source file (Soundminer/_categorylist.csv).")],
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            help="Write normalized catalog JSON to this path. Default: ~/.wavwarden/ucs_catalog.json.",
+        ),
+    ] = None,
+    release_version: Annotated[
+        str | None,
+        typer.Option("--release-version", help="UCS release version recorded in provenance (e.g. 'v8.2.1')."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Import the official UCS catalog and write a normalized JSON cache."""
+    from wavwarden.ucs_catalog import default_cache_path, import_catalog, show_import_result
+
+    if not source.exists():
+        console.print(f"[red]Error: UCS source file not found: {source}[/red]")
+        raise typer.Exit(1)
+
+    target = output or default_cache_path()
+    try:
+        result, catalog = import_catalog(source, output_path=target, release_version=release_version)
+    except (FileNotFoundError, NotImplementedError, ValueError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    if not json_output:
+        show_import_result(result, catalog)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "ucs_import",
+                    "source": source,
+                    "catalog_path": target,
+                    "result": result,
+                }
+            )
+        )
+
+
+@ucs_app.command("info")
+def cmd_ucs_info(
+    catalog: Annotated[
+        Path | None, typer.Option("--catalog", help="Override the discovery chain with an explicit catalog path.")
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Show provenance and entry count of the loaded UCS catalog."""
+    from wavwarden.ucs_catalog import default_cache_path, load_catalog
+
+    try:
+        loaded = load_catalog(catalog)
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    if loaded is None:
+        msg = "No UCS catalog loaded. Run `sfx ucs import SOURCE` first or set WAVWARDEN_UCS_DATA / pass --catalog."
+        if json_output:
+            print(json_dumps({"schema_version": 1, "command": "ucs_info", "loaded": False, "message": msg}))
+        else:
+            console.print(f"[yellow]{msg}[/yellow]")
+        raise typer.Exit(1)
+
+    source_path = catalog or default_cache_path()
+    if not json_output:
+        from wavwarden.ucs_catalog import show_catalog_info
+
+        show_catalog_info(loaded, source_path)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "ucs_info",
+                    "loaded": True,
+                    "catalog_path": source_path,
+                    "provenance": loaded.provenance,
+                    "entry_count": loaded.provenance.entry_count,
+                }
+            )
+        )
+
+
+@ucs_app.command("categories")
+def cmd_ucs_categories(
+    catalog: Annotated[
+        Path | None, typer.Option("--catalog", help="Override the discovery chain with an explicit catalog path.")
+    ] = None,
+    category: Annotated[
+        str | None, typer.Option("--category", help="Filter to entries whose long-form category matches.")
+    ] = None,
+    cat_short: Annotated[
+        str | None, typer.Option("--cat-short", help="Filter to entries with this 3–5 char filename prefix.")
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """List UCS entries from the loaded catalog, optionally filtered."""
+    from wavwarden.ucs_catalog import load_catalog, query_categories, show_categories_query
+
+    try:
+        loaded = load_catalog(catalog)
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    if loaded is None:
+        console.print("[red]Error: no UCS catalog loaded. Run `sfx ucs import SOURCE` first.[/red]")
+        raise typer.Exit(1)
+
+    query = query_categories(loaded, category=category, cat_short=cat_short)
+    if not json_output:
+        show_categories_query(query)
+    if json_output:
+        print(json_dumps({"schema_version": 1, "command": "ucs_categories", "result": query}))
+
+
+# ---------------------------------------------------------------------------
+# sfx tag
+# ---------------------------------------------------------------------------
+
+
+@tag_app.command("suggest")
+def cmd_tag_suggest(
+    path: Annotated[Path, typer.Argument(help="Root path of the indexed library to inspect.")],
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    output: Annotated[
+        Path | None, typer.Option("--output", help="Write tag suggestion report JSON to this path.")
+    ] = None,
+    min_confidence: Annotated[
+        float, typer.Option("--min-confidence", help="Drop suggestions below this confidence (0.0–1.0).")
+    ] = 0.0,
+    limit: Annotated[int, typer.Option("--limit", help="Maximum file entries to include; 0 writes all entries.")] = 200,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Suggest metadata tags from filename, path, and group evidence. No writes."""
+    from wavwarden.tag_suggest import (
+        build_tag_suggestion_report,
+        show_tag_suggestion_report,
+        write_tag_suggestion_report,
+    )
+
+    if not path.exists():
+        console.print(f"[red]Error: path not found: {path}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        report = build_tag_suggestion_report(path, db_path=db, min_confidence=min_confidence, limit=limit)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
+    if output is not None:
+        write_tag_suggestion_report(report, output, quiet=json_output)
+    elif not json_output:
+        show_tag_suggestion_report(report)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "tag_suggest",
+                    "root": path,
                     "db_path": db,
                     "report_path": output,
                     "report": report,

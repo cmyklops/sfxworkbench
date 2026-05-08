@@ -53,6 +53,17 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
 - Format consistency candidates: 147 related groups covering 3,080 files.
 - Format inconsistency mix: 93 sample-rate groups, 32 bit-depth groups,
   61 channel-count groups.
+- Tag suggestion (Phase B) report-only command: `sfx tag suggest` implemented.
+- First tag suggestion run on full library: 502,735 suggestions across 120,716
+  files. Sources: 207,850 path, 157,470 group, 108,091 filename, 29,324
+  ucs_stem. Fields: 334,565 description, 149,124 take_number, 9,355 category,
+  9,355 subcategory, 336 channel_position. 31% of suggestions in the high
+  confidence bucket (>= 0.8), 69% mid (0.5–0.8). Sample report at
+  `/Users/mattwesdock/reports/tag_suggestions_20260508.json` (limit=50 entries).
+- UCS catalog import implemented (`sfx ucs import/info/categories`). Imported
+  the official UCS v8.2.1 Soundminer CSV: 753 entries, 100 unique CatShort
+  prefixes across 82 long-form categories. Cached at
+  `/Users/mattwesdock/.wavwarden/ucs_catalog.json` with full provenance.
 
 Current audit focus:
 
@@ -61,12 +72,20 @@ Current audit focus:
 - Metadata/sample-rate reporting: implemented as report-only.
 - Related sound group reporting: implemented as report-only.
 - Format consistency reporting: implemented as report-only.
+- Tag suggestion (Phase B): implemented as report-only.
 
 ## Next
 
 1. Move on from folder nesting unless you want a manual review flow for semantic wrappers.
-2. Use related group and format evidence to shape future tag suggestions and TUI review.
-3. Keep audio conversion and loudness normalization out of scope.
+2. Wire the imported UCS catalog into `tag_suggest` so a verified
+   `(cat_short, subcategory)` match boosts confidence from 0.75 to 0.95
+   (catalog-aware suggestions, slice 2 of UCS work).
+3. Add `sfx ucs validate --db` to count indexed files whose UCS heuristic
+   matches the catalog vs. those that don't.
+4. Decide review flow for tag suggestions (`sfx tag review` + `sfx tag apply`,
+   Phase C of `docs/METADATA_TAGGING.md`). Start DB-only and add sidecar
+   exports before any binary BWF/iXML write.
+5. Keep audio conversion and loudness normalization out of scope.
 
 ## Later
 
