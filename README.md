@@ -169,6 +169,18 @@ uv run sfx ucs import ~/Desktop/_categorylist.csv --release-version v8.2.1
 uv run sfx ucs validate PATH --json
 ```
 
+Future similarity work is planned as an optional crawler, not as part of the
+default scan:
+
+```bash
+uv run sfx similarity crawl PATH --db ~/.wavwarden/index.db --cache ~/.wavwarden/similarity
+uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --limit 50 --json
+```
+
+That roadmap folds Sononym-style descriptor discovery together with a
+Soundminer-style resumable cache builder. See
+[`docs/SIMILARITY.md`](docs/SIMILARITY.md).
+
 ## Standalone First-Look Audit
 
 `audit.py` is a no-install, zero-dependency script for a first look at a library.
@@ -186,6 +198,7 @@ python3 audit.py PATH --json
 - [`docs/PHASES.md`](docs/PHASES.md): roadmap, safety model, JSON contracts
 - [`docs/UCS.md`](docs/UCS.md): UCS data and category integration plan
 - [`docs/METADATA_TAGGING.md`](docs/METADATA_TAGGING.md): metadata writing and audio-suggestion plan
+- [`docs/SIMILARITY.md`](docs/SIMILARITY.md): optional audio similarity crawler roadmap
 - [`docs/PACK_DEDUPLICATION.md`](docs/PACK_DEDUPLICATION.md): pack/folder duplicate detection plan
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): contribution policy during internal beta
 - [`SECURITY.md`](SECURITY.md): private reporting guidance

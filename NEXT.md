@@ -121,6 +121,8 @@ Current audit focus:
 - `sfx packs plan/apply` for reviewed folder consolidation.
 - `sfx organize` for safe folder-structure cleanup.
 - `sfx tag --from-filename` after rename/organize workflows stabilize.
+- `sfx similarity crawl` as an optional Phase 2.5 audio-analysis cache after
+  cleanup and tag-plan foundations settle.
 - Textual TUI after CLI JSON contracts feel boring.
 
 ## Solo Workflow

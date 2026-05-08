@@ -35,6 +35,46 @@ The wavwarden version of these features should remain filesystem-first,
 JSON-first, and review-first. See `docs/ADVANCED_OPERATIONS.md` for the detailed
 plan.
 
+## Product Lessons From Sononym
+
+Sononym is a useful reference for sample discovery, descriptor-driven browsing,
+similarity search, duplicate review, and tagging. wavwarden should not copy its
+browser-first product shape, but several ideas fit the CLI roadmap:
+
+- duplicate keep choices should support prefer-folder and prefer-extension
+  rules with plan evidence
+- DB-only hide/ignore states are a useful non-destructive alternative before
+  quarantine or deletion
+- similarity and near-duplicate detection should be report-only at first, with
+  explicit false-positive caveats
+- audio descriptors such as peak, RMS, crest factor, rough brightness, length,
+  channels, and bit depth are useful audit/search fields before ML workflows
+- tag state should distinguish suggestions, accepted DB-only tags, manual tags,
+  auto-tags, hidden/rejected tags, aliases, and UCS categories
+- metadata browsing should highlight fields that are actually present in a
+  selected library
+
+## Product Lessons From Soundminer Similarity
+
+Soundminer's upcoming similarity crawler reinforces the Sononym lessons with a
+more CLI-friendly implementation pattern. The useful idea is not the exact UI;
+it is the offline crawler that precomputes audio-content evidence into a small,
+resumable cache.
+
+wavwarden should adopt that architecture for future similarity work:
+
+- keep `sfx scan` fast and metadata-oriented
+- add a separate optional `sfx similarity crawl` command for heavier analysis
+- skip unchanged files using path, size, mtime, and hash anchors
+- resume interrupted crawls and support scheduled overnight runs
+- support job/CPU limits so analysis can run in the background
+- store per-file and per-segment descriptors or embeddings outside the core
+  `files` table
+- treat similarity as discovery evidence, not cleanup authority
+
+This becomes the bridge from library hygiene into library discovery. See
+[`SIMILARITY.md`](SIMILARITY.md) for the proposed Phase 2.5 crawler roadmap.
+
 ## Current Phase — Hardened CLI Core
 
 Implemented commands:
@@ -306,6 +346,32 @@ report-only, then copy-output conversion, with in-place replacement only after
 fixtures and copied-library tests prove the workflow. Permanent deletion starts
 from reviewed quarantine logs and requires an explicit irreversible-delete flag.
 
+## Phase 2.5 — Audio Analysis And Similarity
+
+After the cleanup, organization, and tag-plan foundations settle, add an
+optional audio-analysis lane. This lane should be CLI-first and JSON-first:
+
+```bash
+uv run sfx similarity crawl PATH --db ~/.wavwarden/index.db --cache ~/.wavwarden/similarity
+uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --limit 50 --json
+uv run sfx similarity audit --near-duplicates --output similarity_report.json
+```
+
+First useful slice:
+
+- cheap descriptors such as peak, RMS, crest factor, rough brightness,
+  transient density, silence, clipping, duration, channels, sample rate, and
+  bit depth
+- segment/event detection for long ambience and designed files
+- optional per-file and per-segment embeddings behind an extra dependency
+- JSON nearest-neighbor results with explicit distance/confidence caveats
+- DB-only feedback states such as favorite, hidden, ignored, accepted, or
+  rejected similarity matches
+
+The crawler must never mutate audio or make cleanup decisions. At most, it can
+feed later reviewed reports for near duplicates, audio-listening tag
+suggestions, and discovery views.
+
 ### Directly Useful Open-Source Tools
 
 These projects are strong candidates for supporting wavwarden's planned feature
@@ -318,6 +384,7 @@ set without copying unclear or incompatible code into the repo:
 | `pyacoustid` | MIT | Optional perceptual duplicate candidate detection after exact MD5 dedupe. |
 | Textual | MIT | First review UI: duplicate review, rename preview, audit drilldown, approval flows. |
 | PANNs inference | MIT | Optional reviewed audio-listening tag suggestions. |
+| CLAP-style models | Varies by model | Optional audio/text embeddings for similarity and label ranking after license and runtime review. |
 
 Use Chromaprint via `pyacoustid`/`fpcalc` as an optional external capability
 rather than vendoring Chromaprint code. Keep ML tagging review-only and outside
@@ -326,7 +393,8 @@ runtime cost controls are clear.
 
 See [`UCS.md`](UCS.md) for the UCS data plan and
 [`METADATA_TAGGING.md`](METADATA_TAGGING.md) for the metadata/audio-suggestion
-roadmap. See [`PACK_DEDUPLICATION.md`](PACK_DEDUPLICATION.md) for the
+roadmap. See [`SIMILARITY.md`](SIMILARITY.md) for the optional similarity
+crawler roadmap. See [`PACK_DEDUPLICATION.md`](PACK_DEDUPLICATION.md) for the
 pack/folder duplicate detection and consolidation plan. See
 [`ADVANCED_OPERATIONS.md`](ADVANCED_OPERATIONS.md) for safe folders,
 preservation priority, dual-mono conversion, disk deletion, import compare, and

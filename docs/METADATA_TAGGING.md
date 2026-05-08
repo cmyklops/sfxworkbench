@@ -17,6 +17,14 @@ workflows need field-level review controls. wavwarden should support bulk
 find/replace and CSV-backed updates eventually, but they should pass through the
 same reviewed-plan model as tag suggestions.
 
+Sononym reinforces a complementary lesson: tags are stateful review data, not
+just strings. Future wavwarden tag tables should distinguish suggested tags,
+accepted DB-only tags, rejected or hidden suggestions, manual user tags,
+auto-tags from filename/path/metadata evidence, UCS category tags, aliases, and
+synonym matches. Search and audit views should also be able to show only the
+metadata fields that are actually present in a selected library, so sparse
+metadata does not create unusable empty tables.
+
 Default metadata-write policy:
 
 - read existing embedded tags before planning writes
@@ -53,6 +61,9 @@ Potential additive tables:
 - `metadata_fields`: normalized metadata by file, namespace, key, value, source
 - `metadata_raw`: raw or parsed bext/iXML/XML snippets for debugging
 - `tag_suggestions`: proposed tags with confidence, evidence, and status
+- `accepted_tags`: DB-only accepted/manual/auto tag assignments, including
+  source and whether the tag is hidden/rejected/manual/automatic
+- `tag_aliases`: user-defined aliases and synonyms for filename/path matching
 - `tag_apply_log`: immutable write attempts and outcomes
 
 Keep `files.has_bext` and `files.has_ixml` as fast audit booleans.
@@ -66,6 +77,8 @@ Add a pure parser module, separate from `rename.py`, that suggests metadata from
 - common take/version suffixes
 - known abbreviations such as `AMB`, `SFX`, and `FOLEY`
 - optional user dictionaries
+- user-defined aliases and synonyms, including simple singular/plural or
+  conjugation-style expansions
 
 Suggestions should be data, not writes:
 
@@ -143,11 +156,18 @@ contracts are stable and backed by fixtures from real-world files.
 Yes, wavwarden can eventually "listen" to files and suggest tags, but those
 suggestions should never be applied automatically.
 
+The similarity crawler should be the shared backend for this work. Sononym shows
+why descriptor and similarity browsing are useful for sound libraries;
+Soundminer-style crawlers show the safer implementation shape: precompute audio
+analysis in a separate, resumable command, then let search, tag suggestions, and
+future UI layers consume cached evidence.
+
 Recommended design:
 
 ```bash
 uv run sfx suggest PATH --from-audio --output suggestions.json
 uv run sfx suggest PATH --from-filename --from-audio --merge --output tag_plan.json
+uv run sfx similarity crawl PATH --db ~/.wavwarden/index.db --cache ~/.wavwarden/similarity
 ```
 
 Store model outputs in SQLite with:
@@ -166,6 +186,11 @@ Likely suggestion classes:
 - technical tags: mono/stereo, long/short, possible loop
 - quality flags: silence, clipping, hum, low level, truncation
 
+The first crawler-backed slice should prefer deterministic descriptors and
+segment/event detection before ML labels. Embeddings can be added later as an
+optional extra, keyed by model/backend version so old analysis can be identified
+and rebuilt when needed.
+
 CLAP-style audio-text embedding models are promising for zero-shot sound-effect
 labels. AudioSet-style classifiers can provide broad sound-event categories.
 Speech models such as Whisper are useful for speech detection/transcription, not
@@ -183,6 +208,8 @@ Concrete candidates:
 
 All audio-model features need explicit privacy and cost controls before use on
 commercial libraries.
+
+See [`SIMILARITY.md`](SIMILARITY.md) for the dedicated crawler roadmap.
 
 ## References
 

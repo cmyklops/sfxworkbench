@@ -12,6 +12,48 @@ JSON-first safety model.
 
 ## Product Lessons To Adopt
 
+### Sononym-Inspired Review Ideas
+
+Sononym is a strong reference for similarity-heavy sample browsing and duplicate
+review, but wavwarden should translate those ideas into explicit JSON plans
+rather than a hidden browser database.
+
+Useful lessons to adopt:
+
+- duplicate review actions should distinguish keep, hide/ignore, link, delete,
+  and quarantine rather than treating every duplicate as a removal
+- prefer-folder and prefer-extension rules should be first-class keep
+  recommendations, with evidence stored in the plan
+- near-duplicate and similarity matching should remain report-only until false
+  positives are well understood, especially swapped channels and mono mixdowns
+- descriptor filters such as length, channels, bit depth, peak, RMS, crest
+  factor, and rough brightness can become useful audit/search columns before
+  full ML tagging is introduced
+- auto-tags, manual tags, hidden tags, UCS tags, aliases, and accepted/rejected
+  suggestions should be represented separately in future tag tables
+- embedded metadata browsing should include an "actually used fields" view so
+  sparse libraries do not drown users in empty metadata columns
+
+### Soundminer-Inspired Similarity Crawler
+
+Soundminer's similarity crawler points to a practical backend shape for
+Sononym-like discovery without making wavwarden browser-first. Heavy
+audio-content work should run as a separate crawler that can be resumed,
+scheduled, CPU-limited, and cached.
+
+Planned behavior:
+
+- `sfx similarity crawl PATH --db DB --cache DIR` analyzes indexed files without
+  changing audio or cleanup plans
+- unchanged files are skipped using path, size, mtime, and hash anchors
+- long files can produce multiple segment/event records
+- descriptor and embedding data are stored outside the core `files` table
+- `sfx similarity search` and future UI views consume crawler output
+- near-duplicate reports stay review-only and clearly label false-positive risk
+
+This belongs after the current beta-safe cleanup and tag-suggestion work. See
+[`SIMILARITY.md`](SIMILARITY.md) for the dedicated Phase 2.5 roadmap.
+
 ### Safe Folders
 
 Studios need a way to mark locations that should never be modified by automated
