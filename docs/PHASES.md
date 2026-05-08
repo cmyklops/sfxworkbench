@@ -34,6 +34,11 @@ uv run sfx dedupe --output ~/reports/dedupe_plan.json
 uv run sfx dedupe --review dedupe_plan.json --approve-all
 uv run sfx dedupe --apply dedupe_plan.json --require-reviewed
 uv run sfx packs audit PATH --output ~/reports/pack_overlap_report.json
+uv run sfx packs plan --report ~/reports/pack_overlap_report.json --output ~/reports/pack_consolidation_plan.json
+uv run sfx packs review ~/reports/pack_consolidation_plan.json --approve-all
+uv run sfx packs apply ~/reports/pack_consolidation_plan.json --require-reviewed
+uv run sfx packs apply ~/reports/pack_consolidation_plan.json --apply --require-reviewed --log pack_quarantine_log.json
+uv run sfx packs undo pack_quarantine_log.json --apply
 uv run sfx organize audit PATH --depth 1 --output ~/reports/organize_report.json
 uv run sfx organize audit PATH --pattern redundant-nesting --depth 8 --output ~/reports/nesting_report.json
 uv run sfx organize nesting-plan ~/reports/nesting_report.json --output ~/reports/nesting_plan.json
@@ -105,13 +110,22 @@ Series 9000 Open & Close -> Series 9000 Open and Close
 ```
 
 Pack/folder duplicate detection is the next professional-grade safety layer
-after exact file dedupe and filename/path cleanup. It should ship as a reviewed
-report/plan/apply workflow before broad folder organization features:
+after exact file dedupe and filename/path cleanup. The reviewed report/plan/apply
+workflow now exists for exact duplicate folders and fully-covered overlap
+candidates:
 
 - `sfx packs audit`: detect exact duplicate folders and high-overlap packs. Implemented as report-only.
-- `sfx packs plan`: create a reviewed consolidation/quarantine plan.
-- `sfx packs apply`: quarantine redundant folders by default, validate hashes
-  before moving, update SQLite paths, and write an undo log.
+- `sfx packs plan`: create a reviewed consolidation/quarantine plan. Exact
+  duplicate folder groups plan all but the deterministic keep folder for
+  quarantine. Fully-covered overlap candidates plan the smaller folder for
+  quarantine. Partial overlaps stay review-only so unique files are not moved by
+  default.
+- `sfx packs review`: approve all or selected 1-based plan groups.
+- `sfx packs apply`: dry-run by default; with `--apply`, quarantine redundant
+  folders, validate files and hashes before moving, update SQLite paths, and
+  write an undo log.
+- `sfx packs undo`: restore quarantined folders from the undo log and update
+  SQLite paths.
 
 Folder consolidation must not permanently delete by default. Merging unique
 files is a later explicit action and must never overwrite existing files.
@@ -286,6 +300,91 @@ Internal Studio Beta is reached when:
   any consolidation action
 - tests cover the safety paths, not just happy paths
 
+## Development Audit Track
+
+Before Internal Studio Beta, run a focused audit pass over the workflows that
+could affect a real commercial library. These audits are development gates, not
+new user-facing cleanup commands unless a later workflow wrapper exposes them.
+
+### Safety Audit
+
+Verify every filesystem-changing command defaults to dry-run, quarantine,
+review-first, or undoable behavior. Confirm apply paths refuse collisions,
+validate planned files before moving anything, preserve originals by default,
+write complete logs, and keep SQLite paths accurate after rename, quarantine, or
+folder moves.
+
+Target workflows:
+
+- `clean --apply`
+- `scan-errors --apply`
+- `dedupe --apply`
+- `rename --apply` and `rename --undo`
+- `organize apply`, `organize undo`, `organize nesting-apply`, and
+  `organize nesting-undo`
+- `packs apply` and `packs undo`
+- future metadata/tag apply workflows
+
+### JSON Contract Audit
+
+Treat CLI JSON as the stable automation surface for Textual/Tauri and scripted
+studio workflows. For each `--json` command, verify stable `schema_version`,
+predictable field names, no Rich output mixed into machine-readable responses,
+and backward-compatible additions where possible. Document intentional breaking
+changes with a schema bump.
+
+### Fixture Workflow Audit
+
+Maintain realistic end-to-end fixture runs that exercise command sequences, not
+just isolated functions:
+
+```bash
+scan -> audit -> dedupe -> review -> apply -> undo
+scan -> rename preview -> apply -> undo
+scan -> organize audit -> review -> apply -> undo
+scan -> packs audit -> plan -> review -> apply -> undo
+```
+
+These tests should cover collisions, missing files, changed hashes, stale plans,
+sidecar files, Unicode normalization, long paths, scan errors, and DB path
+updates.
+
+### Real-Library Dry-Run Audit
+
+Run report-only commands against a copied or read-only real library before beta.
+Capture scan performance, junk false positives, rename and organization review
+quality, pack-overlap usefulness, metadata coverage, and edge cases from vendor
+folder conventions. Do not apply changes during the first pass.
+
+### SQLite Schema Audit
+
+Verify schema creation and upgrades remain idempotent, existing indexes and FTS5
+triggers stay correct, and older databases continue to open after additive
+schema changes. New tables for tags, metadata, or pack plans should preserve the
+existing `files` and `files_fts` contract.
+
+### Dependency And Packaging Audit
+
+Test a clean install from scratch, including optional extras such as
+`.[metadata,dev]`. Confirm CLI startup remains fast, package metadata is
+accurate, optional readers fail gracefully when absent, and no workflow depends
+on undeclared local tools or files.
+
+### Performance Audit
+
+Benchmark large synthetic and sampled real libraries with hashing enabled and
+disabled. Watch memory use, SQLite query plans, and accidental quadratic
+comparisons in pack, group, and organize logic. Keep the benchmark loop aligned
+with `uv run --extra dev poe bench-scan --files 1000 --no-hash` and expand it
+when pack planning or metadata suggestions become heavier.
+
+### Trust And Review UX Audit
+
+Review command output as if the target library were irreplaceable. Previews
+should explain what will change, apply commands should name risky operations
+plainly, logs should be sufficient to recover, and report-only workflows should
+make uncertainty visible instead of implying automatic cleanup.
+
 ## Development Loop
 
 Local and CI validation should use the same Poe tasks:
@@ -329,6 +428,10 @@ Command contracts:
 - `dedupe --review PLAN --json`: includes review counts and output path.
 - `dedupe --apply PLAN --json`: includes `result`; default apply quarantines files.
 - `packs audit PATH --json`: includes `root`, `db_path`, optional `report_path`, and a versioned report with summary counts, exact duplicate folder groups, and overlap candidates.
+- `packs plan --report REPORT --json`: includes `report_path`, optional `plan_path`, and a versioned pack consolidation plan.
+- `packs review PLAN --json`: includes review counts and output path.
+- `packs apply PLAN --json`: includes dry-run/apply counts, quarantine directory, errors, and optional undo log path.
+- `packs undo LOG --json`: includes restore counts, errors, and log path.
 - `organize audit PATH --json`: includes `root`, optional `report_path`, and a versioned report with proposed folder renames, report-only nesting candidates, and collision errors.
 - `organize review REPORT --json`: includes review counts and output path.
 - `organize apply REPORT --json`: includes apply result and undo log path.

@@ -27,18 +27,22 @@ Implemented:
 
 ```bash
 uv run sfx packs audit PATH --db ~/.wavwarden/index.db --output ~/reports/pack_overlap_report.json
-```
-
-Planned:
-
-```bash
 uv run sfx packs plan --report ~/reports/pack_overlap_report.json --output ~/reports/pack_consolidation_plan.json
 uv run sfx packs review ~/reports/pack_consolidation_plan.json --approve-group 1
 uv run sfx packs apply ~/reports/pack_consolidation_plan.json --require-reviewed
+uv run sfx packs apply ~/reports/pack_consolidation_plan.json --apply --require-reviewed --log pack_quarantine_log.json
+uv run sfx packs undo pack_quarantine_log.json --apply
 ```
 
-Plan/apply command names may change before implementation, but the workflow
-should remain: audit first, plan second, reviewed apply last.
+Planned later:
+
+```bash
+uv run sfx packs apply ~/reports/pack_consolidation_plan.json --merge-unique-files
+```
+
+The workflow is intentionally staged: audit first, plan second, reviewed apply
+last. Apply is dry-run by default; `--apply` is required before any folder is
+moved.
 
 ## Detection Tiers
 
@@ -82,31 +86,34 @@ but it introduces false positives and external runtime requirements.
 
 ## Reviewed Plan Format
 
-Pack consolidation plans should be versioned JSON and include:
+Pack consolidation plans are versioned JSON and include:
 
 - `schema_version`
 - `generated_at`
 - `tool_version`
 - `root`
 - `db_path`
-- candidate group id
+- source report path
+- candidate group id and source type
 - source folder path
 - recommended keep folder path
-- overlap metrics
-- action: `report`, `quarantine_folder`, `merge_unique_files`, or `ignore`
-- per-file evidence for matching and unique files
-- review status and reviewer note
+- overlap metrics when applicable
+- action: `quarantine_folder`, `review`, or `ignore`
+- per-file validation anchors: path, relative path, hash, and size
+- review status after `sfx packs review`
 
 ## Apply Rules
 
-Default apply behavior:
+Current apply behavior:
 
 - Refuse unreviewed groups when `--require-reviewed` is set.
 - Validate every planned path still exists.
 - Recheck file count, size, and hashes before moving anything.
 - Quarantine redundant folders by default.
 - Never permanently delete folders by default.
-- Never overwrite files when merging unique files.
+- Never move partial-overlap unique files by default; partial overlaps stay
+  review-only in the generated plan.
+- Never overwrite existing quarantine targets.
 - Update SQLite rows after successful folder moves.
 - Write an undo log for folder moves and merge operations.
 

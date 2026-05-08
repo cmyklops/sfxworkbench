@@ -4,7 +4,14 @@ import json
 from pathlib import Path
 
 from wavwarden.db import get_connection
-from wavwarden.packs import audit_packs, write_pack_audit_report
+from wavwarden.packs import (
+    apply_pack_plan,
+    audit_packs,
+    build_pack_plan,
+    review_pack_plan,
+    undo_pack_log,
+    write_pack_audit_report,
+)
 
 
 def _seed_files(tmp_db: Path, files: list[dict]) -> None:
@@ -27,6 +34,13 @@ def _seed_files(tmp_db: Path, files: list[dict]) -> None:
         )
     conn.commit()
     conn.close()
+
+
+def _write_pack_files(files: list[dict]) -> None:
+    for f in files:
+        path = Path(f["path"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x" * f.get("size", 100))
 
 
 def test_pack_audit_finds_exact_duplicate_folders(tmp_path: Path, tmp_db: Path) -> None:
@@ -158,3 +172,90 @@ def test_write_pack_audit_report(tmp_path: Path, tmp_db: Path) -> None:
     payload = json.loads(out.read_text())
     assert payload["schema_version"] == 1
     assert payload["summary"]["folders_analyzed"] == 0
+
+
+def test_pack_plan_reviews_applies_and_undoes_exact_duplicate_folder(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    keep = root / "A Pack"
+    duplicate = root / "B Pack"
+    files = [
+        {"path": keep / "one.wav", "md5": "A", "size": 10},
+        {"path": keep / "two.wav", "md5": "B", "size": 20},
+        {"path": duplicate / "one.wav", "md5": "A", "size": 10},
+        {"path": duplicate / "two.wav", "md5": "B", "size": 20},
+    ]
+    _write_pack_files(files)
+    _seed_files(tmp_db, files)
+    report_path = tmp_path / "pack_report.json"
+    plan_path = tmp_path / "pack_plan.json"
+    log_path = tmp_path / "pack_log.json"
+    quarantine_dir = tmp_path / "quarantine"
+    write_pack_audit_report(audit_packs(root, tmp_db), report_path, quiet=True)
+
+    plan = build_pack_plan(report_path, output_path=plan_path, quiet=True)
+
+    assert plan.summary.quarantine_entries == 1
+    assert plan.entries[0].folder_path == str(duplicate)
+    assert plan.entries[0].keep_folder_path == str(keep)
+    assert plan.entries[0].action == "quarantine_folder"
+
+    review = review_pack_plan(plan_path, approve_all=True, quiet=True)
+    assert review.approved_groups == 1
+
+    dry_run = apply_pack_plan(plan_path, require_reviewed=True, dry_run=True, quiet=True)
+    assert dry_run.quarantined == 1
+    assert duplicate.exists()
+
+    result = apply_pack_plan(
+        plan_path,
+        db_path=tmp_db,
+        require_reviewed=True,
+        dry_run=False,
+        quarantine_dir=quarantine_dir,
+        log_path=log_path,
+        quiet=True,
+    )
+
+    assert result.quarantined == 1
+    assert result.errors == []
+    assert not duplicate.exists()
+    assert log_path.exists()
+    quarantined_path = Path(json.loads(log_path.read_text())["entries"][0]["quarantine_path"])
+    assert quarantined_path.exists()
+    conn = get_connection(tmp_db)
+    moved_rows = conn.execute("SELECT path FROM files WHERE path LIKE ?", (str(quarantined_path) + "/%",)).fetchall()
+    conn.close()
+    assert len(moved_rows) == 2
+
+    undo = undo_pack_log(log_path, db_path=tmp_db, dry_run=False, quiet=True)
+
+    assert undo.restored == 1
+    assert duplicate.exists()
+    conn = get_connection(tmp_db)
+    restored_rows = conn.execute("SELECT path FROM files WHERE path LIKE ?", (str(duplicate) + "/%",)).fetchall()
+    conn.close()
+    assert len(restored_rows) == 2
+
+
+def test_pack_plan_marks_partial_overlap_review_only(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    pack_a = root / "Pack A"
+    pack_b = root / "Pack B"
+    files = [
+        {"path": pack_a / "one.wav", "md5": "A", "size": 10},
+        {"path": pack_a / "two.wav", "md5": "B", "size": 10},
+        {"path": pack_a / "unique-a.wav", "md5": "C", "size": 10},
+        {"path": pack_b / "one.wav", "md5": "A", "size": 10},
+        {"path": pack_b / "two.wav", "md5": "B", "size": 10},
+        {"path": pack_b / "unique-b.wav", "md5": "D", "size": 10},
+    ]
+    _seed_files(tmp_db, files)
+    report_path = tmp_path / "pack_report.json"
+    write_pack_audit_report(audit_packs(root, tmp_db, overlap_threshold=0.5), report_path, quiet=True)
+
+    plan = build_pack_plan(report_path, quiet=True)
+
+    assert plan.summary.quarantine_entries == 0
+    assert plan.summary.review_entries == 1
+    assert plan.entries[0].action == "review"
+    assert plan.entries[0].reason.startswith("folder overlap is not complete")

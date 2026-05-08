@@ -756,6 +756,114 @@ def cmd_packs_audit(
         )
 
 
+@packs_app.command("plan")
+def cmd_packs_plan(
+    report: Annotated[Path, typer.Option("--report", help="Pack audit report JSON to turn into a plan.")],
+    output: Annotated[Path | None, typer.Option("--output", help="Write pack consolidation plan JSON here.")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Create a reviewed pack consolidation/quarantine plan from an audit report."""
+    from wavwarden.packs import build_pack_plan, show_pack_plan
+
+    if not report.exists():
+        console.print(f"[red]Error: report file not found: {report}[/red]")
+        raise typer.Exit(1)
+
+    plan = build_pack_plan(report, output_path=output, quiet=json_output)
+    if not json_output:
+        show_pack_plan(plan)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "packs_plan",
+                    "report_path": report,
+                    "plan_path": output,
+                    "plan": plan,
+                }
+            )
+        )
+
+
+@packs_app.command("review")
+def cmd_packs_review(
+    plan: Annotated[Path, typer.Argument(help="Pack consolidation plan JSON to review.")],
+    output: Annotated[Path | None, typer.Option("--output", help="Write reviewed plan to this path.")] = None,
+    approve_all: Annotated[bool, typer.Option("--approve-all", help="Approve every pack plan group.")] = False,
+    group: Annotated[
+        list[int] | None, typer.Option("--approve-group", help="Approve a 1-based pack plan group number.")
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Mark pack plan groups as reviewed/approved."""
+    from wavwarden.packs import review_pack_plan
+
+    if not plan.exists():
+        console.print(f"[red]Error: plan file not found: {plan}[/red]")
+        raise typer.Exit(1)
+    if not approve_all and not group:
+        console.print("[red]Error: pass --approve-all or at least one --approve-group.[/red]")
+        raise typer.Exit(1)
+
+    result = review_pack_plan(plan, output_path=output, approve_all=approve_all, groups=group, quiet=json_output)
+    if json_output:
+        print(json_dumps({"schema_version": 1, "command": "packs_review", "result": result}))
+
+
+@packs_app.command("apply")
+def cmd_packs_apply(
+    plan: Annotated[Path, typer.Argument(help="Reviewed pack consolidation plan JSON.")],
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index. Defaults to plan db_path.")] = None,
+    log: Annotated[Path | None, typer.Option("--log", help="Write pack undo log to this path.")] = None,
+    quarantine_dir: Annotated[
+        Path | None, typer.Option("--quarantine-dir", help="Directory for quarantined pack folders.")
+    ] = None,
+    apply: Annotated[bool, typer.Option("--apply", help="Actually quarantine folders (default is dry-run).")] = False,
+    require_reviewed: Annotated[
+        bool, typer.Option("--require-reviewed", help="Apply only approved pack plan groups.")
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Apply a reviewed pack plan by quarantining redundant folders."""
+    from wavwarden.packs import apply_pack_plan
+
+    if not plan.exists():
+        console.print(f"[red]Error: plan file not found: {plan}[/red]")
+        raise typer.Exit(1)
+
+    result = apply_pack_plan(
+        plan,
+        db_path=db,
+        dry_run=not apply,
+        quarantine_dir=quarantine_dir,
+        log_path=log,
+        require_reviewed=require_reviewed,
+        quiet=json_output,
+    )
+    if json_output:
+        print(json_dumps({"schema_version": 1, "command": "packs_apply", "result": result}))
+
+
+@packs_app.command("undo")
+def cmd_packs_undo(
+    log: Annotated[Path, typer.Argument(help="Pack undo log to restore.")],
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index. Defaults to log db_path.")] = None,
+    apply: Annotated[bool, typer.Option("--apply", help="Actually restore quarantined folders.")] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Undo a previously applied pack quarantine log."""
+    from wavwarden.packs import undo_pack_log
+
+    if not log.exists():
+        console.print(f"[red]Error: log file not found: {log}[/red]")
+        raise typer.Exit(1)
+
+    result = undo_pack_log(log, db_path=db, dry_run=not apply, quiet=json_output)
+    if json_output:
+        print(json_dumps({"schema_version": 1, "command": "packs_undo", "result": result}))
+
+
 # ---------------------------------------------------------------------------
 # sfx clean
 # ---------------------------------------------------------------------------

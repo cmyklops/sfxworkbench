@@ -226,6 +226,7 @@ def test_packs_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
         (pack_b / "one.wav", "A"),
         (pack_b / "two.wav", "B"),
     ]:
+        path.write_bytes(b"x" * 10)
         conn.execute(
             """INSERT INTO files (path, filename, stem, extension, size_bytes, mtime, md5, scanned_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -255,6 +256,50 @@ def test_packs_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
     assert payload["report"]["schema_version"] == 1
     assert payload["report"]["summary"]["exact_duplicate_groups"] == 1
     assert out.exists()
+
+    plan_out = tmp_path / "pack_plan.json"
+    plan_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                ["packs", "plan", "--report", str(out), "--output", str(plan_out), "--json"],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert plan_payload["schema_version"] == 1
+    assert plan_payload["command"] == "packs_plan"
+    assert plan_payload["report_path"] == "<TMP>/pack_report.json"
+    assert plan_payload["plan_path"] == "<TMP>/pack_plan.json"
+    assert plan_payload["plan"]["summary"]["quarantine_entries"] == 1
+
+    review_payload = _normalize(
+        _load(runner.invoke(app, ["packs", "review", str(plan_out), "--approve-all", "--json"]).stdout),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert review_payload["schema_version"] == 1
+    assert review_payload["command"] == "packs_review"
+    assert review_payload["result"]["approved_groups"] == 1
+
+    apply_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                ["packs", "apply", str(plan_out), "--require-reviewed", "--json"],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert apply_payload["schema_version"] == 1
+    assert apply_payload["command"] == "packs_apply"
+    assert apply_payload["result"]["dry_run"] is True
+    assert apply_payload["result"]["quarantined"] == 1
 
 
 def test_groups_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:

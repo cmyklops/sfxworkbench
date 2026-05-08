@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -15,12 +16,20 @@ from rich.table import Table
 from wavwarden import __version__
 from wavwarden.db import get_connection
 from wavwarden.models import (
+    PackApplyResult,
     PackAuditReport,
     PackAuditSummary,
     PackExactGroup,
     PackFolderSummary,
     PackOverlapCandidate,
+    PackPlan,
+    PackPlanEntry,
+    PackPlanFile,
+    PackPlanSummary,
+    PackReviewResult,
 )
+from wavwarden.rename import _update_directory_rows
+from wavwarden.scan_errors import _md5
 
 console = Console()
 
@@ -58,6 +67,10 @@ class _FolderStats:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _now_stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
 
 def _is_relative_to(path: Path, parent: Path) -> bool:
@@ -318,3 +331,404 @@ def show_pack_audit_report(report: PackAuditReport) -> None:
                 candidate.folder_b.path,
             )
         console.print(table)
+
+
+def _default_quarantine_dir(plan_path: Path) -> Path:
+    return plan_path.parent / f"wavwarden_pack_quarantine_{_now_stamp()}"
+
+
+def _default_pack_log_path() -> Path:
+    return Path(f"pack_quarantine_log_{_now_stamp()}.json")
+
+
+def _quarantine_target(path: Path, quarantine_dir: Path) -> Path:
+    parts = [part for part in path.resolve().parts if part not in (path.anchor, "/")]
+    target = quarantine_dir.joinpath(*parts)
+    if not target.exists():
+        return target
+    parent = target.parent
+    stem = target.name
+    i = 1
+    while True:
+        candidate = parent / f"{stem}__{i}"
+        if not candidate.exists():
+            return candidate
+        i += 1
+
+
+def _folder_files(db_path: Path, folder: Path) -> list[PackPlanFile]:
+    conn = get_connection(db_path)
+    rows = conn.execute(
+        """
+        SELECT path, md5, size_bytes
+        FROM files
+        WHERE path = ? OR path LIKE ?
+        ORDER BY path
+        """,
+        (str(folder), str(folder) + "/%"),
+    ).fetchall()
+    conn.close()
+    files: list[PackPlanFile] = []
+    for row in rows:
+        path = Path(row["path"])
+        files.append(
+            PackPlanFile(
+                path=str(path),
+                relative_path=str(path.relative_to(folder)),
+                hash=row["md5"],
+                size_bytes=row["size_bytes"],
+            )
+        )
+    return files
+
+
+def _summarize_plan(entries: list[PackPlanEntry]) -> PackPlanSummary:
+    return PackPlanSummary(
+        candidate_entries=len(entries),
+        quarantine_entries=sum(1 for entry in entries if entry.action == "quarantine_folder"),
+        review_entries=sum(1 for entry in entries if entry.action == "review"),
+        ignored_entries=sum(1 for entry in entries if entry.action == "ignore"),
+        planned_files=sum(entry.file_count for entry in entries if entry.action == "quarantine_folder"),
+        planned_bytes=sum(entry.total_bytes for entry in entries if entry.action == "quarantine_folder"),
+    )
+
+
+def _choose_overlap_source(candidate: PackOverlapCandidate) -> tuple[PackFolderSummary, PackFolderSummary]:
+    """Return (source_to_quarantine, folder_to_keep) for a fully covered overlap."""
+    a = candidate.folder_a
+    b = candidate.folder_b
+    if a.total_bytes != b.total_bytes:
+        return (a, b) if a.total_bytes < b.total_bytes else (b, a)
+    if a.file_count != b.file_count:
+        return (a, b) if a.file_count < b.file_count else (b, a)
+    return (a, b) if a.path > b.path else (b, a)
+
+
+def build_pack_plan(report_path: Path, output_path: Path | None = None, quiet: bool = False) -> PackPlan:
+    """Create a reviewed pack consolidation plan from a pack audit report."""
+    report = PackAuditReport.model_validate(json.loads(report_path.read_text()))
+    db_path = Path(report.db_path)
+    entries: list[PackPlanEntry] = []
+    errors: list[dict] = []
+    planned_sources: set[str] = set()
+
+    for group in report.exact_groups:
+        folders = sorted(group.folders, key=lambda folder: folder.path)
+        if len(folders) < 2:
+            continue
+        keep = folders[0]
+        for folder in folders[1:]:
+            files = _folder_files(db_path, Path(folder.path))
+            entry = PackPlanEntry(
+                source_type="exact_duplicate_folder",
+                source_group_id=group.group_id,
+                folder_path=folder.path,
+                keep_folder_path=keep.path,
+                action="quarantine_folder",
+                reason="folder has the same indexed audio hashes as the keep folder",
+                file_count=folder.file_count,
+                total_bytes=folder.total_bytes,
+                files=files,
+            )
+            entries.append(entry)
+            planned_sources.add(folder.path)
+
+    for candidate in report.overlap_candidates:
+        source, keep = _choose_overlap_source(candidate)
+        action = "quarantine_folder" if candidate.smaller_folder_coverage >= 1.0 else "review"
+        reason = (
+            "smaller folder is fully covered by the keep folder"
+            if action == "quarantine_folder"
+            else "folder overlap is not complete; review unique files before taking action"
+        )
+        if source.path in planned_sources:
+            action = "ignore"
+            reason = "folder is already planned by an exact duplicate group"
+        files = _folder_files(db_path, Path(source.path))
+        entries.append(
+            PackPlanEntry(
+                source_type="pack_overlap",
+                source_group_id=candidate.group_id,
+                folder_path=source.path,
+                keep_folder_path=keep.path,
+                action=action,
+                reason=reason,
+                file_count=source.file_count,
+                total_bytes=source.total_bytes,
+                shared_files=candidate.shared_files,
+                shared_bytes=candidate.shared_bytes,
+                smaller_folder_coverage=candidate.smaller_folder_coverage,
+                larger_folder_coverage=candidate.larger_folder_coverage,
+                files=files,
+            )
+        )
+        if action == "quarantine_folder":
+            planned_sources.add(source.path)
+
+    plan = PackPlan(
+        generated_at=_now_iso(),
+        tool_version=__version__,
+        root=report.root,
+        db_path=report.db_path,
+        source_report=str(report_path),
+        summary=_summarize_plan(entries),
+        entries=entries,
+        errors=errors,
+    )
+    if output_path is not None:
+        write_pack_plan(plan, output_path, quiet=quiet)
+    return plan
+
+
+def write_pack_plan(plan: PackPlan, output_path: Path, quiet: bool = False) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(plan.model_dump(), indent=2))
+    if not quiet:
+        console.print(
+            f"Pack plan written to [cyan]{output_path}[/cyan] "
+            f"([yellow]{plan.summary.quarantine_entries}[/yellow] quarantine, "
+            f"[yellow]{plan.summary.review_entries}[/yellow] review)."
+        )
+
+
+def review_pack_plan(
+    plan_path: Path,
+    output_path: Path | None = None,
+    approve_all: bool = False,
+    groups: list[int] | None = None,
+    quiet: bool = False,
+) -> PackReviewResult:
+    """Stamp a pack plan with approved group indexes."""
+    plan = json.loads(plan_path.read_text())
+    total = len(plan.get("entries", []))
+    requested = set(groups or [])
+    invalid = sorted(group for group in requested if group < 1 or group > total)
+    if approve_all:
+        approved = set(range(total))
+    else:
+        approved = {group - 1 for group in requested if 1 <= group <= total}
+
+    existing_review = plan.get("review", {})
+    approved.update(existing_review.get("approved_groups", []))
+    approved_groups = sorted(approved)
+    plan["review"] = {
+        "status": "approved" if len(approved_groups) == total and total else "partially_approved",
+        "approved_at": _now_iso(),
+        "approved_groups": approved_groups,
+    }
+
+    output = output_path or plan_path
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(plan, indent=2))
+    result = PackReviewResult(
+        plan_path=str(plan_path),
+        output_path=str(output),
+        total_groups=total,
+        approved_groups=len(approved_groups),
+        invalid_groups=invalid,
+    )
+    if not quiet:
+        console.print(
+            f"Approved [yellow]{result.approved_groups:,}[/yellow] of "
+            f"[yellow]{result.total_groups:,}[/yellow] pack plan group(s) in [cyan]{output}[/cyan]"
+        )
+        if invalid:
+            console.print(f"[red]Ignored invalid group number(s): {', '.join(str(i) for i in invalid)}[/red]")
+    return result
+
+
+def show_pack_plan(plan: PackPlan) -> None:
+    console.print(
+        f"Planned [yellow]{plan.summary.quarantine_entries:,}[/yellow] folder quarantine(s), "
+        f"[yellow]{plan.summary.review_entries:,}[/yellow] review-only overlap(s), "
+        f"[yellow]{plan.summary.ignored_entries:,}[/yellow] ignored duplicate overlap(s)."
+    )
+    if plan.entries:
+        table = Table(title="Pack consolidation plan", show_lines=False)
+        table.add_column("Group", justify="right")
+        table.add_column("Action", style="cyan")
+        table.add_column("Reason", style="yellow")
+        table.add_column("Folder")
+        table.add_column("Keep Folder")
+        for i, entry in enumerate(plan.entries[:50], start=1):
+            table.add_row(str(i), entry.action, entry.reason, entry.folder_path, entry.keep_folder_path)
+        console.print(table)
+        if len(plan.entries) > 50:
+            console.print(f"[dim]...{len(plan.entries) - 50} more pack plan group(s).[/dim]")
+
+
+def _validate_plan_file(file: PackPlanFile) -> str | None:
+    path = Path(file.path)
+    if not path.exists():
+        return "file does not exist"
+    if not path.is_file():
+        return "path is not a file"
+    if file.size_bytes is not None:
+        try:
+            actual_size = path.stat().st_size
+        except OSError as e:
+            return str(e)
+        if actual_size != file.size_bytes:
+            return f"size changed: expected {file.size_bytes}, got {actual_size}"
+    if file.hash and len(file.hash) == 32:
+        try:
+            actual_hash = _md5(path)
+        except OSError as e:
+            return str(e)
+        if actual_hash != file.hash:
+            return "md5 changed"
+    return None
+
+
+def _validate_pack_entry(entry: PackPlanEntry) -> list[dict]:
+    errors: list[dict] = []
+    folder = Path(entry.folder_path)
+    keep = Path(entry.keep_folder_path)
+    if not folder.exists() or not folder.is_dir():
+        errors.append({"path": str(folder), "error": "source folder missing"})
+    if not keep.exists() or not keep.is_dir():
+        errors.append({"path": str(keep), "error": "keep folder missing"})
+    if errors:
+        return errors
+    for file in entry.files:
+        path = Path(file.path)
+        if not _is_relative_to(path, folder):
+            errors.append({"path": str(path), "error": "planned file is outside source folder"})
+            continue
+        validation_error = _validate_plan_file(file)
+        if validation_error is not None:
+            errors.append({"path": str(path), "error": validation_error})
+    return errors
+
+
+def _update_quarantined_rows(db_path: Path, old: Path, new: Path, root: Path) -> None:
+    conn = get_connection(db_path)
+    try:
+        _update_directory_rows(conn, old, new, root)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def apply_pack_plan(
+    plan_path: Path,
+    db_path: Path | None = None,
+    dry_run: bool = True,
+    quarantine_dir: Path | None = None,
+    log_path: Path | None = None,
+    require_reviewed: bool = False,
+    quiet: bool = False,
+) -> PackApplyResult:
+    """Apply a reviewed pack plan by quarantining redundant folders."""
+    raw_plan = json.loads(plan_path.read_text())
+    plan = PackPlan.model_validate(raw_plan)
+    if db_path is None:
+        db_path = Path(plan.db_path)
+    if quarantine_dir is None and not dry_run:
+        quarantine_dir = _default_quarantine_dir(plan_path)
+
+    approved = set(raw_plan.get("review", {}).get("approved_groups", []))
+    result = PackApplyResult(
+        planned=sum(1 for entry in plan.entries if entry.action == "quarantine_folder"),
+        quarantine_dir=str(quarantine_dir) if quarantine_dir is not None else None,
+        dry_run=dry_run,
+    )
+    if plan.errors:
+        result.errors.extend(plan.errors)
+        return result
+    if require_reviewed and not approved:
+        result.errors.append({"path": str(plan_path), "error": "plan has no approved groups"})
+        return result
+
+    applied: list[PackPlanEntry] = []
+    root = Path(plan.root)
+    for index, entry in enumerate(plan.entries):
+        if entry.action != "quarantine_folder":
+            continue
+        if require_reviewed and index not in approved:
+            result.errors.append({"path": entry.folder_path, "error": f"group {index + 1} is not approved"})
+            continue
+        validation_errors = _validate_pack_entry(entry)
+        if validation_errors:
+            result.errors.extend(validation_errors)
+            continue
+        source = Path(entry.folder_path)
+        result.files_moved += len(entry.files) if dry_run else 0
+        result.bytes_quarantined += entry.total_bytes if dry_run else 0
+        if dry_run:
+            result.quarantined += 1
+            if not quiet:
+                console.print(f"[dim]Would quarantine folder: {source}[/dim]")
+            continue
+
+        assert quarantine_dir is not None
+        target = _quarantine_target(source, quarantine_dir)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(target))
+            applied_entry = entry.model_copy(update={"quarantine_path": str(target)})
+            applied.append(applied_entry)
+            result.quarantined += 1
+            result.files_moved += len(entry.files)
+            result.bytes_quarantined += entry.total_bytes
+            if db_path is not None:
+                _update_quarantined_rows(db_path, source, target, root)
+            if not quiet:
+                console.print(f"[green]Quarantined folder:[/green] {source} -> {target}")
+        except OSError as e:
+            result.errors.append({"path": str(source), "target": str(target), "error": str(e)})
+
+    if not dry_run:
+        if log_path is None:
+            log_path = _default_pack_log_path()
+        log_plan = plan.model_copy(update={"entries": applied, "errors": []})
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(json.dumps(log_plan.model_dump(), indent=2))
+        result.log_path = str(log_path)
+        if not quiet:
+            console.print(f"Pack undo log written to [cyan]{log_path}[/cyan]")
+
+    return result
+
+
+def undo_pack_log(
+    log_path: Path,
+    db_path: Path | None = None,
+    dry_run: bool = True,
+    quiet: bool = False,
+) -> PackApplyResult:
+    """Undo a previously applied pack quarantine log."""
+    plan = PackPlan.model_validate(json.loads(log_path.read_text()))
+    if db_path is None:
+        db_path = Path(plan.db_path)
+    result = PackApplyResult(planned=len(plan.entries), dry_run=dry_run, log_path=str(log_path))
+    root = Path(plan.root)
+
+    for entry in reversed(plan.entries):
+        if entry.quarantine_path is None:
+            result.errors.append({"path": entry.folder_path, "error": "log entry has no quarantine_path"})
+            continue
+        source = Path(entry.quarantine_path)
+        target = Path(entry.folder_path)
+        if not source.exists() or not source.is_dir():
+            result.errors.append({"path": str(source), "error": "quarantined folder missing"})
+            continue
+        if target.exists():
+            result.errors.append({"path": str(source), "target": str(target), "error": "original folder exists"})
+            continue
+        if dry_run:
+            result.restored += 1
+            result.files_moved += len(entry.files)
+            continue
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(target))
+            result.restored += 1
+            result.files_moved += len(entry.files)
+            if db_path is not None:
+                _update_quarantined_rows(db_path, source, target, root)
+            if not quiet:
+                console.print(f"[green]Restored pack folder:[/green] {source} -> {target}")
+        except OSError as e:
+            result.errors.append({"path": str(source), "target": str(target), "error": str(e)})
+    return result

@@ -311,6 +311,72 @@ class PackAuditReport(BaseModel):
     overlap_candidates: list[PackOverlapCandidate] = []
 
 
+class PackPlanFile(BaseModel):
+    path: str
+    relative_path: str
+    hash: str | None = None
+    size_bytes: int | None = None
+
+
+class PackPlanEntry(BaseModel):
+    source_type: str
+    source_group_id: int
+    folder_path: str
+    keep_folder_path: str
+    action: str = "quarantine_folder"
+    reason: str
+    file_count: int = 0
+    total_bytes: int = 0
+    shared_files: int | None = None
+    shared_bytes: int | None = None
+    smaller_folder_coverage: float | None = None
+    larger_folder_coverage: float | None = None
+    files: list[PackPlanFile] = []
+    quarantine_path: str | None = None
+
+
+class PackPlanSummary(BaseModel):
+    candidate_entries: int = 0
+    quarantine_entries: int = 0
+    review_entries: int = 0
+    ignored_entries: int = 0
+    planned_files: int = 0
+    planned_bytes: int = 0
+
+
+class PackPlan(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    root: str
+    db_path: str
+    source_report: str | None = None
+    summary: PackPlanSummary
+    entries: list[PackPlanEntry] = []
+    errors: list[dict] = []
+
+
+class PackReviewResult(BaseModel):
+    plan_path: str
+    output_path: str
+    total_groups: int = 0
+    approved_groups: int = 0
+    invalid_groups: list[int] = []
+
+
+class PackApplyResult(BaseModel):
+    planned: int = 0
+    quarantined: int = 0
+    restored: int = 0
+    files_moved: int = 0
+    bytes_quarantined: int = 0
+    errors: list[dict] = []
+    quarantine_dir: str | None = None
+    log_path: str | None = None
+    dry_run: bool = True
+
+
 class OrganizeEntry(BaseModel):
     old_path: str
     new_path: str
