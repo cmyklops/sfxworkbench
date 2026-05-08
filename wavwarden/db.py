@@ -120,6 +120,10 @@ _FILES_COLUMN_MIGRATIONS = {
     "metadata_sources": "TEXT",
 }
 
+_AUDIO_DESCRIPTORS_COLUMN_MIGRATIONS = {
+    "max_duration_s": "REAL",
+}
+
 
 def apply_schema(conn: sqlite3.Connection) -> None:
     """Idempotent schema creation — safe to call on an existing DB."""
@@ -128,6 +132,12 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     for column, definition in _FILES_COLUMN_MIGRATIONS.items():
         if column not in existing_columns:
             conn.execute(f"ALTER TABLE files ADD COLUMN {column} {definition}")
+    existing_descriptor_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(audio_descriptors)").fetchall()
+    }
+    for column, definition in _AUDIO_DESCRIPTORS_COLUMN_MIGRATIONS.items():
+        if column not in existing_descriptor_columns:
+            conn.execute(f"ALTER TABLE audio_descriptors ADD COLUMN {column} {definition}")
     conn.commit()
 
 

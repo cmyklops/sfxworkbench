@@ -177,11 +177,13 @@ with the default scan:
 
 ```bash
 uv run sfx similarity crawl PATH --db ~/.wavwarden/index.db --cache ~/.wavwarden/similarity
+uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --limit 20 --json
 ```
 
 This first slice stores deterministic descriptors in SQLite and skips unchanged
-files on later runs. The larger roadmap folds Sononym-style descriptor discovery
-together with a Soundminer-style resumable cache builder. See
+files on later runs. It can also rank cached descriptors against a query file.
+The larger roadmap folds Sononym-style descriptor discovery together with a
+Soundminer-style resumable cache builder. See
 [`docs/SIMILARITY.md`](docs/SIMILARITY.md).
 
 ## Standalone First-Look Audit

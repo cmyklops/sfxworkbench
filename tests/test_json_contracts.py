@@ -166,6 +166,37 @@ def test_similarity_crawl_json_contract(tmp_library: Path, tmp_db: Path, tmp_pat
     assert len(payload["report"]["descriptors"]) == 2
     assert payload["report"]["descriptors"][0]["duration_bucket"] is not None
 
+    search_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "similarity",
+                    "search",
+                    "--file",
+                    str(tmp_library / "sounds" / "AMB_RAIN_01.wav"),
+                    "--db",
+                    str(tmp_db),
+                    "--limit",
+                    "2",
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert search_payload["schema_version"] == 1
+    assert search_payload["command"] == "similarity_search"
+    assert search_payload["query_path"] == "<ROOT>/sounds/AMB_RAIN_01.wav"
+    assert search_payload["db_path"] == "<DB>"
+    assert search_payload["report"]["backend"] == "deterministic_v1"
+    assert search_payload["report"]["candidates_considered"] == 4
+    assert len(search_payload["report"]["results"]) == 2
+    assert search_payload["report"]["results"][0]["score"] >= search_payload["report"]["results"][1]["score"]
+
 
 def test_rename_json_contract(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
     runner.invoke(app, ["scan", str(tmp_library), "--db", str(tmp_db), "--no-hash", "--json"])

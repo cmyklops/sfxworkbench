@@ -11,7 +11,13 @@ from rich.table import Table
 
 from wavwarden import __version__
 from wavwarden.db import DEFAULT_DB_PATH, get_connection
-from wavwarden.models import SimilarityCrawlReport, SimilarityCrawlSummary, SimilarityDescriptor
+from wavwarden.models import (
+    SimilarityCrawlReport,
+    SimilarityCrawlSummary,
+    SimilarityDescriptor,
+    SimilaritySearchReport,
+    SimilaritySearchResult,
+)
 from wavwarden.utils import json_dumps
 
 console = Console()
@@ -146,6 +152,55 @@ def _descriptor_from_row(
         generated_at=generated_at,
         **metrics,
     )
+
+
+def _descriptor_from_metrics(
+    path: Path, *, backend: str, generated_at: str, max_duration_s: float | None, metrics: dict
+) -> SimilarityDescriptor:
+    stat = path.stat()
+    return SimilarityDescriptor(
+        file_id=0,
+        path=str(path),
+        backend=backend,
+        size_bytes=stat.st_size,
+        mtime=stat.st_mtime,
+        md5=None,
+        max_duration_s=max_duration_s,
+        duration_bucket=_duration_bucket(metrics.get("analyzed_duration_s")),
+        generated_at=generated_at,
+        **metrics,
+    )
+
+
+def _descriptor_vector(values: dict) -> tuple[float, ...] | None:
+    if values.get("error") is not None:
+        return None
+    raw = {
+        "peak": values.get("peak"),
+        "rms": values.get("rms"),
+        "crest_factor": values.get("crest_factor"),
+        "silence_ratio": values.get("silence_ratio"),
+        "clipping_count": values.get("clipping_count"),
+        "zero_crossing_rate": values.get("zero_crossing_rate"),
+        "transient_density": values.get("transient_density"),
+        "analyzed_duration_s": values.get("analyzed_duration_s"),
+    }
+    if raw["peak"] is None or raw["rms"] is None:
+        return None
+    return (
+        float(raw["peak"] or 0.0),
+        float(raw["rms"] or 0.0),
+        min(float(raw["crest_factor"] or 0.0), 20.0) / 20.0,
+        float(raw["silence_ratio"] or 0.0),
+        math.log1p(float(raw["clipping_count"] or 0.0)) / 10.0,
+        math.log1p(float(raw["zero_crossing_rate"] or 0.0)) / 10.0,
+        math.log1p(float(raw["transient_density"] or 0.0)) / 5.0,
+        math.log1p(float(raw["analyzed_duration_s"] or 0.0)) / 10.0,
+    )
+
+
+def _distance(left: tuple[float, ...], right: tuple[float, ...]) -> float:
+    return math.sqrt(sum((a - b) ** 2 for a, b in zip(left, right, strict=True)))
 
 
 def _write_descriptor(conn, descriptor: SimilarityDescriptor) -> None:
@@ -321,6 +376,99 @@ def crawl_similarity_descriptors(
     return report
 
 
+def search_similarity_descriptors(
+    query_path: Path,
+    db_path: Path = DEFAULT_DB_PATH,
+    max_duration_s: float | None = 30.0,
+    limit: int = 20,
+    quiet: bool = False,
+) -> SimilaritySearchReport:
+    """Search cached deterministic descriptors using a query audio file."""
+    query_path = query_path.expanduser().resolve()
+    if not query_path.exists():
+        raise ValueError(f"query file not found: {query_path}")
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+
+    generated_at = _utc_now()
+    query_metrics = _compute_audio_descriptor(query_path, max_duration_s=max_duration_s)
+    query_descriptor = _descriptor_from_metrics(
+        query_path,
+        backend=DETERMINISTIC_BACKEND,
+        generated_at=generated_at,
+        max_duration_s=max_duration_s,
+        metrics=query_metrics,
+    )
+    query_vector = _descriptor_vector(query_descriptor.model_dump())
+    if query_vector is None:
+        raise ValueError(f"could not analyze query file: {query_descriptor.error}")
+
+    conn = get_connection(db_path)
+    rows = conn.execute(
+        """
+        SELECT f.id AS file_id, f.path, f.filename, f.sample_rate, f.bit_depth,
+               f.channels, f.duration_s, d.analyzed_duration_s, d.peak, d.rms,
+               d.crest_factor, d.silence_ratio, d.clipping_count,
+               d.zero_crossing_rate, d.transient_density, d.duration_bucket, d.error
+        FROM audio_descriptors d
+        JOIN files f ON f.id = d.file_id
+        WHERE d.backend = ?
+          AND d.error IS NULL
+          AND ((? IS NULL AND d.max_duration_s IS NULL) OR d.max_duration_s = ?)
+        ORDER BY f.path
+        """,
+        (DETERMINISTIC_BACKEND, max_duration_s, max_duration_s),
+    ).fetchall()
+    conn.close()
+
+    scored: list[SimilaritySearchResult] = []
+    for row in rows:
+        candidate_values = dict(row)
+        candidate_vector = _descriptor_vector(candidate_values)
+        if candidate_vector is None:
+            continue
+        distance = _distance(query_vector, candidate_vector)
+        score = 1.0 / (1.0 + distance)
+        scored.append(
+            SimilaritySearchResult(
+                file_id=row["file_id"],
+                path=row["path"],
+                filename=row["filename"],
+                distance=distance,
+                score=score,
+                duration_s=row["duration_s"],
+                sample_rate=row["sample_rate"],
+                bit_depth=row["bit_depth"],
+                channels=row["channels"],
+                peak=row["peak"],
+                rms=row["rms"],
+                crest_factor=row["crest_factor"],
+                silence_ratio=row["silence_ratio"],
+                clipping_count=row["clipping_count"],
+                zero_crossing_rate=row["zero_crossing_rate"],
+                transient_density=row["transient_density"],
+                duration_bucket=row["duration_bucket"],
+            )
+        )
+
+    scored.sort(key=lambda result: (result.distance, result.path))
+    report = SimilaritySearchReport(
+        generated_at=generated_at,
+        tool_version=__version__,
+        backend=DETERMINISTIC_BACKEND,
+        query_path=str(query_path),
+        db_path=str(db_path),
+        max_duration_s=max_duration_s,
+        candidates_considered=len(scored),
+        limit=limit,
+        query_descriptor=query_descriptor,
+        results=scored[:limit],
+    )
+    if not quiet:
+        show_similarity_search_report(report)
+    return report
+
+
 def show_similarity_crawl_report(report: SimilarityCrawlReport) -> None:
     table = Table(title="Similarity descriptor crawl", show_lines=False)
     table.add_column("Metric")
@@ -331,4 +479,15 @@ def show_similarity_crawl_report(report: SimilarityCrawlReport) -> None:
     table.add_row("Skipped", f"{report.summary.skipped:,}")
     table.add_row("Errors", f"{report.summary.errors:,}")
     table.add_row("Cache", report.cache_path or "SQLite only")
+    console.print(table)
+
+
+def show_similarity_search_report(report: SimilaritySearchReport) -> None:
+    table = Table(title="Similarity search", show_lines=False)
+    table.add_column("Score", justify="right")
+    table.add_column("Distance", justify="right")
+    table.add_column("Filename")
+    table.add_column("Path")
+    for result in report.results:
+        table.add_row(f"{result.score:.3f}", f"{result.distance:.4f}", result.filename, result.path)
     console.print(table)

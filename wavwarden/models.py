@@ -106,6 +106,41 @@ class SimilarityCrawlReport(BaseModel):
     descriptors: list[SimilarityDescriptor] = []
 
 
+class SimilaritySearchResult(BaseModel):
+    file_id: int
+    path: str
+    filename: str
+    distance: float
+    score: float
+    duration_s: float | None = None
+    sample_rate: int | None = None
+    bit_depth: int | None = None
+    channels: int | None = None
+    peak: float | None = None
+    rms: float | None = None
+    crest_factor: float | None = None
+    silence_ratio: float | None = None
+    clipping_count: int = 0
+    zero_crossing_rate: float | None = None
+    transient_density: float | None = None
+    duration_bucket: str | None = None
+
+
+class SimilaritySearchReport(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    backend: str = "deterministic_v1"
+    query_path: str
+    db_path: str
+    max_duration_s: float | None = None
+    candidates_considered: int = 0
+    limit: int = 20
+    query_descriptor: SimilarityDescriptor
+    results: list[SimilaritySearchResult] = []
+
+
 class ScanErrorEntry(BaseModel):
     path: str
     action: str = "review"

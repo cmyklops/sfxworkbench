@@ -91,6 +91,7 @@ uv run sfx scan-errors --apply ~/reports/scan_error_plan.json
 uv run sfx search QUERY
 uv run sfx export --output library.csv
 uv run sfx similarity crawl PATH --db ~/.wavwarden/index.db --cache ~/.wavwarden/similarity
+uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --limit 20 --json
 uv run sfx dedupe --summary-only
 uv run sfx dedupe --output ~/reports/dedupe_plan.json
 uv run sfx dedupe --output ~/reports/dedupe_plan.json --safe-folder ~/CommercialLibraries/Master
@@ -154,6 +155,8 @@ python3 audit.py ~/CommercialLibraries --json
 - `similarity crawl`: experimental, optional deterministic descriptor crawler
   over indexed files. It stores SQLite descriptor rows, writes an optional cache
   run report, and skips unchanged files by size/mtime/hash anchors.
+- `similarity search`: experimental nearest-neighbor search over cached
+  deterministic descriptor rows using a query audio file.
 - `dedupe --summary-only`: finds exact MD5 duplicate groups and prints counts without writing a plan.
 - `dedupe --output PLAN.json`: writes a reviewed duplicate plan to an explicit path. Repeated `--safe-folder PATH` options prefer protected duplicate files as keep copies and mark protected extra copies as ignored. Repeated `--prefer-folder PATH` and `--prefer-extension EXT` options store preservation-priority evidence and choose keep copies accordingly.
 - `dedupe --review PLAN.json`: stamps all or selected duplicate groups as approved.

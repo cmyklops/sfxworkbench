@@ -157,6 +157,46 @@ def cmd_similarity_crawl(
         )
 
 
+@similarity_app.command("search")
+def cmd_similarity_search(
+    query_file: Annotated[Path, typer.Option("--file", help="Audio file to use as the similarity query.")],
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    max_duration: Annotated[
+        float | None,
+        typer.Option("--max-duration", help="Maximum seconds to analyze from the query; 0 reads the full file."),
+    ] = 30.0,
+    limit: Annotated[int, typer.Option("--limit", help="Maximum matches to return.")] = 20,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Search cached deterministic descriptors with a query audio file."""
+    from wavwarden.similarity import search_similarity_descriptors
+
+    effective_max_duration = None if max_duration == 0 else max_duration
+    try:
+        report = search_similarity_descriptors(
+            query_file,
+            db_path=db,
+            max_duration_s=effective_max_duration,
+            limit=limit,
+            quiet=json_output,
+        )
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "similarity_search",
+                    "query_path": query_file,
+                    "db_path": db,
+                    "report": report,
+                }
+            )
+        )
+
+
 # ---------------------------------------------------------------------------
 # sfx format
 # ---------------------------------------------------------------------------

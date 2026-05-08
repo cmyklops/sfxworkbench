@@ -6,7 +6,7 @@ from pathlib import Path
 
 from wavwarden.db import get_connection
 from wavwarden.scan import scan_library
-from wavwarden.similarity import crawl_similarity_descriptors
+from wavwarden.similarity import crawl_similarity_descriptors, search_similarity_descriptors
 
 
 def _make_tone(path: Path, *, sample_rate: int = 44100, frequency: float = 440.0, frames: int = 44100) -> Path:
@@ -104,3 +104,35 @@ def test_similarity_crawl_respects_json_descriptor_limit(tmp_path: Path, tmp_db:
     payload = json.loads((tmp_path / "cache" / f"similarity_crawl_{report.run_id}.json").read_text())
     assert payload["summary"]["total_files"] == 2
     assert len(payload["descriptors"]) == 1
+
+
+def test_similarity_search_returns_nearest_cached_descriptors(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    low = _make_tone(root / "low.wav", frequency=220.0)
+    high = _make_tone(root / "high.wav", frequency=1760.0)
+    query = _make_tone(tmp_path / "query.wav", frequency=220.0)
+    scan_library(root, tmp_db, skip_hash=False, quiet=True)
+    crawl_similarity_descriptors(root, db_path=tmp_db, cache_path=None, quiet=True)
+
+    report = search_similarity_descriptors(query, db_path=tmp_db, limit=2, quiet=True)
+
+    assert report.candidates_considered == 2
+    assert [result.path for result in report.results] == [str(low), str(high)]
+    assert report.results[0].score > report.results[1].score
+    assert report.results[0].distance < report.results[1].distance
+    assert report.query_descriptor.file_id == 0
+    assert report.query_descriptor.path == str(query.resolve())
+
+
+def test_similarity_search_requires_matching_analysis_window(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    _make_tone(root / "tone.wav")
+    query = _make_tone(tmp_path / "query.wav")
+    scan_library(root, tmp_db, skip_hash=False, quiet=True)
+    crawl_similarity_descriptors(root, db_path=tmp_db, cache_path=None, max_duration_s=0.5, quiet=True)
+
+    default_window = search_similarity_descriptors(query, db_path=tmp_db, quiet=True)
+    matching_window = search_similarity_descriptors(query, db_path=tmp_db, max_duration_s=0.5, quiet=True)
+
+    assert default_window.candidates_considered == 0
+    assert matching_window.candidates_considered == 1
