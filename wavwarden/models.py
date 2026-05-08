@@ -216,10 +216,17 @@ class SimilarityAuditFile(BaseModel):
 
 
 class SimilarityAuditPair(BaseModel):
+    scope: str = "file"
     left_file_id: int
     right_file_id: int
     left_path: str
     right_path: str
+    left_segment_index: int | None = None
+    left_segment_start_s: float | None = None
+    left_segment_end_s: float | None = None
+    right_segment_index: int | None = None
+    right_segment_start_s: float | None = None
+    right_segment_end_s: float | None = None
     distance: float
     score: float
     shared_duration_bucket: bool = False
@@ -251,6 +258,7 @@ class SimilarityAuditReport(BaseModel):
     backend: str = "deterministic_v1"
     root: str
     db_path: str
+    scope: str = "file"
     threshold: float = 0.92
     max_duration_s: float | None = None
     exclude_exact_md5: bool = True

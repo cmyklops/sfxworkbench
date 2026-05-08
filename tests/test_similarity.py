@@ -261,6 +261,7 @@ def test_similarity_audit_reports_groups_and_excludes_exact_md5_pairs(tmp_path: 
 
     report = audit_similarity_descriptors(root, db_path=tmp_db, threshold=0.95, quiet=True)
 
+    assert report.scope == "file"
     assert report.summary.descriptors_considered == 3
     assert report.summary.exact_md5_pairs_excluded == 1
     assert report.summary.candidate_pairs == 2
@@ -272,6 +273,27 @@ def test_similarity_audit_reports_groups_and_excludes_exact_md5_pairs(tmp_path: 
     with_exact = audit_similarity_descriptors(root, db_path=tmp_db, threshold=0.95, exclude_exact_md5=False, quiet=True)
     assert with_exact.summary.exact_md5_pairs_excluded == 0
     assert with_exact.summary.candidate_pairs == 3
+
+
+def test_similarity_audit_can_compare_cached_segments(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    first = _make_pulses(root / "pulses_a.wav")
+    second = _make_pulses(root / "pulses_b.wav")
+    scan_library(root, tmp_db, skip_hash=False, quiet=True)
+    crawl_similarity_descriptors(root, db_path=tmp_db, cache_path=None, quiet=True)
+
+    report = audit_similarity_descriptors(
+        root, db_path=tmp_db, threshold=0.95, scope="segment", exclude_exact_md5=False, quiet=True
+    )
+
+    assert report.scope == "segment"
+    assert report.summary.descriptors_considered == 4
+    assert report.summary.candidate_pairs >= 2
+    assert report.summary.candidate_groups >= 1
+    assert {file.path for group in report.groups for file in group.files} == {str(first), str(second)}
+    assert all(pair.scope == "segment" for group in report.groups for pair in group.pairs)
+    assert all(pair.left_segment_index is not None for group in report.groups for pair in group.pairs)
+    assert all(pair.right_segment_index is not None for group in report.groups for pair in group.pairs)
 
 
 def test_similarity_audit_writes_limited_report(tmp_path: Path, tmp_db: Path) -> None:

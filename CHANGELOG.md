@@ -17,7 +17,8 @@ versioning once public releases begin.
   for event-window search. Added RMS-based event segment detection during crawl
   plus `sfx similarity segments` to inspect cached segment windows. Added `sfx
   similarity audit` to produce report-only near-duplicate groups from cached
-  descriptor rows, excluding exact MD5 duplicate pairs by default.
+  descriptor rows, including `--scope segment` for matching event windows
+  across files, excluding exact MD5 duplicate pairs by default.
 - Added preservation-priority evidence for duplicate keep decisions. `sfx
   dedupe --output PLAN --prefer-folder PATH --prefer-extension EXT` and `sfx
   packs plan --prefer-folder PATH` store ordered rule evidence in generated

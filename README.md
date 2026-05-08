@@ -181,15 +181,16 @@ uv run sfx similarity segments PATH --db ~/.wavwarden/index.db --limit 200 --jso
 uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --limit 20 --json
 uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --scope segment --limit 20 --json
 uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --threshold 0.92 --output ~/reports/similarity_audit.json
+uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --scope segment --threshold 0.95 --json
 ```
 
 This first slice stores deterministic descriptors in SQLite and skips unchanged
 files on later runs. It captures loudness, silence, transient, zero-crossing,
 basic spectral-shape evidence, and RMS-based event windows, then can rank
 cached whole-file or segment descriptors against a query file and produce
-report-only near-duplicate groups. The larger roadmap folds Sononym-style
-descriptor discovery together with a Soundminer-style resumable cache builder.
-See
+report-only near-duplicate groups at either whole-file or event-window scope.
+The larger roadmap folds Sononym-style descriptor discovery together with a
+Soundminer-style resumable cache builder. See
 [`docs/SIMILARITY.md`](docs/SIMILARITY.md).
 
 ## Standalone First-Look Audit

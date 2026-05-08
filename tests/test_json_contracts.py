@@ -291,10 +291,39 @@ def test_similarity_crawl_json_contract(tmp_library: Path, tmp_db: Path, tmp_pat
     assert audit_payload["root"] == "<ROOT>"
     assert audit_payload["db_path"] == "<DB>"
     assert audit_payload["report_path"] == "<TMP>/similarity_audit.json"
+    assert audit_payload["report"]["scope"] == "file"
     assert audit_payload["report"]["threshold"] == 0.9
     assert audit_payload["report"]["summary"]["descriptors_considered"] == 4
     assert audit_payload["report"]["summary"]["reported_groups"] <= 2
     assert audit_out.exists()
+
+    segment_audit_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "similarity",
+                    "audit",
+                    str(tmp_library),
+                    "--db",
+                    str(tmp_db),
+                    "--scope",
+                    "segment",
+                    "--limit",
+                    "1",
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert segment_audit_payload["schema_version"] == 1
+    assert segment_audit_payload["command"] == "similarity_audit"
+    assert segment_audit_payload["report"]["scope"] == "segment"
+    assert isinstance(segment_audit_payload["report"]["groups"], list)
 
 
 def test_rename_json_contract(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:

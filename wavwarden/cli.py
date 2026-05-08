@@ -257,6 +257,10 @@ def cmd_similarity_audit(
         bool,
         typer.Option("--include-exact-md5", help="Include exact MD5 duplicate pairs in the similarity report."),
     ] = False,
+    scope: Annotated[
+        str,
+        typer.Option("--scope", help="Audit scope: 'file' for whole-file descriptors or 'segment' for event windows."),
+    ] = "file",
     output: Annotated[
         Path | None, typer.Option("--output", help="Write near-duplicate similarity report JSON to this path.")
     ] = None,
@@ -274,6 +278,7 @@ def cmd_similarity_audit(
             threshold=threshold,
             max_duration_s=effective_max_duration,
             exclude_exact_md5=not include_exact_md5,
+            scope=scope,
             limit=limit,
             output_path=output,
             quiet=json_output,
