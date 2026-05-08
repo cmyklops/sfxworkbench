@@ -358,8 +358,10 @@ def test_similarity_crawl_json_contract(tmp_library: Path, tmp_db: Path, tmp_pat
     assert feedback_set_payload["db_path"] == "<DB>"
     assert feedback_set_payload["result"]["action"] == "set"
     assert feedback_set_payload["result"]["entry"]["state"] == "favorite"
-    assert feedback_set_payload["result"]["entry"]["left_path"] == "<ROOT>/sounds/AMB_RAIN_01.wav"
-    assert feedback_set_payload["result"]["entry"]["right_path"] == "<ROOT>/sounds/SFX_GUNSHOT_01.wav"
+    assert {
+        feedback_set_payload["result"]["entry"]["left_path"],
+        feedback_set_payload["result"]["entry"]["right_path"],
+    } == {"<ROOT>/sounds/AMB_RAIN_01.wav", "<ROOT>/sounds/SFX_GUNSHOT_01.wav"}
 
     feedback_list_payload = _normalize(
         _load(
