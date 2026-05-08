@@ -179,3 +179,48 @@ def test_scan_errors_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
     assert payload["plan_path"] == "<TMP>/scan_error_plan.json"
     assert payload["plan"]["entries"][0]["action"] == "quarantine"
     assert out.exists()
+
+
+def test_packs_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
+    from wavwarden.db import get_connection
+
+    pack_a = tmp_library / "Pack A"
+    pack_b = tmp_library / "Pack B"
+    pack_a.mkdir()
+    pack_b.mkdir()
+    conn = get_connection(tmp_db)
+    for path, md5 in [
+        (pack_a / "one.wav", "A"),
+        (pack_a / "two.wav", "B"),
+        (pack_b / "one.wav", "A"),
+        (pack_b / "two.wav", "B"),
+    ]:
+        conn.execute(
+            """INSERT INTO files (path, filename, stem, extension, size_bytes, mtime, md5, scanned_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (str(path), path.name, path.stem, path.suffix, 10, 0.0, md5, "2026"),
+        )
+    conn.commit()
+    conn.close()
+
+    out = tmp_path / "pack_report.json"
+    payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                ["packs", "audit", str(tmp_library), "--db", str(tmp_db), "--output", str(out), "--json"],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "packs_audit"
+    assert payload["db_path"] == "<DB>"
+    assert payload["root"] == "<ROOT>"
+    assert payload["report_path"] == "<TMP>/pack_report.json"
+    assert payload["report"]["schema_version"] == 1
+    assert payload["report"]["summary"]["exact_duplicate_groups"] == 1
+    assert out.exists()

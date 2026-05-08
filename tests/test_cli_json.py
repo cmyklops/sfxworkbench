@@ -46,3 +46,20 @@ def test_clean_dedupe_rename_json(tmp_library, tmp_db, tmp_path) -> None:
     rename = runner.invoke(app, ["rename", str(tmp_library), "--db", str(tmp_db), "--json"])
     assert rename.exit_code == 0
     assert json.loads(rename.stdout)["command"] == "rename"
+
+
+def test_packs_audit_json(tmp_library, tmp_db, tmp_path) -> None:
+    scan = runner.invoke(app, ["scan", str(tmp_library), "--db", str(tmp_db), "--json"])
+    assert scan.exit_code == 0
+
+    out = tmp_path / "packs.json"
+    packs = runner.invoke(
+        app, ["packs", "audit", str(tmp_library), "--db", str(tmp_db), "--output", str(out), "--json"]
+    )
+
+    assert packs.exit_code == 0
+    payload = json.loads(packs.stdout)
+    assert payload["command"] == "packs_audit"
+    assert payload["report_path"] == str(out)
+    assert "summary" in payload["report"]
+    assert out.exists()

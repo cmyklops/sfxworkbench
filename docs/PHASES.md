@@ -27,6 +27,7 @@ uv run sfx dedupe --summary-only
 uv run sfx dedupe --output ~/reports/dedupe_plan.json
 uv run sfx dedupe --review dedupe_plan.json --approve-all
 uv run sfx dedupe --apply dedupe_plan.json --require-reviewed
+uv run sfx packs audit PATH --output ~/reports/pack_overlap_report.json
 uv run sfx rename PATH --pattern ucs
 uv run sfx rename PATH --pattern safe
 uv run sfx rename PATH --pattern ucs --apply --log rename_log.json
@@ -56,6 +57,7 @@ python3 audit.py ~/CommercialLibraries --json
 - `dedupe --output PLAN.json`: writes a reviewed duplicate plan to an explicit path.
 - `dedupe --review PLAN.json`: stamps all or selected duplicate groups as approved.
 - `dedupe --apply`: validates size/hash and quarantines by default; use `--require-reviewed` to refuse unapproved plans.
+- `packs audit`: report-only exact duplicate folder and pack-overlap detection; no filesystem or SQLite mutation.
 - `rename`: previews UCS-oriented or safe filename/path changes, refuses collisions, applies with undo log. `--allow-partial` can apply valid entries while keeping unresolved collisions visible in the result.
 
 ## Phase 2 — Cleanup Tooling
@@ -65,7 +67,7 @@ Pack/folder duplicate detection is the next professional-grade safety layer
 after exact file dedupe and filename/path cleanup. It should ship as a reviewed
 report/plan/apply workflow before broad folder organization features:
 
-- `sfx packs audit`: detect exact duplicate folders and high-overlap packs.
+- `sfx packs audit`: detect exact duplicate folders and high-overlap packs. Implemented as report-only.
 - `sfx packs plan`: create a reviewed consolidation/quarantine plan.
 - `sfx packs apply`: quarantine redundant folders by default, validate hashes
   before moving, update SQLite paths, and write an undo log.
@@ -171,6 +173,7 @@ Command contracts:
 - `dedupe --output PLAN --json`: includes duplicate `summary`, `groups`, and explicit `plan_path`.
 - `dedupe --review PLAN --json`: includes review counts and output path.
 - `dedupe --apply PLAN --json`: includes `result`; default apply quarantines files.
+- `packs audit PATH --json`: includes `root`, `db_path`, optional `report_path`, and a versioned report with summary counts, exact duplicate folder groups, and overlap candidates.
 - `rename PATH --json`: includes a dry-run `plan`.
 - `rename PATH --apply --json`: includes `plan` and `result`.
 - `rename --undo LOG --apply --json`: includes undo `result`.

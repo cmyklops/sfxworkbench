@@ -29,6 +29,7 @@ uv run sfx dedupe --db ~/.wavwarden/index.db --summary-only
 uv run sfx dedupe --db ~/.wavwarden/index.db --output ~/reports/dedupe_plan.json
 uv run sfx dedupe --review ~/reports/dedupe_plan.json --approve-all
 uv run sfx dedupe --apply ~/reports/dedupe_plan.json --db ~/.wavwarden/index.db --require-reviewed
+uv run sfx packs audit ~/CommercialLibraries --db ~/.wavwarden/index.db --output ~/reports/pack_overlap_report.json
 uv run sfx search "gunshot exterior"
 uv run sfx rename ~/CommercialLibraries --pattern ucs                   # dry-run
 uv run sfx rename ~/CommercialLibraries --pattern safe                  # dry-run
@@ -62,6 +63,7 @@ sfx scan-errors → classify scan_error rows → review/quarantine obvious artif
 sfx dedupe     →  GROUP BY md5 WHERE count > 1  →  summary or reviewed plan JSON
 sfx dedupe --review PLAN → approve groups
 sfx dedupe --apply PLAN → validate size/hash → quarantine duplicates + update SQLite
+sfx packs audit PATH → folder hash signatures + overlap candidates → report JSON
 sfx rename PATH → preview/apply UCS-oriented or safe names → rename_log_TIMESTAMP.json
 sfx audit      →  SELECT queries against index
 sfx search Q   →  FTS5 MATCH query on files_fts
@@ -76,6 +78,7 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 - **`scan.py`** — incremental: skips files where `mtime + size_bytes` match the existing DB row. Junk detection uses shared `junk.py`; junk files are never indexed.
 - **`scan_errors.py`** — plans quarantine for unreadable indexed files. Only all-zero blobs and AppleDouble artifacts are auto-marked `quarantine`; broken RIFF files stay `review`.
 - **`dedupe.py`** — exact MD5 duplicate grouping. Writes versioned JSON plans and quarantines by default on apply.
+- **`packs.py`** — report-only pack/folder duplicate detection. Computes recursive folder signatures from indexed MD5 hashes and reports exact duplicate folders plus high-overlap pack candidates.
 - **`rename.py`** — UCS-oriented and safe filename/path rename preview/apply/undo. Refuses collisions and updates SQLite paths after apply.
 - **`ucs.py`** — shared UCS-looking filename heuristic/parser. This is not a full official UCS catalog validator yet.
 
@@ -108,7 +111,7 @@ Full phase spec: `docs/PHASES.md`. Current status:
 - **Phase 0** ✅ — `audit.py` standalone auditor
 - **Phase 1** ✅ — `sfx` CLI package (clean, scan, dedupe, audit, search, export, JSON output)
 - **Phase 2** 🔜 — metadata writing (`sfx tag`); `sfx rename` is now the first cleanup feature
-- **Pack/folder duplicate detection** 🔜 — reviewed report/plan/apply workflow for duplicated or overlapping commercial packs; quarantine-first, no default deletion
+- **Pack/folder duplicate detection** 🔜 — `sfx packs audit` report is implemented; reviewed plan/apply workflow for duplicated or overlapping commercial packs remains next
 - **Phase 3** ⬜ — Textual TUI first, Tauri later
 
 Additional planning docs:

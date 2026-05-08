@@ -21,17 +21,24 @@ Common real-library cases:
 Exact file dedupe can remove repeated files, but it cannot explain whether a
 whole folder is redundant, partial, newer, or worth preserving.
 
-## Proposed Commands
+## Commands
+
+Implemented:
 
 ```bash
 uv run sfx packs audit PATH --db ~/.wavwarden/index.db --output ~/reports/pack_overlap_report.json
+```
+
+Planned:
+
+```bash
 uv run sfx packs plan --report ~/reports/pack_overlap_report.json --output ~/reports/pack_consolidation_plan.json
 uv run sfx packs review ~/reports/pack_consolidation_plan.json --approve-group 1
 uv run sfx packs apply ~/reports/pack_consolidation_plan.json --require-reviewed
 ```
 
-Command names may change before implementation, but the workflow should remain:
-audit first, plan second, reviewed apply last.
+Plan/apply command names may change before implementation, but the workflow
+should remain: audit first, plan second, reviewed apply last.
 
 ## Detection Tiers
 

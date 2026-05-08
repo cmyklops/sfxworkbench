@@ -133,6 +133,57 @@ class DedupeSummary(BaseModel):
     largest_group_copies: int = 0
 
 
+class PackFolderSummary(BaseModel):
+    path: str
+    file_count: int = 0
+    total_bytes: int = 0
+    unique_hashes: int = 0
+
+
+class PackExactGroup(BaseModel):
+    group_id: int
+    file_count: int = 0
+    total_bytes: int = 0
+    same_relative_paths: bool = False
+    folders: list[PackFolderSummary] = []
+
+
+class PackOverlapCandidate(BaseModel):
+    group_id: int
+    folder_a: PackFolderSummary
+    folder_b: PackFolderSummary
+    shared_files: int = 0
+    shared_bytes: int = 0
+    smaller_folder_coverage: float = 0.0
+    larger_folder_coverage: float = 0.0
+    unique_files_a: int = 0
+    unique_files_b: int = 0
+    classification: str = "overlap"
+
+
+class PackAuditSummary(BaseModel):
+    folders_analyzed: int = 0
+    exact_duplicate_groups: int = 0
+    exact_duplicate_folders: int = 0
+    overlap_candidates: int = 0
+    indexed_files_considered: int = 0
+    files_without_hash: int = 0
+
+
+class PackAuditReport(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    root: str
+    db_path: str
+    min_files: int = 2
+    overlap_threshold: float = 0.95
+    summary: PackAuditSummary
+    exact_groups: list[PackExactGroup] = []
+    overlap_candidates: list[PackOverlapCandidate] = []
+
+
 class DedupeReviewResult(BaseModel):
     plan_path: str
     output_path: str
