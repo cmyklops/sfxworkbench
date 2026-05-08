@@ -43,6 +43,10 @@ def test_clean_dedupe_rename_json(tmp_library, tmp_db, tmp_path) -> None:
     assert groups.exit_code == 0
     assert json.loads(groups.stdout)["command"] == "groups_audit"
 
+    format_audit = runner.invoke(app, ["format", "audit", str(tmp_library), "--db", str(tmp_db), "--json"])
+    assert format_audit.exit_code == 0
+    assert json.loads(format_audit.stdout)["command"] == "format_audit"
+
     with runner.isolated_filesystem(temp_dir=tmp_path):
         dedupe = runner.invoke(app, ["dedupe", "--db", str(tmp_db), "--summary-only", "--json"])
         assert dedupe.exit_code == 0

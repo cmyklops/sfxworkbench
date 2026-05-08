@@ -32,6 +32,13 @@ groups_app = typer.Typer(
     rich_markup_mode="rich",
 )
 app.add_typer(groups_app, name="groups")
+format_app = typer.Typer(
+    name="format",
+    help="Report audio format consistency within related sound groups.",
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+)
+app.add_typer(format_app, name="format")
 metadata_app = typer.Typer(
     name="metadata",
     help="Report metadata coverage and sample-rate hygiene.",
@@ -68,6 +75,54 @@ def _main(
     ] = None,
 ) -> None:
     """sfx — sound library hygiene toolkit."""
+
+
+# ---------------------------------------------------------------------------
+# sfx format
+# ---------------------------------------------------------------------------
+
+
+@format_app.command("audit")
+def cmd_format_audit(
+    path: Annotated[Path, typer.Argument(help="Root path of the library to analyze.")],
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    output: Annotated[
+        Path | None, typer.Option("--output", help="Write format consistency report JSON to this path.")
+    ] = None,
+    min_files: Annotated[int, typer.Option("--min-files", help="Minimum related files required to inspect.")] = 2,
+    limit: Annotated[int, typer.Option("--limit", help="Maximum inconsistent groups to include; 0 writes all.")] = 200,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Report mixed sample rates, bit depths, or channel counts inside related groups."""
+    from wavwarden.format_audit import build_format_audit_report, show_format_audit_report, write_format_audit_report
+
+    if not path.exists():
+        console.print(f"[red]Error: path not found: {path}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        report = build_format_audit_report(path, db_path=db, min_files=min_files, limit=limit)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
+    if output is not None:
+        write_format_audit_report(report, output, quiet=json_output)
+    elif not json_output:
+        show_format_audit_report(report)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "format_audit",
+                    "root": path,
+                    "db_path": db,
+                    "report_path": output,
+                    "report": report,
+                }
+            )
+        )
 
 
 # ---------------------------------------------------------------------------

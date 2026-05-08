@@ -299,6 +299,52 @@ def test_groups_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: P
     assert out.exists()
 
 
+def test_format_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
+    from wavwarden.db import get_connection
+
+    root = tmp_library
+    conn = get_connection(tmp_db)
+    for name, sample_rate in [("Metal Hit 01.wav", 44100), ("Metal Hit 02.wav", 48000)]:
+        path = root / "Impacts" / name
+        conn.execute(
+            """INSERT INTO files (
+                path, filename, stem, extension, size_bytes, mtime, md5,
+                sample_rate, bit_depth, channels, duration_s, scanned_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (str(path), path.name, path.stem, path.suffix, 10, 0.0, name, sample_rate, 24, 2, 1.0, "2026"),
+        )
+    conn.commit()
+    conn.close()
+
+    out = tmp_path / "format_report.json"
+    payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                ["format", "audit", str(root), "--db", str(tmp_db), "--output", str(out), "--json"],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "format_audit"
+    assert payload["root"] == "<ROOT>"
+    assert payload["db_path"] == "<DB>"
+    assert payload["report_path"] == "<TMP>/format_report.json"
+    assert payload["report"]["schema_version"] == 1
+    assert payload["report"]["summary"]["inconsistent_groups"] == 1
+    assert payload["report"]["groups"][0]["action"] == "review_only"
+    assert payload["report"]["groups"][0]["inconsistencies"][0] == {
+        "field": "sample_rate",
+        "values": [44100, 48000],
+    }
+    assert out.exists()
+
+
 def test_organize_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
     folder = tmp_library / "01 Pack"
     folder.mkdir()

@@ -49,6 +49,10 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
 - Related group candidates: 15,331 groups covering 78,735 files.
 - Related group mix: 15,163 numbered-sequence groups, 168 channel-set groups,
   147 groups with mixed sample-rate/bit-depth/channel formats.
+- Format consistency report: `/Users/mattwesdock/reports/format_audit_20260508.json`.
+- Format consistency candidates: 147 related groups covering 3,080 files.
+- Format inconsistency mix: 93 sample-rate groups, 32 bit-depth groups,
+  61 channel-count groups.
 
 Current audit focus:
 
@@ -56,13 +60,13 @@ Current audit focus:
 - Filename issues: cleared.
 - Metadata/sample-rate reporting: implemented as report-only.
 - Related sound group reporting: implemented as report-only.
+- Format consistency reporting: implemented as report-only.
 
 ## Next
 
 1. Move on from folder nesting unless you want a manual review flow for semantic wrappers.
-2. Decide whether unusual sample rates are informational only or should become
-   a reviewed `normalize` candidate report later.
-3. Use related group evidence to shape future tag suggestions and TUI review.
+2. Use related group and format evidence to shape future tag suggestions and TUI review.
+3. Keep audio conversion and loudness normalization out of scope.
 
 ## Later
 

@@ -36,6 +36,7 @@ uv run sfx scan PATH                  # index audio files into SQLite
 uv run sfx audit                      # report index health
 uv run sfx metadata audit --output ~/reports/metadata_report.json
 uv run sfx groups audit PATH --output ~/reports/related_groups_report.json
+uv run sfx format audit PATH --output ~/reports/format_report.json
 uv run sfx scan-errors --output ~/reports/scan_error_plan.json
 uv run sfx scan-errors --apply ~/reports/scan_error_plan.json
 uv run sfx search QUERY               # FTS filename search
@@ -100,11 +101,13 @@ python3 audit.py ~/CommercialLibraries --json
   files with unusual sample rates before any tag-writing work is attempted.
 - `groups audit` is report-only; it infers obvious related sound groups such as
   numbered takes and channel sets from indexed filenames.
+- `format audit` is report-only; it flags mixed sample rate, bit depth, or
+  channel counts inside related groups without recommending conversion.
 - `rename` previews first, refuses collisions, writes an undo log on apply, and
   can restore from that log. `--pattern portable` handles Unicode normalization,
   risky cross-platform characters, non-ASCII names, and conservative long-path shortening.
-- `normalize` is intentionally not part of the beta safety promise yet because
-  it modifies audio content.
+- Audio format conversion and loudness changes are out of scope for the beta
+  safety promise; wavwarden preserves original audio content.
 
 ## Tests
 

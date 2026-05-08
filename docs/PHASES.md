@@ -24,6 +24,7 @@ uv run sfx scan PATH
 uv run sfx audit
 uv run sfx metadata audit --output ~/reports/metadata_report.json
 uv run sfx groups audit PATH --output ~/reports/related_groups_report.json
+uv run sfx format audit PATH --output ~/reports/format_report.json
 uv run sfx scan-errors --output ~/reports/scan_error_plan.json
 uv run sfx scan-errors --apply ~/reports/scan_error_plan.json
 uv run sfx search QUERY
@@ -73,6 +74,8 @@ python3 audit.py ~/CommercialLibraries --json
 - `metadata audit`: report-only metadata coverage and unusual sample-rate review.
 - `groups audit`: report-only related sound groups inferred from numbered takes
   and channel-set filename patterns.
+- `format audit`: report-only sample-rate, bit-depth, and channel-count consistency
+  review within related groups. It does not recommend or perform conversion.
 - `scan-errors`: writes a review plan for unreadable indexed files; quarantines
   only obvious artifacts/all-zero blobs by default.
 - `dedupe --summary-only`: finds exact MD5 duplicate groups and prints counts without writing a plan.
@@ -137,6 +140,12 @@ Related group detection is implemented first as report-only:
 filenames. Future versions can layer in path tokens, UCS categories, metadata,
 and exact/perceptual similarity.
 
+Format consistency is also report-only:
+`sfx format audit PATH`, flagging related groups where files differ in sample
+rate, bit depth, or channel count. These differences are treated as preservation
+evidence for review, not cleanup instructions. Automatic format conversion and
+loudness normalization are out of scope for the Internal Studio Beta.
+
 Physical folder cleanup is useful for browsing and bulk edits, but future
 integrations should primarily consume indexed metadata and inferred group
 relationships instead of depending on folder layout.
@@ -174,7 +183,6 @@ set without copying unclear or incompatible code into the repo:
 | `pyacoustid` | MIT | Optional perceptual duplicate candidate detection after exact MD5 dedupe. |
 | Textual | MIT | First review UI: duplicate review, rename preview, audit drilldown, approval flows. |
 | PANNs inference | MIT | Optional reviewed audio-listening tag suggestions. |
-| `pyloudnorm` | MIT | Later loudness analysis for the experimental normalize track. |
 
 Use Chromaprint via `pyacoustid`/`fpcalc` as an optional external capability
 rather than vendoring Chromaprint code. Keep ML tagging review-only and outside
@@ -186,8 +194,8 @@ See [`UCS.md`](UCS.md) for the UCS data plan and
 roadmap. See [`PACK_DEDUPLICATION.md`](PACK_DEDUPLICATION.md) for the
 pack/folder duplicate detection and consolidation plan.
 
-`sfx normalize` is later/experimental because sample-rate and channel-layout
-changes modify audio content.
+Audio format conversion and loudness normalization are not part of the beta
+roadmap because wavwarden should preserve original audio content.
 
 ## Phase 3 — Review UI
 
@@ -246,6 +254,7 @@ Command contracts:
 - `audit --json`: includes `db_path` and aggregate `AuditResult` fields.
 - `metadata audit --json`: includes `db_path`, optional `report_path`, and a versioned report with missing BWF/iXML metadata entries and unusual sample-rate entries.
 - `groups audit PATH --json`: includes `root`, `db_path`, optional `report_path`, and a versioned report of inferred related sound groups.
+- `format audit PATH --json`: includes `root`, `db_path`, optional `report_path`, and a versioned report of format inconsistencies within related groups.
 - `scan-errors --json`: includes a scan-error `plan` with classifications and actions.
 - `scan-errors --apply PLAN --json`: includes quarantine `result`.
 - `search QUERY --json`: includes `query`, `db_path`, and `results`.
