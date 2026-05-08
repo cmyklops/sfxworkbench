@@ -20,6 +20,11 @@ class AudioInfo(BaseModel):
     subtype: str | None = None  # e.g. "PCM_24", "FLOAT"
     has_bext: bool = False
     has_ixml: bool = False
+    has_riff_info: bool = False
+    has_adm: bool = False
+    has_cue_markers: bool = False
+    has_sampler: bool = False
+    metadata_sources: list[str] = []
     error: str | None = None
 
 

@@ -16,6 +16,15 @@ Best immediate candidate:
   metadata reads, including BWF, iXML, RIFF INFO, RF64, ADM, cue markers, and
   sampler chunks. Evaluate it before expanding wavwarden's custom RIFF parsing.
 
+Current implementation:
+
+- `audio.read_audio_info()` keeps `soundfile` as the required core audio reader.
+- If the optional `metadata` extra is installed, wavwarden probes WAV metadata
+  with `wavinfo` and records read-only presence flags for BWF/iXML, RIFF INFO,
+  ADM, cue markers, and sampler chunks in `AudioInfo`, SQLite scan rows, and
+  CSV export.
+- Install the optional reader with `uv pip install -e ".[metadata,dev]"`.
+
 Potential additive tables:
 
 - `metadata_fields`: normalized metadata by file, namespace, key, value, source

@@ -1,9 +1,11 @@
 """Tests for wavwarden.scan."""
 
+import json
 import time
 from pathlib import Path
 
 from wavwarden.db import get_connection
+from wavwarden.models import AudioInfo
 from wavwarden.scan import scan_library
 
 
@@ -82,6 +84,33 @@ def test_scan_ucs_detection(tmp_library: Path, tmp_db: Path) -> None:
     assert by_name.get("AMB_RAIN_01.wav") == 1
     assert by_name.get("SFX_GUNSHOT_01.wav") == 1
     assert by_name.get("BOOM.wav") == 0
+
+
+def test_scan_stores_extended_metadata_flags(monkeypatch, tmp_library: Path, tmp_db: Path) -> None:
+    """Optional metadata-reader flags should be persisted for export/TUI use."""
+
+    def fake_read_audio_info(path: Path) -> AudioInfo:
+        return AudioInfo(
+            sample_rate=48000,
+            channels=2,
+            has_riff_info=path.name == "AMB_RAIN_01.wav",
+            has_cue_markers=path.name == "AMB_RAIN_01.wav",
+            metadata_sources=["soundfile", "wavinfo"],
+        )
+
+    monkeypatch.setattr("wavwarden.scan.audio_mod.read_audio_info", fake_read_audio_info)
+
+    scan_library(tmp_library, tmp_db, skip_hash=True)
+    conn = get_connection(tmp_db)
+    row = conn.execute(
+        "SELECT has_riff_info, has_cue_markers, metadata_sources FROM files WHERE filename = ?",
+        ("AMB_RAIN_01.wav",),
+    ).fetchone()
+    conn.close()
+
+    assert row["has_riff_info"] == 1
+    assert row["has_cue_markers"] == 1
+    assert json.loads(row["metadata_sources"]) == ["soundfile", "wavinfo"]
 
 
 def test_scan_md5_when_not_skipped(tmp_library: Path, tmp_db: Path) -> None:

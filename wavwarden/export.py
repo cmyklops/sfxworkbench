@@ -13,7 +13,8 @@ def export_csv(db_path: Path, output_path: Path) -> int:
         """
         SELECT path, filename, stem, extension, size_bytes, mtime, md5,
                sample_rate, bit_depth, channels, duration_s, subtype,
-               has_bext, has_ixml, is_ucs, scan_error, scanned_at
+               has_bext, has_ixml, has_riff_info, has_adm, has_cue_markers,
+               has_sampler, metadata_sources, is_ucs, scan_error, scanned_at
         FROM files
         ORDER BY path
         """

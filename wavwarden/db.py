@@ -22,6 +22,11 @@ CREATE TABLE IF NOT EXISTS files (
     subtype TEXT,
     has_bext INTEGER DEFAULT 0,
     has_ixml INTEGER DEFAULT 0,
+    has_riff_info INTEGER DEFAULT 0,
+    has_adm INTEGER DEFAULT 0,
+    has_cue_markers INTEGER DEFAULT 0,
+    has_sampler INTEGER DEFAULT 0,
+    metadata_sources TEXT,
     is_ucs INTEGER DEFAULT 0,
     scan_error TEXT,
     scanned_at TEXT NOT NULL
@@ -66,10 +71,22 @@ CREATE INDEX IF NOT EXISTS idx_files_size ON files(size_bytes);
 CREATE INDEX IF NOT EXISTS idx_fn_issues_file ON fn_issues(file_id);
 """
 
+_FILES_COLUMN_MIGRATIONS = {
+    "has_riff_info": "INTEGER DEFAULT 0",
+    "has_adm": "INTEGER DEFAULT 0",
+    "has_cue_markers": "INTEGER DEFAULT 0",
+    "has_sampler": "INTEGER DEFAULT 0",
+    "metadata_sources": "TEXT",
+}
+
 
 def apply_schema(conn: sqlite3.Connection) -> None:
     """Idempotent schema creation — safe to call on an existing DB."""
     conn.executescript(_SCHEMA_SQL)
+    existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(files)").fetchall()}
+    for column, definition in _FILES_COLUMN_MIGRATIONS.items():
+        if column not in existing_columns:
+            conn.execute(f"ALTER TABLE files ADD COLUMN {column} {definition}")
     conn.commit()
 
 

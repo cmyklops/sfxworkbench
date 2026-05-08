@@ -1,6 +1,7 @@
 """sfx scan command — index a library path into SQLite."""
 
 import hashlib
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -102,6 +103,7 @@ def scan_library(
         stem = f.stem
         is_ucs = looks_ucs(stem)
         scan_error = audio_info.error if audio_info else None
+        metadata_sources = json.dumps(audio_info.metadata_sources if audio_info else [])
 
         # Single upsert with RETURNING — avoids the second SELECT id query.
         row = conn.execute(
@@ -109,8 +111,9 @@ def scan_library(
             INSERT INTO files (
                 path, filename, stem, extension, size_bytes, mtime, md5,
                 sample_rate, bit_depth, channels, duration_s, subtype,
-                has_bext, has_ixml, is_ucs, scan_error, scanned_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                has_bext, has_ixml, has_riff_info, has_adm, has_cue_markers,
+                has_sampler, metadata_sources, is_ucs, scan_error, scanned_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(path) DO UPDATE SET
                 filename=excluded.filename,
                 stem=excluded.stem,
@@ -125,6 +128,11 @@ def scan_library(
                 subtype=excluded.subtype,
                 has_bext=excluded.has_bext,
                 has_ixml=excluded.has_ixml,
+                has_riff_info=excluded.has_riff_info,
+                has_adm=excluded.has_adm,
+                has_cue_markers=excluded.has_cue_markers,
+                has_sampler=excluded.has_sampler,
+                metadata_sources=excluded.metadata_sources,
                 is_ucs=excluded.is_ucs,
                 scan_error=excluded.scan_error,
                 scanned_at=excluded.scanned_at
@@ -145,6 +153,11 @@ def scan_library(
                 audio_info.subtype if audio_info else None,
                 int(audio_info.has_bext) if audio_info else 0,
                 int(audio_info.has_ixml) if audio_info else 0,
+                int(audio_info.has_riff_info) if audio_info else 0,
+                int(audio_info.has_adm) if audio_info else 0,
+                int(audio_info.has_cue_markers) if audio_info else 0,
+                int(audio_info.has_sampler) if audio_info else 0,
+                metadata_sources,
                 int(is_ucs),
                 scan_error,
                 now_str,

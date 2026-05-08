@@ -18,6 +18,8 @@ Project docs:
 
 ```bash
 uv pip install -e ".[dev]"
+# Optional richer WAV metadata reads:
+uv pip install -e ".[metadata,dev]"
 ```
 
 ## Current CLI

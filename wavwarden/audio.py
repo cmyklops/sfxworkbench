@@ -1,6 +1,14 @@
-"""Audio metadata reader using soundfile (handles 32-bit float, RF64, AIFF, FLAC)."""
+"""Audio metadata readers.
+
+`soundfile` remains the required reader for core audio properties. If the
+optional `wavinfo` package is installed, wavwarden also records richer
+professional WAV metadata presence flags without making metadata writes.
+"""
+
+from __future__ import annotations
 
 import struct
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from wavwarden.models import AudioInfo
@@ -43,6 +51,44 @@ def _walk_riff_chunks(path: Path) -> tuple[bool, bool]:
     return has_bext, has_ixml
 
 
+def _scope_has_payload(scope: object) -> bool:
+    if scope is None:
+        return False
+    if isinstance(scope, (str, bytes)):
+        return bool(scope)
+    if isinstance(scope, Mapping):
+        return any(_scope_has_payload(value) for value in scope.values())
+    if isinstance(scope, Sequence):
+        return any(_scope_has_payload(value) for value in scope)
+    values = getattr(scope, "__dict__", None)
+    if isinstance(values, dict):
+        return any(_scope_has_payload(value) for key, value in values.items() if not key.startswith("_"))
+    return bool(scope)
+
+
+def _read_wavinfo_metadata(path: Path) -> dict[str, object]:
+    """Read optional extended WAV metadata flags via wavinfo when available."""
+    try:
+        import wavinfo
+    except ImportError:
+        return {"metadata_sources": []}
+
+    try:
+        reader = wavinfo.WavInfoReader(path)
+    except Exception:
+        return {"metadata_sources": ["wavinfo_error"]}
+
+    return {
+        "has_bext": _scope_has_payload(getattr(reader, "bext", None)),
+        "has_ixml": _scope_has_payload(getattr(reader, "ixml", None)),
+        "has_riff_info": _scope_has_payload(getattr(reader, "info", None)),
+        "has_adm": _scope_has_payload(getattr(reader, "adm", None)),
+        "has_cue_markers": _scope_has_payload(getattr(reader, "cues", None)),
+        "has_sampler": _scope_has_payload(getattr(reader, "smpl", None)),
+        "metadata_sources": ["wavinfo"],
+    }
+
+
 def read_audio_info(path: Path) -> AudioInfo:
     """Read audio metadata using soundfile (handles 32-bit float, RF64, AIFF, FLAC)."""
     try:
@@ -64,9 +110,26 @@ def read_audio_info(path: Path) -> AudioInfo:
 
     has_bext = False
     has_ixml = False
+    has_riff_info = False
+    has_adm = False
+    has_cue_markers = False
+    has_sampler = False
+    metadata_sources = ["soundfile"]
     ext = path.suffix.lower()
     if ext in (".wav", ".w64", ".rf64"):
         has_bext, has_ixml = _walk_riff_chunks(path)
+        if has_bext or has_ixml:
+            metadata_sources.append("riff_walk")
+        wavinfo_metadata = _read_wavinfo_metadata(path)
+        has_bext = has_bext or bool(wavinfo_metadata.get("has_bext"))
+        has_ixml = has_ixml or bool(wavinfo_metadata.get("has_ixml"))
+        has_riff_info = bool(wavinfo_metadata.get("has_riff_info"))
+        has_adm = bool(wavinfo_metadata.get("has_adm"))
+        has_cue_markers = bool(wavinfo_metadata.get("has_cue_markers"))
+        has_sampler = bool(wavinfo_metadata.get("has_sampler"))
+        sources = wavinfo_metadata.get("metadata_sources", [])
+        if isinstance(sources, list):
+            metadata_sources.extend(str(source) for source in sources)
 
     return AudioInfo(
         sample_rate=sample_rate,
@@ -76,4 +139,9 @@ def read_audio_info(path: Path) -> AudioInfo:
         subtype=subtype,
         has_bext=has_bext,
         has_ixml=has_ixml,
+        has_riff_info=has_riff_info,
+        has_adm=has_adm,
+        has_cue_markers=has_cue_markers,
+        has_sampler=has_sampler,
+        metadata_sources=metadata_sources,
     )

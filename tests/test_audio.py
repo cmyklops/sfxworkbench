@@ -1,6 +1,8 @@
 """Tests for wavwarden.audio — AudioInfo from real WAV files."""
 
 import struct
+import sys
+import types
 import wave
 from pathlib import Path
 
@@ -145,4 +147,40 @@ def test_audio_info_model_defaults() -> None:
     assert info.subtype is None
     assert info.has_bext is False
     assert info.has_ixml is False
+    assert info.has_riff_info is False
+    assert info.has_adm is False
+    assert info.has_cue_markers is False
+    assert info.has_sampler is False
+    assert info.metadata_sources == []
     assert info.error is None
+
+
+def test_read_audio_info_uses_optional_wavinfo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    wav = _make_wav(tmp_path / "metadata.wav")
+
+    class FakeWavInfoReader:
+        def __init__(self, path: Path) -> None:
+            self.path = path
+            self.bext = types.SimpleNamespace(description="")
+            self.ixml = types.SimpleNamespace(project="Demo")
+            self.info = {"INAM": "Door close"}
+            self.adm = None
+            self.cues = [{"label": "start"}]
+            self.smpl = types.SimpleNamespace(loops=[])
+
+    monkeypatch.setitem(sys.modules, "wavinfo", types.SimpleNamespace(WavInfoReader=FakeWavInfoReader))
+
+    from wavwarden.audio import read_audio_info
+
+    info = read_audio_info(wav)
+
+    if info.error and "soundfile not installed" in info.error:
+        pytest.skip("soundfile not installed")
+
+    assert info.error is None
+    assert info.has_ixml is True
+    assert info.has_riff_info is True
+    assert info.has_cue_markers is True
+    assert info.has_adm is False
+    assert info.has_sampler is False
+    assert "wavinfo" in info.metadata_sources

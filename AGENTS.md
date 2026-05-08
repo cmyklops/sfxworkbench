@@ -7,6 +7,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 ```bash
 # Install (requires uv; creates .venv with Python 3.11)
 uv pip install -e ".[dev]"
+uv pip install -e ".[metadata,dev]"   # optional wavinfo-backed metadata reads
 
 # Run all tests
 uv run pytest tests/ -v

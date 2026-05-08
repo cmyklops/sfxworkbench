@@ -28,4 +28,6 @@ def test_export_writes_csv_with_header(tmp_library: Path, tmp_db: Path, tmp_path
     assert "path" in header
     assert "filename" in header
     assert "is_ucs" in header
+    assert "has_riff_info" in header
+    assert "metadata_sources" in header
     assert len(rows) == count
