@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wavwarden"
+version = "0.1.0"
+description = "Sound library hygiene — audit, clean, deduplicate, scan, search"
+requires-python = ">=3.10"
+dependencies = [
+    "typer[all]>=0.12",
+    "pydantic>=2.0",
+    "soundfile>=0.12",
+]
+
+[project.scripts]
+sfx = "wavwarden.cli:app"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-cov"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
