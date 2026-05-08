@@ -153,6 +153,30 @@ CREATE TABLE IF NOT EXISTS similarity_feedback (
     )
 );
 
+CREATE TABLE IF NOT EXISTS accepted_tags (
+    id INTEGER PRIMARY KEY,
+    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    field TEXT NOT NULL,
+    value TEXT NOT NULL,
+    source TEXT NOT NULL,
+    method TEXT,
+    confidence REAL,
+    evidence TEXT,
+    plan_entry_id INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (file_id, field, value)
+);
+
+CREATE TABLE IF NOT EXISTS tag_apply_log (
+    id INTEGER PRIMARY KEY,
+    plan_path TEXT,
+    db_path TEXT NOT NULL,
+    dry_run INTEGER NOT NULL DEFAULT 1,
+    generated_at TEXT NOT NULL,
+    result_json TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_files_ext ON files(extension);
 CREATE INDEX IF NOT EXISTS idx_files_md5 ON files(md5);
 CREATE INDEX IF NOT EXISTS idx_files_size ON files(size_bytes);
@@ -165,6 +189,8 @@ CREATE INDEX IF NOT EXISTS idx_audio_segments_file ON audio_segments(file_id);
 CREATE INDEX IF NOT EXISTS idx_similarity_feedback_state ON similarity_feedback(state);
 CREATE INDEX IF NOT EXISTS idx_similarity_feedback_left ON similarity_feedback(left_file_id);
 CREATE INDEX IF NOT EXISTS idx_similarity_feedback_right ON similarity_feedback(right_file_id);
+CREATE INDEX IF NOT EXISTS idx_accepted_tags_file ON accepted_tags(file_id);
+CREATE INDEX IF NOT EXISTS idx_accepted_tags_field ON accepted_tags(field);
 """
 
 _FILES_COLUMN_MIGRATIONS = {

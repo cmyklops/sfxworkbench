@@ -139,6 +139,10 @@ uv run sfx rename PATH --pattern portable --apply --log portable_rename_log.json
 uv run sfx rename --undo rename_log.json --apply
 uv run sfx tag suggest PATH --db ~/.wavwarden/index.db --output ~/reports/tag_suggestions.json
 uv run sfx tag suggest PATH --db ~/.wavwarden/index.db --use-ucs-catalog --min-confidence 0.8 --json
+uv run sfx tag plan PATH --db ~/.wavwarden/index.db --from-suggestions ~/reports/tag_suggestions.json --output ~/reports/tag_plan.json
+uv run sfx tag review ~/reports/tag_plan.json --approve-all
+uv run sfx tag apply ~/reports/tag_plan.json --db ~/.wavwarden/index.db --require-reviewed
+uv run sfx tag apply ~/reports/tag_plan.json --db ~/.wavwarden/index.db --require-reviewed --apply --log ~/reports/tag_apply_log.json
 uv run sfx ucs import ~/Desktop/_categorylist.csv --release-version v8.2.1
 uv run sfx ucs info
 uv run sfx ucs categories --cat-short AMB
@@ -184,6 +188,10 @@ python3 audit.py ~/CommercialLibraries --json
   comparisons.
 - `similarity feedback`: DB-only review states for similarity relationships
   such as favorite, hidden, ignored, accepted, and rejected.
+- `tag suggest`: report-only metadata suggestions from filename, path, UCS, and
+  related-group evidence.
+- `tag plan/review/apply`: reviewed DB-only metadata writes to `accepted_tags`.
+  Apply validates file anchors, writes `tag_apply_log`, and never mutates audio.
 - `dedupe --summary-only`: finds exact MD5 duplicate groups and prints counts without writing a plan.
 - `dedupe --output PLAN.json`: writes a reviewed duplicate plan to an explicit path. Repeated `--safe-folder PATH` options prefer protected duplicate files as keep copies and mark protected extra copies as ignored. Repeated `--prefer-folder PATH` and `--prefer-extension EXT` options store preservation-priority evidence and choose keep copies accordingly.
 - `dedupe --review PLAN.json`: stamps all or selected duplicate groups as approved.
@@ -365,11 +373,12 @@ lives inside the output directory; pass `--db` to reuse another index
 explicitly. Pass `--include-format` only when doing a deeper mixed-format
 diagnostic pass.
 
-Metadata writing follows after rename and pack review workflows stabilize:
+Metadata writing follows the reviewed-plan model:
 
 - `sfx metadata audit`
 - `sfx tag suggest`
-- future reviewed `sfx tag plan/review/apply`
+- `sfx tag plan/review/apply`, implemented for DB-only accepted tags
+- future sidecar export and embedded BWF/iXML writes
 
 Both should use mature libraries/tools for BWAV/iXML writes rather than
 hand-rolled binary mutation.
@@ -506,7 +515,7 @@ Target workflows:
 - `organize apply`, `organize undo`, `organize nesting-apply`, and
   `organize nesting-undo`
 - `packs apply` and `packs undo`
-- future metadata/tag apply workflows
+- future embedded metadata/tag apply workflows
 - future dual-mono conversion workflows
 - future permanent-delete workflows
 
@@ -644,6 +653,8 @@ Command contracts:
 - `similarity feedback set/list/clear --json`: includes DB-only review-state
   changes or filtered feedback entries.
 - `tag suggest PATH --json`: includes suggestion summary and per-file evidence.
+- `tag plan/review/apply --json`: includes reviewed plan entries, approval
+  counts, DB-only apply result, and apply log path.
 - `ucs import/info/categories/validate --json`: includes catalog provenance,
   filtered UCS categories, or validation report data.
 

@@ -846,6 +846,152 @@ def cmd_tag_suggest(
         )
 
 
+@tag_app.command("plan")
+def cmd_tag_plan(
+    path: Annotated[Path, typer.Argument(help="Root path of the indexed library to inspect.")],
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    output: Annotated[Path | None, typer.Option("--output", help="Write reviewed tag plan JSON to this path.")] = None,
+    source_report: Annotated[
+        Path | None, typer.Option("--from-suggestions", help="Build a plan from an existing tag suggestion report.")
+    ] = None,
+    ucs_catalog: Annotated[
+        Path | None,
+        typer.Option("--ucs-catalog", help="Use this UCS catalog JSON for catalog-backed suggestions."),
+    ] = None,
+    use_ucs_catalog: Annotated[
+        bool,
+        typer.Option("--use-ucs-catalog", help="Use the UCS catalog discovery chain for catalog-backed suggestions."),
+    ] = False,
+    min_confidence: Annotated[
+        float, typer.Option("--min-confidence", help="Drop suggestions below this confidence (0.0-1.0).")
+    ] = 0.0,
+    limit: Annotated[int, typer.Option("--limit", help="Maximum file entries to inspect; 0 writes all entries.")] = 200,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Build a reviewed DB-only metadata tag plan. No writes."""
+    from wavwarden.tag_plan import build_tag_plan, show_tag_plan, write_tag_plan
+
+    if not path.exists():
+        console.print(f"[red]Error: path not found: {path}[/red]")
+        raise typer.Exit(1)
+    if source_report is not None and not source_report.exists():
+        console.print(f"[red]Error: suggestion report not found: {source_report}[/red]")
+        raise typer.Exit(1)
+    try:
+        plan = build_tag_plan(
+            path,
+            db_path=db,
+            min_confidence=min_confidence,
+            limit=limit,
+            ucs_catalog_path=ucs_catalog,
+            use_ucs_catalog=use_ucs_catalog,
+            source_report=source_report,
+        )
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
+    plan_path = write_tag_plan(plan, output, quiet=json_output) if output is not None else None
+    if output is None and not json_output:
+        show_tag_plan(plan)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "tag_plan",
+                    "root": path,
+                    "db_path": db,
+                    "plan_path": plan_path,
+                    "plan": plan,
+                }
+            )
+        )
+
+
+@tag_app.command("review")
+def cmd_tag_review(
+    plan: Annotated[Path, typer.Argument(help="Tag plan JSON to review.")],
+    output: Annotated[Path | None, typer.Option("--output", help="Write reviewed plan to this path.")] = None,
+    approve_all: Annotated[bool, typer.Option("--approve-all", help="Approve every tag plan entry.")] = False,
+    entry: Annotated[list[int] | None, typer.Option("--entry", help="Approve a 1-based entry id.")] = None,
+    reject_entry: Annotated[list[int] | None, typer.Option("--reject-entry", help="Reject a 1-based entry id.")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Mark tag plan entries as approved or rejected."""
+    from wavwarden.tag_plan import review_tag_plan
+
+    if not plan.exists():
+        console.print(f"[red]Error: plan file not found: {plan}[/red]")
+        raise typer.Exit(1)
+    if not approve_all and not entry and not reject_entry:
+        console.print("[red]Error: pass --approve-all, --entry, or --reject-entry.[/red]")
+        raise typer.Exit(1)
+    result = review_tag_plan(
+        plan,
+        output_path=output,
+        approve_all=approve_all,
+        entries=entry,
+        reject_entries=reject_entry,
+        quiet=json_output,
+    )
+    if result.invalid_entries:
+        raise typer.Exit(1)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "tag_review",
+                    "plan_path": plan,
+                    "output_path": output or plan,
+                    "result": result,
+                }
+            )
+        )
+
+
+@tag_app.command("apply")
+def cmd_tag_apply(
+    plan: Annotated[Path, typer.Argument(help="Reviewed tag plan JSON to apply.")],
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index. Defaults to plan db_path.")] = None,
+    apply: Annotated[
+        bool, typer.Option("--apply", help="Write approved tags to the DB-only accepted tag table.")
+    ] = False,
+    require_reviewed: Annotated[
+        bool, typer.Option("--require-reviewed", help="Refuse to apply unless entries have been approved.")
+    ] = False,
+    log: Annotated[Path | None, typer.Option("--log", help="Write tag apply log JSON to this path.")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Apply a reviewed tag plan into SQLite accepted_tags. No audio mutation."""
+    from wavwarden.tag_plan import apply_tag_plan
+
+    if not plan.exists():
+        console.print(f"[red]Error: plan file not found: {plan}[/red]")
+        raise typer.Exit(1)
+    result = apply_tag_plan(
+        plan,
+        db_path=db,
+        dry_run=not apply,
+        require_reviewed=require_reviewed,
+        log_path=log,
+        quiet=json_output,
+    )
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "tag_apply",
+                    "plan_path": plan,
+                    "db_path": db,
+                    "result": result,
+                }
+            )
+        )
+
+
 # ---------------------------------------------------------------------------
 # sfx organize
 # ---------------------------------------------------------------------------

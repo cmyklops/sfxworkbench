@@ -2,9 +2,9 @@
 
 Tagging should follow wavwarden's existing safety model:
 
-`scan` observes files -> `audit` reports gaps -> `tag/suggest` creates reviewed
-plans -> `tag --apply` validates and writes metadata -> `scan --force` confirms
-results.
+`scan` observes files -> `audit` reports gaps -> `tag suggest` creates evidence
+-> `tag plan/review/apply` validates and writes DB-only accepted tags -> export
+confirms results.
 
 Core product rule: respect existing filenames and embedded metadata. Many users
 have years of muscle memory around vendor names, custom descriptions, DAW search
@@ -95,12 +95,13 @@ Suggestions should be data, not writes:
 
 ## Phase C: Reviewed Tag Plans
 
-Suggested CLI:
+Current first implementation:
 
 ```bash
-uv run sfx tag PATH --from-filename --output tag_plan.json
-uv run sfx tag --from-csv metadata.csv --output tag_plan.json
-uv run sfx tag --apply tag_plan.json --db ~/.wavwarden/index.db
+uv run sfx tag suggest PATH --db ~/.wavwarden/index.db --output tag_suggestions.json
+uv run sfx tag plan PATH --db ~/.wavwarden/index.db --from-suggestions tag_suggestions.json --output tag_plan.json
+uv run sfx tag review tag_plan.json --approve-all
+uv run sfx tag apply tag_plan.json --db ~/.wavwarden/index.db --require-reviewed --apply --log tag_apply_log.json
 ```
 
 Each plan entry should include validation anchors:
@@ -125,13 +126,15 @@ uv run sfx tag review tag_plan.json --approve-entry 1
 uv run sfx tag apply tag_plan.json --require-reviewed
 ```
 
-The initial implementation should be DB-only or sidecar-only. Embedded metadata
-writes remain a later step.
+The initial implementation is DB-only: approved entries are written to
+`accepted_tags`, and apply writes `tag_apply_log` rows plus an external JSON log.
+Embedded metadata writes remain a later step.
 
 ## Phase D: Metadata Writes
 
-Start with DB-only accepted tags and CSV export. Then add sidecar output. Binary
-audio mutation comes last.
+Start with DB-only accepted tags and CSV export. This first slice is
+implemented: `sfx export` includes an `accepted_tags` JSON column. Then add
+sidecar output. Binary audio mutation comes last.
 
 Preferred write ladder:
 

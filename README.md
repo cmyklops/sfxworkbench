@@ -167,6 +167,9 @@ uv run sfx packs plan --report ~/reports/pack_overlap_report.json --output ~/rep
 uv run sfx packs review ~/reports/pack_consolidation_plan.json --approve-all
 uv run sfx packs apply ~/reports/pack_consolidation_plan.json --require-reviewed
 uv run sfx tag suggest PATH --use-ucs-catalog --min-confidence 0.8 --output ~/reports/tag_suggestions.json
+uv run sfx tag plan PATH --from-suggestions ~/reports/tag_suggestions.json --output ~/reports/tag_plan.json
+uv run sfx tag review ~/reports/tag_plan.json --approve-all
+uv run sfx tag apply ~/reports/tag_plan.json --require-reviewed --apply --log ~/reports/tag_apply_log.json
 ```
 
 UCS catalog support:

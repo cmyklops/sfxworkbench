@@ -828,6 +828,81 @@ def test_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
     assert {"category", "subcategory", "description"} <= fields
     assert out.exists()
 
+    plan_out = tmp_path / "tag_plan.json"
+    plan_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "tag",
+                    "plan",
+                    str(tmp_library),
+                    "--db",
+                    str(tmp_db),
+                    "--from-suggestions",
+                    str(out),
+                    "--output",
+                    str(plan_out),
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert plan_payload["schema_version"] == 1
+    assert plan_payload["command"] == "tag_plan"
+    assert plan_payload["plan_path"] == "<TMP>/tag_plan.json"
+    assert plan_payload["plan"]["target"] == "db"
+    assert plan_payload["plan"]["summary"]["candidate_entries"] >= 1
+    assert plan_payload["plan"]["entries"][0]["review_status"] == "pending"
+
+    review_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                ["tag", "review", str(plan_out), "--entry", "1", "--json"],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert review_payload["schema_version"] == 1
+    assert review_payload["command"] == "tag_review"
+    assert review_payload["result"]["approved_entries"] == 1
+
+    tag_log = tmp_path / "tag_apply_log.json"
+    apply_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "tag",
+                    "apply",
+                    str(plan_out),
+                    "--db",
+                    str(tmp_db),
+                    "--require-reviewed",
+                    "--apply",
+                    "--log",
+                    str(tag_log),
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert apply_payload["schema_version"] == 1
+    assert apply_payload["command"] == "tag_apply"
+    assert apply_payload["result"]["target"] == "db"
+    assert apply_payload["result"]["dry_run"] is False
+    assert apply_payload["result"]["applied"] == 1
+    assert apply_payload["result"]["log_path"] == "<TMP>/tag_apply_log.json"
+
 
 def test_ucs_validate_and_catalog_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
     src = tmp_path / "_categorylist.csv"

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from wavwarden.db import get_connection
 from wavwarden.models import RelatedSoundFile, RelatedSoundGroup, UcsCatalog, UcsCatalogProvenance, UcsEntry
+from wavwarden.tag_plan import apply_tag_plan, build_tag_plan, review_tag_plan, write_tag_plan
 from wavwarden.tag_suggest import (
     build_tag_suggestion_report,
     suggest_from_filename,
@@ -376,6 +377,65 @@ def test_write_tag_suggestion_report_round_trip(tmp_path: Path, tmp_db: Path) ->
     assert payload["root"] == str(root.resolve())
     assert payload["entries"][0]["path"].endswith("SFX_HIT_01.wav")
     assert payload["summary"]["files_with_suggestions"] == 1
+
+
+def test_tag_plan_review_and_db_apply(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "Impacts"
+    folder.mkdir(parents=True)
+    audio = folder / "SFX_HIT_01.wav"
+    audio.write_bytes(b"not really audio")
+    _seed_files(tmp_db, [{"path": audio, "md5": "A", "size": len(audio.read_bytes())}])
+
+    plan = build_tag_plan(root, db_path=tmp_db, min_confidence=0.7)
+
+    assert plan.target == "db"
+    assert plan.summary.candidate_entries > 0
+    assert plan.summary.approved_entries == 0
+    assert all(entry.review_status == "pending" for entry in plan.entries)
+    assert any(entry.field == "category" and entry.proposed_value == "SFX" for entry in plan.entries)
+
+    plan_path = tmp_path / "tag_plan.json"
+    write_tag_plan(plan, plan_path, quiet=True)
+    review = review_tag_plan(plan_path, approve_all=True, quiet=True)
+
+    assert review.total_entries == plan.summary.candidate_entries
+    assert review.approved_entries == plan.summary.candidate_entries
+
+    dry_run = apply_tag_plan(plan_path, db_path=tmp_db, require_reviewed=True, quiet=True)
+    assert dry_run.dry_run is True
+    assert dry_run.applied == plan.summary.add_entries
+
+    log_path = tmp_path / "tag_apply_log.json"
+    applied = apply_tag_plan(
+        plan_path,
+        db_path=tmp_db,
+        dry_run=False,
+        require_reviewed=True,
+        log_path=log_path,
+        quiet=True,
+    )
+
+    assert applied.applied == plan.summary.add_entries
+    assert applied.errors == []
+    assert log_path.exists()
+    conn = get_connection(tmp_db)
+    rows = conn.execute("SELECT field, value, source FROM accepted_tags ORDER BY field, value").fetchall()
+    apply_logs = conn.execute("SELECT COUNT(*) FROM tag_apply_log").fetchone()[0]
+    conn.close()
+    assert ("category", "SFX", "ucs_stem") in [(row["field"], row["value"], row["source"]) for row in rows]
+    assert apply_logs == 1
+
+    second = apply_tag_plan(
+        plan_path,
+        db_path=tmp_db,
+        dry_run=False,
+        require_reviewed=True,
+        log_path=tmp_path / "second_tag_apply_log.json",
+        quiet=True,
+    )
+    assert second.applied == 0
+    assert second.skipped == plan.summary.candidate_entries
 
 
 def test_summary_confidence_buckets_are_sorted(tmp_path: Path, tmp_db: Path) -> None:

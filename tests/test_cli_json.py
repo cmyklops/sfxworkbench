@@ -77,6 +77,46 @@ def test_packs_audit_json(tmp_library, tmp_db, tmp_path) -> None:
     assert out.exists()
 
 
+def test_tag_plan_review_apply_json(tmp_library, tmp_db, tmp_path) -> None:
+    scan = runner.invoke(app, ["scan", str(tmp_library), "--db", str(tmp_db), "--json"])
+    assert scan.exit_code == 0
+
+    plan_path = tmp_path / "tag_plan.json"
+    plan = runner.invoke(
+        app,
+        ["tag", "plan", str(tmp_library), "--db", str(tmp_db), "--output", str(plan_path), "--json"],
+    )
+    assert plan.exit_code == 0
+    assert json.loads(plan.stdout)["command"] == "tag_plan"
+    assert plan_path.exists()
+
+    review = runner.invoke(app, ["tag", "review", str(plan_path), "--approve-all", "--json"])
+    assert review.exit_code == 0
+    assert json.loads(review.stdout)["command"] == "tag_review"
+
+    log = tmp_path / "tag_apply_log.json"
+    apply = runner.invoke(
+        app,
+        [
+            "tag",
+            "apply",
+            str(plan_path),
+            "--db",
+            str(tmp_db),
+            "--require-reviewed",
+            "--apply",
+            "--log",
+            str(log),
+            "--json",
+        ],
+    )
+    assert apply.exit_code == 0
+    payload = json.loads(apply.stdout)
+    assert payload["command"] == "tag_apply"
+    assert payload["result"]["target"] == "db"
+    assert log.exists()
+
+
 def test_similarity_cli_json_smoke(tmp_library, tmp_db, tmp_path) -> None:
     scan = runner.invoke(app, ["scan", str(tmp_library), "--db", str(tmp_db), "--json"])
     assert scan.exit_code == 0

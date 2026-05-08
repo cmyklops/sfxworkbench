@@ -893,3 +893,66 @@ class TagSuggestionReport(BaseModel):
     limit: int = 200
     summary: TagSuggestionSummary
     entries: list[TagSuggestionEntry] = []
+
+
+class TagPlanEntry(BaseModel):
+    entry_id: int
+    file_id: int
+    path: str
+    filename: str
+    size_bytes: int | None = None
+    mtime: float | None = None
+    md5: str | None = None
+    field: str
+    action: str = "add"
+    existing_values: list[str] = []
+    proposed_value: str
+    source: str
+    method: str
+    confidence: float
+    evidence: list[str] = []
+    review_status: str = "pending"
+
+
+class TagPlanSummary(BaseModel):
+    files_considered: int = 0
+    candidate_entries: int = 0
+    add_entries: int = 0
+    skip_existing_entries: int = 0
+    approved_entries: int = 0
+    rejected_entries: int = 0
+
+
+class TagPlan(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    root: str
+    db_path: str
+    source_report: str | None = None
+    target: str = "db"
+    min_confidence: float = 0.0
+    limit: int = 200
+    summary: TagPlanSummary
+    entries: list[TagPlanEntry] = []
+    errors: list[dict] = []
+
+
+class TagReviewResult(BaseModel):
+    plan_path: str
+    output_path: str
+    total_entries: int = 0
+    approved_entries: int = 0
+    rejected_entries: int = 0
+    invalid_entries: list[int] = []
+
+
+class TagApplyResult(BaseModel):
+    planned: int = 0
+    applied: int = 0
+    skipped: int = 0
+    errors: list[dict] = []
+    dry_run: bool = True
+    target: str = "db"
+    log_path: str | None = None
