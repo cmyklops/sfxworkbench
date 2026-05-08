@@ -8,19 +8,33 @@ from rich.console import Console
 from rich.table import Table
 
 from wavwarden.db import get_connection
-from wavwarden.models import DedupeGroup
+from wavwarden.models import DedupeApplyResult, DedupeGroup
+from wavwarden.utils import fmt_bytes
 
 console = Console()
 
 
 def find_duplicates(db_path: Path) -> list[DedupeGroup]:
-    """Query DB for files grouped by MD5 where count > 1."""
+    """Query the index for files grouped by MD5 where count > 1.
+
+    Uses `json_group_array` so paths are returned as a proper JSON array — no
+    fragile ad-hoc separator. Sorted within each group by path for
+    deterministic ordering, so the same plan is generated on every run.
+    """
     conn = get_connection(db_path)
     rows = conn.execute(
         """
-        SELECT md5, size_bytes, GROUP_CONCAT(path, '|||') AS paths, COUNT(*) as cnt
-        FROM files
-        WHERE md5 IS NOT NULL
+        SELECT
+            md5,
+            size_bytes,
+            json_group_array(path) AS paths_json,
+            COUNT(*) AS cnt
+        FROM (
+            SELECT md5, size_bytes, path
+            FROM files
+            WHERE md5 IS NOT NULL
+            ORDER BY md5, path
+        )
         GROUP BY md5
         HAVING cnt > 1
         ORDER BY size_bytes DESC
@@ -30,7 +44,7 @@ def find_duplicates(db_path: Path) -> list[DedupeGroup]:
 
     groups: list[DedupeGroup] = []
     for row in rows:
-        files = row["paths"].split("|||")
+        files = json.loads(row["paths_json"])
         groups.append(DedupeGroup(
             hash=row["md5"],
             size_bytes=row["size_bytes"],
@@ -61,10 +75,20 @@ def write_dedupe_plan(groups: list[DedupeGroup], plan_path: Path) -> None:
     console.print("[yellow]Review the plan, then run with --apply to execute.[/yellow]")
 
 
-def apply_dedupe_plan(plan_path: Path, dry_run: bool = True) -> dict:
-    """Execute a reviewed dedupe plan. dry_run=True by default."""
+def apply_dedupe_plan(
+    plan_path: Path,
+    db_path: Path | None = None,
+    dry_run: bool = True,
+) -> DedupeApplyResult:
+    """Execute a reviewed dedupe plan.
+
+    On apply (`dry_run=False`), files are unlinked from disk AND removed from
+    the SQLite index — so subsequent `sfx audit`/`search` queries don't
+    reference dead paths. The FTS5 index is cleaned up via trigger.
+    """
     plan = json.loads(plan_path.read_text())
-    result = {"removed": 0, "bytes_freed": 0, "errors": [], "dry_run": dry_run}
+    result = DedupeApplyResult(dry_run=dry_run)
+    removed_paths: list[str] = []
 
     for group in plan["groups"]:
         for entry in group:
@@ -74,25 +98,39 @@ def apply_dedupe_plan(plan_path: Path, dry_run: bool = True) -> dict:
             sz = entry.get("size_bytes", 0)
             if dry_run:
                 console.print(f"[dim]Would remove: {p}[/dim]")
-                result["removed"] += 1
-                result["bytes_freed"] += sz
+                result.removed += 1
+                result.bytes_freed += sz
             else:
                 try:
                     p.unlink()
-                    result["removed"] += 1
-                    result["bytes_freed"] += sz
+                    removed_paths.append(entry["path"])
+                    result.removed += 1
+                    result.bytes_freed += sz
                     console.print(f"[green]Removed:[/green] {p}")
                 except OSError as e:
-                    result["errors"].append({"path": str(p), "error": str(e)})
+                    result.errors.append({"path": str(p), "error": str(e)})
                     console.print(f"[red]Error removing {p}: {e}[/red]")
+
+    # Clean up the index after a real apply so it doesn't reference dead paths
+    if not dry_run and removed_paths and db_path is not None:
+        conn = get_connection(db_path)
+        conn.executemany(
+            "DELETE FROM files WHERE path = ?",
+            [(path,) for path in removed_paths],
+        )
+        conn.commit()
+        conn.close()
+        console.print(
+            f"Removed [cyan]{len(removed_paths):,}[/cyan] row(s) from index."
+        )
 
     action = "Would remove" if dry_run else "Removed"
     console.print(
-        f"\n{action} [yellow]{result['removed']:,}[/yellow] file(s), "
-        f"freeing [yellow]{_fmt_bytes(result['bytes_freed'])}[/yellow]"
+        f"\n{action} [yellow]{result.removed:,}[/yellow] file(s), "
+        f"freeing [yellow]{fmt_bytes(result.bytes_freed)}[/yellow]"
     )
-    if result["errors"]:
-        console.print(f"[red]{len(result['errors'])} error(s)[/red]")
+    if result.errors:
+        console.print(f"[red]{len(result.errors)} error(s)[/red]")
 
     return result
 
@@ -109,7 +147,7 @@ def show_duplicates(groups: list[DedupeGroup]) -> None:
     console.print(
         f"\nFound [yellow]{len(groups)}[/yellow] duplicate group(s), "
         f"[yellow]{total_extra:,}[/yellow] extra copies, "
-        f"[yellow]{_fmt_bytes(total_wasted)}[/yellow] wasted.\n"
+        f"[yellow]{fmt_bytes(total_wasted)}[/yellow] wasted.\n"
     )
 
     table = Table(title="Duplicate Groups (top 25)", show_lines=True)
@@ -124,7 +162,7 @@ def show_duplicates(groups: list[DedupeGroup]) -> None:
         table.add_row(
             str(i),
             group.hash[:12] + "...",
-            _fmt_bytes(group.size_bytes),
+            fmt_bytes(group.size_bytes),
             str(len(group.files)),
             files_str,
         )
@@ -132,11 +170,3 @@ def show_duplicates(groups: list[DedupeGroup]) -> None:
     console.print(table)
     if len(groups) > 25:
         console.print(f"[dim]...{len(groups) - 25} more groups in plan file.[/dim]")
-
-
-def _fmt_bytes(b: int) -> str:
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if b < 1024:
-            return f"{b:.1f} {unit}"
-        b /= 1024
-    return f"{b:.1f} PB"

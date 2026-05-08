@@ -2,45 +2,49 @@
 
 from pathlib import Path
 
-import pytest
-
 from wavwarden.clean import find_junk, clean_library
 
 
 def test_find_junk_detects_appledouble(tmp_library: Path) -> None:
-    junk_files, junk_dirs = find_junk(tmp_library)
-    junk_file_names = [f.name for f in junk_files]
-    assert any(n.startswith("._") for n in junk_file_names), "Should find AppleDouble files"
+    junk_files, _ = find_junk(tmp_library)
+    names = [f.name for f, _ in junk_files]
+    assert any(n.startswith("._") for n in names), "Should find AppleDouble files"
 
 
 def test_find_junk_detects_ds_store(tmp_library: Path) -> None:
     junk_files, _ = find_junk(tmp_library)
-    junk_file_names = [f.name for f in junk_files]
-    assert ".DS_Store" in junk_file_names, "Should find .DS_Store files"
+    names = [f.name for f, _ in junk_files]
+    assert ".DS_Store" in names, "Should find .DS_Store files"
 
 
 def test_find_junk_detects_wfcache_dir(tmp_library: Path) -> None:
     _, junk_dirs = find_junk(tmp_library)
-    dir_names = [d.name for d in junk_dirs]
+    dir_names = [d.name for d, _ in junk_dirs]
     assert "_wfCache" in dir_names, "Should find _wfCache directory"
 
 
 def test_find_junk_detects_macosx_dir(tmp_library: Path) -> None:
     _, junk_dirs = find_junk(tmp_library)
-    dir_names = [d.name for d in junk_dirs]
+    dir_names = [d.name for d, _ in junk_dirs]
     assert "__MACOSX" in dir_names, "Should find __MACOSX directory"
 
 
 def test_find_junk_detects_reapeaks(tmp_library: Path) -> None:
     junk_files, _ = find_junk(tmp_library)
-    extensions = [f.suffix.lower() for f in junk_files]
+    extensions = [f.suffix.lower() for f, _ in junk_files]
     assert ".reapeaks" in extensions, "Should find .reapeaks files"
 
 
 def test_find_junk_detects_sfk(tmp_library: Path) -> None:
     junk_files, _ = find_junk(tmp_library)
-    extensions = [f.suffix.lower() for f in junk_files]
+    extensions = [f.suffix.lower() for f, _ in junk_files]
     assert ".sfk" in extensions, "Should find .sfk files"
+
+
+def test_find_junk_returns_sizes(tmp_library: Path) -> None:
+    """Returned tuples include captured byte sizes."""
+    junk_files, _ = find_junk(tmp_library)
+    assert all(isinstance(sz, int) and sz >= 0 for _, sz in junk_files)
 
 
 def test_dry_run_makes_no_changes(tmp_library: Path) -> None:
@@ -55,7 +59,6 @@ def test_apply_removes_junk(tmp_library: Path) -> None:
     result = clean_library(tmp_library, dry_run=False)
     assert result.dry_run is False
 
-    # Junk should be gone
     remaining = list(tmp_library.rglob("*"))
     remaining_names = [f.name for f in remaining]
 
@@ -66,7 +69,7 @@ def test_apply_removes_junk(tmp_library: Path) -> None:
 
 
 def test_apply_leaves_audio_files(tmp_library: Path) -> None:
-    result = clean_library(tmp_library, dry_run=False)
+    clean_library(tmp_library, dry_run=False)
     remaining = list(tmp_library.rglob("*"))
     wav_files = [f for f in remaining if f.suffix.lower() == ".wav" and not f.name.startswith("._")]
     assert len(wav_files) > 0, "Audio files should remain after clean"

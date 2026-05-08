@@ -101,7 +101,7 @@ def cmd_dedupe(
         if not apply.exists():
             console.print(f"[red]Error: plan file not found: {apply}[/red]")
             raise typer.Exit(1)
-        apply_dedupe_plan(apply, dry_run=False)
+        apply_dedupe_plan(apply, db_path=db, dry_run=False)
         return
 
     groups = find_duplicates(db)

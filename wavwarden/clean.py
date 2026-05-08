@@ -6,76 +6,79 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
+from wavwarden import junk
 from wavwarden.models import CleanResult
-
-# Audio extensions that must never be touched
-AUDIO_EXTENSIONS = {".wav", ".aif", ".aiff", ".mp3", ".flac", ".ogg", ".opus", ".m4a", ".w64", ".rf64"}
-
-# Entire directory trees to remove
-_JUNK_DIR_NAMES = {"_wfCache", "__MACOSX"}
-
-# Exact filename matches
-_JUNK_FILENAMES = {".DS_Store", "desktop.ini", "Thumbs.db"}
-
-# Glob-style suffix matches (lowercase)
-_JUNK_SUFFIXES = {".reapeaks", ".sfk", ".pkf", ".wf"}
+from wavwarden.utils import fmt_bytes
 
 console = Console()
 
 
-def _is_junk_file(path: Path) -> bool:
-    """Return True if this file is junk (should be cleaned)."""
-    name = path.name
-    # AppleDouble files
-    if name.startswith("._"):
-        return True
-    # Exact matches
-    if name in _JUNK_FILENAMES:
-        return True
-    # Suffix matches
-    if path.suffix.lower() in _JUNK_SUFFIXES:
-        return True
-    return False
+def find_junk(root: Path) -> tuple[list[tuple[Path, int]], list[tuple[Path, int]]]:
+    """Walk `root` and return (junk_files, junk_dirs).
 
+    Each entry is `(path, size_bytes)` — sizes are captured during the walk
+    so we never need to stat() the same file twice. junk_dirs entries
+    contain the total size of the directory subtree.
 
-def _is_junk_dir(path: Path) -> bool:
-    """Return True if this entire directory should be removed."""
-    return path.name in _JUNK_DIR_NAMES
-
-
-def find_junk(root: Path) -> tuple[list[Path], list[Path]]:
-    """Returns (junk_files, junk_dirs). junk_dirs are entire dirs to remove."""
-    junk_files: list[Path] = []
-    junk_dirs: list[Path] = []
+    Shows a transient spinner with a live counter while walking.
+    """
+    junk_files: list[tuple[Path, int]] = []
+    junk_dirs: list[tuple[Path, int]] = []
     seen_dirs: set[Path] = set()
+    visited = 0
 
-    for item in root.rglob("*"):
-        # Skip items already inside a marked junk dir
-        skip = False
-        for jd in seen_dirs:
-            try:
-                item.relative_to(jd)
-                skip = True
-                break
-            except ValueError:
-                pass
-        if skip:
-            continue
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("Walking...", total=None)
 
-        if item.is_dir():
-            if _is_junk_dir(item):
-                junk_dirs.append(item)
-                seen_dirs.add(item)
-        elif item.is_file():
-            if _is_junk_file(item):
-                # AppleDouble files (._*) are ALWAYS junk regardless of extension.
-                # For other patterns, never touch audio extensions as a safety guard.
-                if item.name.startswith("._") or item.suffix.lower() not in AUDIO_EXTENSIONS:
-                    junk_files.append(item)
+        for item in root.rglob("*"):
+            visited += 1
+            if visited % 500 == 0:
+                progress.update(
+                    task,
+                    description=(
+                        f"Walking... [white]{visited:,}[/white] items, "
+                        f"[yellow]{len(junk_files) + len(junk_dirs):,}[/yellow] junk found"
+                    ),
+                )
+
+            # Skip items already inside a marked junk dir
+            if any(item.is_relative_to(jd) for jd in seen_dirs):
+                continue
+
+            if item.is_dir():
+                if junk.is_junk_dir(item):
+                    dir_size = _dir_size(item)
+                    junk_dirs.append((item, dir_size))
+                    seen_dirs.add(item)
+            elif item.is_file():
+                if junk.is_junk_file(item):
+                    try:
+                        size = item.stat().st_size
+                    except OSError:
+                        size = 0
+                    junk_files.append((item, size))
 
     return junk_files, junk_dirs
+
+
+def _dir_size(path: Path) -> int:
+    """Total size of all files under a directory."""
+    total = 0
+    for item in path.rglob("*"):
+        if item.is_file():
+            try:
+                total += item.stat().st_size
+            except OSError:
+                pass
+    return total
 
 
 def clean_library(
@@ -88,47 +91,25 @@ def clean_library(
     root = root.resolve()
     junk_files, junk_dirs = find_junk(root)
 
-    result = CleanResult(dry_run=dry_run)
+    bytes_freed = sum(sz for _, sz in junk_files) + sum(sz for _, sz in junk_dirs)
 
-    # Calculate sizes
-    bytes_freed = 0
-    for f in junk_files:
-        try:
-            bytes_freed += f.stat().st_size
-        except OSError:
-            pass
-    for d in junk_dirs:
-        for item in d.rglob("*"):
-            if item.is_file():
-                try:
-                    bytes_freed += item.stat().st_size
-                except OSError:
-                    pass
+    result = CleanResult(
+        removed_files=[str(f) for f, _ in junk_files],
+        removed_dirs=[str(d) for d, _ in junk_dirs],
+        bytes_freed=bytes_freed,
+        dry_run=dry_run,
+    )
 
-    result.removed_files = [str(f) for f in junk_files]
-    result.removed_dirs = [str(d) for d in junk_dirs]
-    result.bytes_freed = bytes_freed
-
-    # Build display table
+    # Build display table using cached sizes
     table = Table(title=f"{'[DRY RUN] ' if dry_run else ''}Junk found in {root}", show_lines=False)
     table.add_column("Type", style="cyan", no_wrap=True)
     table.add_column("Path", style="white")
     table.add_column("Size", style="yellow", justify="right")
 
-    for f in junk_files:
-        try:
-            sz = _fmt_bytes(f.stat().st_size)
-        except OSError:
-            sz = "?"
-        table.add_row("file", str(f.relative_to(root)), sz)
-
-    for d in junk_dirs:
-        dir_size = sum(
-            item.stat().st_size
-            for item in d.rglob("*")
-            if item.is_file()
-        )
-        table.add_row("dir", str(d.relative_to(root)) + "/", _fmt_bytes(dir_size))
+    for f, sz in junk_files:
+        table.add_row("file", str(f.relative_to(root)), fmt_bytes(sz))
+    for d, sz in junk_dirs:
+        table.add_row("dir", str(d.relative_to(root)) + "/", fmt_bytes(sz))
 
     console.print(table)
 
@@ -136,16 +117,16 @@ def clean_library(
     total = len(junk_files) + len(junk_dirs)
     console.print(
         f"\n{total} item(s) ({len(junk_files)} files, {len(junk_dirs)} dirs), "
-        f"{action} [yellow]{_fmt_bytes(bytes_freed)}[/yellow]"
+        f"{action} [yellow]{fmt_bytes(bytes_freed)}[/yellow]"
     )
 
     if not dry_run:
-        for f in junk_files:
+        for f, _ in junk_files:
             try:
                 f.unlink()
             except OSError as e:
                 console.print(f"[red]Error removing {f}: {e}[/red]")
-        for d in junk_dirs:
+        for d, _ in junk_dirs:
             try:
                 shutil.rmtree(d)
             except OSError as e:
@@ -165,11 +146,3 @@ def clean_library(
         console.print(f"Log written to [cyan]{log_path}[/cyan]")
 
     return result
-
-
-def _fmt_bytes(b: int) -> str:
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if b < 1024:
-            return f"{b:.1f} {unit}"
-        b /= 1024
-    return f"{b:.1f} PB"
