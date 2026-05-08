@@ -114,11 +114,18 @@ class SimilarityCrawlReport(BaseModel):
 
 
 class SimilaritySearchResult(BaseModel):
+    scope: str = "file"
     file_id: int
     path: str
     filename: str
     distance: float
     score: float
+    segment_index: int | None = None
+    segment_start_s: float | None = None
+    segment_end_s: float | None = None
+    segment_duration_s: float | None = None
+    segment_confidence: float | None = None
+    segment_method: str | None = None
     duration_s: float | None = None
     sample_rate: int | None = None
     bit_depth: int | None = None
@@ -145,6 +152,7 @@ class SimilaritySearchReport(BaseModel):
     backend: str = "deterministic_v1"
     query_path: str
     db_path: str
+    scope: str = "file"
     max_duration_s: float | None = None
     candidates_considered: int = 0
     limit: int = 20
@@ -164,6 +172,13 @@ class SimilaritySegment(BaseModel):
     duration_s: float
     peak: float | None = None
     rms: float | None = None
+    crest_factor: float | None = None
+    silence_ratio: float | None = None
+    zero_crossing_rate: float | None = None
+    spectral_centroid: float | None = None
+    spectral_bandwidth: float | None = None
+    spectral_rolloff: float | None = None
+    spectral_flatness: float | None = None
     confidence: float | None = None
     method: str
     generated_at: str

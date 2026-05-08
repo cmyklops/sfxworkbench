@@ -160,7 +160,8 @@ python3 audit.py ~/CommercialLibraries --json
 - `similarity segments`: experimental report-only listing of cached event
   windows from the similarity crawler.
 - `similarity search`: experimental nearest-neighbor search over cached
-  deterministic descriptor rows using a query audio file.
+  deterministic whole-file descriptors or event segments using a query audio
+  file.
 - `similarity audit`: experimental report-only near-duplicate grouping over
   cached deterministic descriptor rows. Exact MD5 duplicate pairs are excluded
   by default because `dedupe` owns exact duplicate cleanup.

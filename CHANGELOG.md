@@ -13,11 +13,11 @@ versioning once public releases begin.
   cache run report, and reports peak/RMS/crest/silence/clipping plus simple
   zero-crossing, transient-density, and spectral centroid/bandwidth/rolloff/
   flatness descriptors. Added `sfx similarity search --file QUERY` to rank
-  cached descriptors against a query audio file. Added RMS-based event segment
-  detection during crawl plus `sfx similarity segments` to inspect cached
-  segment windows. Added `sfx similarity audit` to produce report-only
-  near-duplicate groups from cached descriptor rows, excluding exact MD5
-  duplicate pairs by default.
+  cached descriptors against a query audio file, including `--scope segment`
+  for event-window search. Added RMS-based event segment detection during crawl
+  plus `sfx similarity segments` to inspect cached segment windows. Added `sfx
+  similarity audit` to produce report-only near-duplicate groups from cached
+  descriptor rows, excluding exact MD5 duplicate pairs by default.
 - Added preservation-priority evidence for duplicate keep decisions. `sfx
   dedupe --output PLAN --prefer-folder PATH --prefer-extension EXT` and `sfx
   packs plan --prefer-folder PATH` store ordered rule evidence in generated

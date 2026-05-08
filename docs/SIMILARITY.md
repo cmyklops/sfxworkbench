@@ -41,6 +41,7 @@ Implemented first slice:
 
 - `sfx similarity crawl PATH`
 - `sfx similarity search --file QUERY`
+- `sfx similarity search --file QUERY --scope segment`
 - `sfx similarity segments PATH`
 - `sfx similarity audit PATH`
 - deterministic backend name: `deterministic_v1`
@@ -52,9 +53,9 @@ Implemented first slice:
   zero-crossing rate, transient density, spectral centroid/bandwidth/rolloff/
   flatness, and duration bucket
 - RMS-based segment windows for event-like regions, capped per file and cached
-  for future per-segment search/embedding work
-- nearest-neighbor search over cached descriptor vectors with distance and
-  0-1 score output
+  with lightweight per-segment descriptors
+- nearest-neighbor search over cached whole-file or segment descriptor vectors
+  with distance and 0-1 score output
 - report-only near-duplicate groups from cached descriptors, with exact MD5
   duplicate pairs excluded by default
 
@@ -91,8 +92,8 @@ The first implementation should be boring and report-first:
    sound can produce multiple searchable moments.
 3. Optional embeddings:
    store per-file and per-segment vectors from a clearly named model/backend.
-4. Search/report commands: first search and near-duplicate audit commands
-   implemented.
+4. Search/report commands: first whole-file search, segment search, and
+   near-duplicate audit commands implemented.
    return nearest neighbors as JSON with distances, anchors, and caveats.
 
 Do not let the first crawler quarantine, rename, delete, retag, or mutate audio.

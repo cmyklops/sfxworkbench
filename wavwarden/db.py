@@ -121,6 +121,13 @@ CREATE TABLE IF NOT EXISTS audio_segments (
     duration_s REAL NOT NULL,
     peak REAL,
     rms REAL,
+    crest_factor REAL,
+    silence_ratio REAL,
+    zero_crossing_rate REAL,
+    spectral_centroid REAL,
+    spectral_bandwidth REAL,
+    spectral_rolloff REAL,
+    spectral_flatness REAL,
     confidence REAL,
     method TEXT NOT NULL,
     generated_at TEXT NOT NULL
@@ -155,6 +162,16 @@ _AUDIO_DESCRIPTORS_COLUMN_MIGRATIONS = {
     "segment_method": "TEXT",
 }
 
+_AUDIO_SEGMENTS_COLUMN_MIGRATIONS = {
+    "crest_factor": "REAL",
+    "silence_ratio": "REAL",
+    "zero_crossing_rate": "REAL",
+    "spectral_centroid": "REAL",
+    "spectral_bandwidth": "REAL",
+    "spectral_rolloff": "REAL",
+    "spectral_flatness": "REAL",
+}
+
 
 def apply_schema(conn: sqlite3.Connection) -> None:
     """Idempotent schema creation — safe to call on an existing DB."""
@@ -169,6 +186,10 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     for column, definition in _AUDIO_DESCRIPTORS_COLUMN_MIGRATIONS.items():
         if column not in existing_descriptor_columns:
             conn.execute(f"ALTER TABLE audio_descriptors ADD COLUMN {column} {definition}")
+    existing_segment_columns = {row["name"] for row in conn.execute("PRAGMA table_info(audio_segments)").fetchall()}
+    for column, definition in _AUDIO_SEGMENTS_COLUMN_MIGRATIONS.items():
+        if column not in existing_segment_columns:
+            conn.execute(f"ALTER TABLE audio_segments ADD COLUMN {column} {definition}")
     conn.commit()
 
 

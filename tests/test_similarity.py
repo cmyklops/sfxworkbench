@@ -93,7 +93,7 @@ def test_similarity_crawl_writes_descriptors_and_skips_current_rows(tmp_path: Pa
     assert row["spectral_rolloff"] > 0
     assert row["spectral_flatness"] >= 0
     assert row["segment_count"] == 1
-    assert row["segment_method"] == "rms_event_v1"
+    assert row["segment_method"] == "rms_event_v2"
     assert segment_count == 1
     assert row["error"] is None
     assert run_count == 1
@@ -194,6 +194,27 @@ def test_similarity_crawl_detects_multiple_event_segments(tmp_path: Path, tmp_db
     assert 0.95 <= report.segments[1].end_s <= 1.05
 
 
+def test_similarity_search_can_rank_cached_segments(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    pulses = _make_pulses(root / "pulses.wav")
+    query = _make_tone(tmp_path / "query_660.wav", frequency=660.0)
+    scan_library(root, tmp_db, skip_hash=False, quiet=True)
+    crawl_similarity_descriptors(root, db_path=tmp_db, cache_path=None, quiet=True)
+
+    report = search_similarity_descriptors(query, db_path=tmp_db, scope="segment", limit=2, quiet=True)
+
+    assert report.scope == "segment"
+    assert report.candidates_considered == 2
+    assert [result.scope for result in report.results] == ["segment", "segment"]
+    assert report.results[0].path == str(pulses)
+    assert report.results[0].segment_index == 1
+    assert report.results[0].segment_start_s is not None
+    assert report.results[0].segment_end_s is not None
+    assert report.results[0].segment_method == "rms_event_v2"
+    assert report.results[0].spectral_centroid is not None
+    assert report.results[0].distance < report.results[1].distance
+
+
 def test_similarity_search_returns_nearest_cached_descriptors(tmp_path: Path, tmp_db: Path) -> None:
     root = tmp_path / "library"
     low = _make_tone(root / "low.wav", frequency=220.0)
@@ -204,6 +225,7 @@ def test_similarity_search_returns_nearest_cached_descriptors(tmp_path: Path, tm
 
     report = search_similarity_descriptors(query, db_path=tmp_db, limit=2, quiet=True)
 
+    assert report.scope == "file"
     assert report.candidates_considered == 2
     assert [result.path for result in report.results] == [str(low), str(high)]
     assert report.results[0].score > report.results[1].score

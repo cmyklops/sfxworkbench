@@ -224,11 +224,41 @@ def test_similarity_crawl_json_contract(tmp_library: Path, tmp_db: Path, tmp_pat
     assert search_payload["query_path"] == "<ROOT>/sounds/AMB_RAIN_01.wav"
     assert search_payload["db_path"] == "<DB>"
     assert search_payload["report"]["backend"] == "deterministic_v1"
+    assert search_payload["report"]["scope"] == "file"
     assert search_payload["report"]["candidates_considered"] == 4
     assert len(search_payload["report"]["results"]) == 2
     assert "spectral_centroid" in search_payload["report"]["query_descriptor"]
     assert "spectral_centroid" in search_payload["report"]["results"][0]
     assert search_payload["report"]["results"][0]["score"] >= search_payload["report"]["results"][1]["score"]
+
+    segment_search_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "similarity",
+                    "search",
+                    "--file",
+                    str(tmp_library / "sounds" / "AMB_RAIN_01.wav"),
+                    "--db",
+                    str(tmp_db),
+                    "--scope",
+                    "segment",
+                    "--limit",
+                    "2",
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert segment_search_payload["schema_version"] == 1
+    assert segment_search_payload["command"] == "similarity_search"
+    assert segment_search_payload["report"]["scope"] == "segment"
+    assert isinstance(segment_search_payload["report"]["results"], list)
 
     audit_out = tmp_path / "similarity_audit.json"
     audit_payload = _normalize(

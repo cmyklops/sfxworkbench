@@ -32,7 +32,7 @@ console = Console()
 
 DEFAULT_SIMILARITY_CACHE = Path.home() / ".wavwarden" / "similarity"
 DETERMINISTIC_BACKEND = "deterministic_v1"
-SEGMENT_METHOD = "rms_event_v1"
+SEGMENT_METHOD = "rms_event_v2"
 _COMMIT_BATCH = 250
 
 
@@ -224,6 +224,42 @@ def _compute_spectral_features(mono, sample_rate: int, np) -> dict[str, float]:
     }
 
 
+def _compute_segment_features(segment_audio, sample_rate: int, np) -> dict[str, float | None]:
+    if segment_audio.size == 0:
+        return {
+            "peak": 0.0,
+            "rms": 0.0,
+            "crest_factor": None,
+            "silence_ratio": 1.0,
+            "zero_crossing_rate": 0.0,
+            "spectral_centroid": 0.0,
+            "spectral_bandwidth": 0.0,
+            "spectral_rolloff": 0.0,
+            "spectral_flatness": 0.0,
+        }
+
+    abs_audio = np.abs(segment_audio)
+    peak = float(abs_audio.max())
+    rms = float(math.sqrt(float(np.mean(np.square(segment_audio)))))
+    crest_factor = float(peak / rms) if rms > 0 else None
+    silence_ratio = float(np.mean(abs_audio <= 0.0001))
+    duration_s = float(segment_audio.size / sample_rate) if sample_rate else 0.0
+    if segment_audio.size > 1 and duration_s > 0:
+        signs = np.signbit(segment_audio)
+        zero_crossings = int(np.count_nonzero(signs[1:] != signs[:-1]))
+        zero_crossing_rate = float(zero_crossings / duration_s)
+    else:
+        zero_crossing_rate = 0.0
+    return {
+        "peak": peak,
+        "rms": rms,
+        "crest_factor": crest_factor,
+        "silence_ratio": silence_ratio,
+        "zero_crossing_rate": zero_crossing_rate,
+        **_compute_spectral_features(segment_audio, sample_rate, np),
+    }
+
+
 def _detect_audio_segments(mono, sample_rate: int, np, *, max_segments: int = 10) -> list[dict]:
     if mono.size < 2 or sample_rate <= 0:
         return []
@@ -282,16 +318,15 @@ def _detect_audio_segments(mono, sample_rate: int, np, *, max_segments: int = 10
         start_frame = max(0, int(start_s * sample_rate))
         end_frame = min(mono.size, max(start_frame + 1, int(end_s * sample_rate)))
         segment_audio = mono[start_frame:end_frame]
-        peak = float(np.max(np.abs(segment_audio))) if segment_audio.size else 0.0
-        rms = float(math.sqrt(float(np.mean(np.square(segment_audio))))) if segment_audio.size else 0.0
+        features = _compute_segment_features(segment_audio, sample_rate, np)
+        rms = float(features["rms"] or 0.0)
         confidence = min(1.0, rms / (threshold * 3.0)) if threshold > 0 else 0.0
         segments.append(
             {
                 "start_s": start_s,
                 "end_s": end_s,
                 "duration_s": duration_s,
-                "peak": peak,
-                "rms": rms,
+                **features,
                 "confidence": confidence,
                 "method": SEGMENT_METHOD,
             }
@@ -372,6 +407,20 @@ def _descriptor_vector(values: dict) -> tuple[float, ...] | None:
         math.log1p(float(raw["spectral_rolloff"] or 0.0)) / 10.0,
         float(raw["spectral_flatness"] or 0.0),
         math.log1p(float(raw["analyzed_duration_s"] or 0.0)) / 10.0,
+    )
+
+
+def _segment_vector(values: dict) -> tuple[float, ...] | None:
+    if values.get("peak") is None or values.get("rms") is None:
+        return None
+    return (
+        float(values.get("peak") or 0.0),
+        float(values.get("rms") or 0.0),
+        min(float(values.get("crest_factor") or 0.0), 20.0) / 20.0,
+        math.log1p(float(values.get("zero_crossing_rate") or 0.0)) / 10.0,
+        math.log1p(float(values.get("spectral_centroid") or 0.0)) / 10.0,
+        math.log1p(float(values.get("spectral_rolloff") or 0.0)) / 10.0,
+        float(values.get("spectral_flatness") or 0.0),
     )
 
 
@@ -473,8 +522,10 @@ def _write_segments(
             """
             INSERT INTO audio_segments (
                 file_id, backend, path, max_duration_s, segment_index, start_s, end_s,
-                duration_s, peak, rms, confidence, method, generated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                duration_s, peak, rms, crest_factor, silence_ratio, zero_crossing_rate,
+                spectral_centroid, spectral_bandwidth, spectral_rolloff, spectral_flatness,
+                confidence, method, generated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 file_id,
@@ -487,6 +538,13 @@ def _write_segments(
                 segment["duration_s"],
                 segment["peak"],
                 segment["rms"],
+                segment["crest_factor"],
+                segment["silence_ratio"],
+                segment["zero_crossing_rate"],
+                segment["spectral_centroid"],
+                segment["spectral_bandwidth"],
+                segment["spectral_rolloff"],
+                segment["spectral_flatness"],
                 segment["confidence"],
                 segment["method"],
                 generated_at,
@@ -655,11 +713,35 @@ def _descriptor_rows(conn, *, root: Path | None, max_duration_s: float | None):
     return [row for row in rows if Path(row["path"]) == root or _is_relative_to(Path(row["path"]), root)]
 
 
+def _segment_rows(conn, *, root: Path | None, max_duration_s: float | None):
+    rows = conn.execute(
+        """
+        SELECT s.file_id, s.path, f.filename, f.md5, f.sample_rate,
+               f.bit_depth, f.channels, f.duration_s AS file_duration_s,
+               s.segment_index, s.start_s, s.end_s, s.duration_s,
+               s.peak, s.rms, s.crest_factor, s.silence_ratio,
+               s.zero_crossing_rate, s.spectral_centroid, s.spectral_bandwidth,
+               s.spectral_rolloff, s.spectral_flatness, s.confidence, s.method
+        FROM audio_segments s
+        JOIN files f ON f.id = s.file_id
+        WHERE s.backend = ?
+          AND s.method = ?
+          AND ((? IS NULL AND s.max_duration_s IS NULL) OR s.max_duration_s = ?)
+        ORDER BY s.path, s.segment_index
+        """,
+        (DETERMINISTIC_BACKEND, SEGMENT_METHOD, max_duration_s, max_duration_s),
+    ).fetchall()
+    if root is None:
+        return rows
+    return [row for row in rows if Path(row["path"]) == root or _is_relative_to(Path(row["path"]), root)]
+
+
 def search_similarity_descriptors(
     query_path: Path,
     db_path: Path = DEFAULT_DB_PATH,
     max_duration_s: float | None = 30.0,
     limit: int = 20,
+    scope: str = "file",
     quiet: bool = False,
 ) -> SimilaritySearchReport:
     """Search cached deterministic descriptors using a query audio file."""
@@ -668,6 +750,8 @@ def search_similarity_descriptors(
         raise ValueError(f"query file not found: {query_path}")
     if limit < 1:
         raise ValueError("limit must be at least 1")
+    if scope not in {"file", "segment"}:
+        raise ValueError("scope must be 'file' or 'segment'")
 
     generated_at = _utc_now()
     query_metrics = _compute_audio_descriptor(query_path, max_duration_s=max_duration_s)
@@ -678,29 +762,46 @@ def search_similarity_descriptors(
         max_duration_s=max_duration_s,
         metrics=query_metrics,
     )
-    query_vector = _descriptor_vector(query_descriptor.model_dump())
+    query_values = query_descriptor.model_dump()
+    query_vector = _segment_vector(query_values) if scope == "segment" else _descriptor_vector(query_values)
     if query_vector is None:
         raise ValueError(f"could not analyze query file: {query_descriptor.error}")
 
     conn = get_connection(db_path)
-    rows = _descriptor_rows(conn, root=None, max_duration_s=max_duration_s)
+    if scope == "segment":
+        rows = _segment_rows(conn, root=None, max_duration_s=max_duration_s)
+    else:
+        rows = _descriptor_rows(conn, root=None, max_duration_s=max_duration_s)
     conn.close()
 
     scored: list[SimilaritySearchResult] = []
     for row in rows:
         candidate_values = dict(row)
-        candidate_vector = _descriptor_vector(candidate_values)
+        candidate_vector = (
+            _segment_vector(candidate_values) if scope == "segment" else _descriptor_vector(candidate_values)
+        )
         if candidate_vector is None:
             continue
         distance = _distance(query_vector, candidate_vector)
+        segment_kwargs = {}
+        if scope == "segment":
+            segment_kwargs = {
+                "segment_index": row["segment_index"],
+                "segment_start_s": row["start_s"],
+                "segment_end_s": row["end_s"],
+                "segment_duration_s": row["duration_s"],
+                "segment_confidence": row["confidence"],
+                "segment_method": row["method"],
+            }
         scored.append(
             SimilaritySearchResult(
+                scope=scope,
                 file_id=row["file_id"],
                 path=row["path"],
                 filename=row["filename"],
                 distance=distance,
                 score=_score(distance),
-                duration_s=row["duration_s"],
+                duration_s=row["file_duration_s"] if scope == "segment" else row["duration_s"],
                 sample_rate=row["sample_rate"],
                 bit_depth=row["bit_depth"],
                 channels=row["channels"],
@@ -708,24 +809,26 @@ def search_similarity_descriptors(
                 rms=row["rms"],
                 crest_factor=row["crest_factor"],
                 silence_ratio=row["silence_ratio"],
-                clipping_count=row["clipping_count"],
+                clipping_count=0 if scope == "segment" else row["clipping_count"],
                 zero_crossing_rate=row["zero_crossing_rate"],
-                transient_density=row["transient_density"],
+                transient_density=0.0 if scope == "segment" else row["transient_density"],
                 spectral_centroid=row["spectral_centroid"],
                 spectral_bandwidth=row["spectral_bandwidth"],
                 spectral_rolloff=row["spectral_rolloff"],
                 spectral_flatness=row["spectral_flatness"],
-                duration_bucket=row["duration_bucket"],
+                duration_bucket=_duration_bucket(row["duration_s"]) if scope == "segment" else row["duration_bucket"],
+                **segment_kwargs,
             )
         )
 
-    scored.sort(key=lambda result: (result.distance, result.path))
+    scored.sort(key=lambda result: (result.distance, result.path, result.segment_index or -1))
     report = SimilaritySearchReport(
         generated_at=generated_at,
         tool_version=__version__,
         backend=DETERMINISTIC_BACKEND,
         query_path=str(query_path),
         db_path=str(db_path),
+        scope=scope,
         max_duration_s=max_duration_s,
         candidates_considered=len(scored),
         limit=limit,
@@ -899,7 +1002,9 @@ def list_similarity_segments(
         """
         SELECT s.file_id, s.path, f.filename, s.backend, s.max_duration_s,
                s.segment_index, s.start_s, s.end_s, s.duration_s, s.peak,
-               s.rms, s.confidence, s.method, s.generated_at
+               s.rms, s.crest_factor, s.silence_ratio, s.zero_crossing_rate,
+               s.spectral_centroid, s.spectral_bandwidth, s.spectral_rolloff,
+               s.spectral_flatness, s.confidence, s.method, s.generated_at
         FROM audio_segments s
         JOIN files f ON f.id = s.file_id
         WHERE s.backend = ?
@@ -925,6 +1030,13 @@ def list_similarity_segments(
             duration_s=row["duration_s"],
             peak=row["peak"],
             rms=row["rms"],
+            crest_factor=row["crest_factor"],
+            silence_ratio=row["silence_ratio"],
+            zero_crossing_rate=row["zero_crossing_rate"],
+            spectral_centroid=row["spectral_centroid"],
+            spectral_bandwidth=row["spectral_bandwidth"],
+            spectral_rolloff=row["spectral_rolloff"],
+            spectral_flatness=row["spectral_flatness"],
             confidence=row["confidence"],
             method=row["method"],
             generated_at=row["generated_at"],
@@ -968,10 +1080,17 @@ def show_similarity_search_report(report: SimilaritySearchReport) -> None:
     table = Table(title="Similarity search", show_lines=False)
     table.add_column("Score", justify="right")
     table.add_column("Distance", justify="right")
+    table.add_column("Scope")
     table.add_column("Filename")
+    table.add_column("Segment")
     table.add_column("Path")
     for result in report.results:
-        table.add_row(f"{result.score:.3f}", f"{result.distance:.4f}", result.filename, result.path)
+        segment = ""
+        if result.scope == "segment" and result.segment_start_s is not None and result.segment_end_s is not None:
+            segment = f"{result.segment_start_s:.2f}-{result.segment_end_s:.2f}s"
+        table.add_row(
+            f"{result.score:.3f}", f"{result.distance:.4f}", result.scope, result.filename, segment, result.path
+        )
     console.print(table)
 
 

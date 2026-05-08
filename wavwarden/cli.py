@@ -166,6 +166,10 @@ def cmd_similarity_search(
         typer.Option("--max-duration", help="Maximum seconds to analyze from the query; 0 reads the full file."),
     ] = 30.0,
     limit: Annotated[int, typer.Option("--limit", help="Maximum matches to return.")] = 20,
+    scope: Annotated[
+        str,
+        typer.Option("--scope", help="Search scope: 'file' for whole-file descriptors or 'segment' for event windows."),
+    ] = "file",
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
     """Search cached deterministic descriptors with a query audio file."""
@@ -178,6 +182,7 @@ def cmd_similarity_search(
             db_path=db,
             max_duration_s=effective_max_duration,
             limit=limit,
+            scope=scope,
             quiet=json_output,
         )
     except ValueError as e:
