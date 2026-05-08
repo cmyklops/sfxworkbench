@@ -59,16 +59,20 @@ Implemented API (catalog import, in `wavwarden/ucs_catalog.py`):
 - `load_catalog(path=None) -> UcsCatalog | None` — discovery chain:
   explicit path → `WAVWARDEN_UCS_DATA` env var → `~/.wavwarden/ucs_catalog.json`
   cache → `None`
+- `resolve_catalog_path(path=None) -> Path | None` — resolves the same discovery
+  chain without reading JSON.
+- `lookup_entry(catalog, cat_short, subcategory) -> UcsEntry | None`
 - `query_categories(catalog, *, category=None, cat_short=None) -> UcsCategoriesQuery`
 - `default_cache_path() -> Path` — returns `~/.wavwarden/ucs_catalog.json`
 
-Suggested API (still pending):
+Implemented API (catalog-aware suggestions/validation):
 
-- `suggest_category(filename: str, folders: list[str]) -> UcsSuggestion` —
-  catalog-aware suggestion that boosts `tag_suggest` confidence from 0.75 to
-  0.95 on a verified `(cat_short, subcategory)` pair.
-- `validate_indexed_files(db_path) -> ValidationReport` — count files whose
-  parsed `(cat_short, subcategory)` matches the loaded catalog.
+- `tag_suggest.suggest_from_ucs_stem(stem, catalog=None)` — when a catalog is
+  supplied, verified `(CatShort, SubCategory)` matches emit `ucs_catalog`
+  suggestions at 0.95 confidence.
+- `ucs_validate.build_ucs_validation_report(db_path, root=None, catalog_path=None)`
+  counts indexed filenames whose parsed `(CatShort, SubCategory)` matches the
+  loaded catalog.
 
 Implemented CLI:
 
@@ -77,13 +81,9 @@ uv run sfx ucs import ~/Desktop/_categorylist.csv --release-version v8.2.1
 uv run sfx ucs info
 uv run sfx ucs categories --cat-short AMB
 uv run sfx ucs categories --category AMBIENCE --json
-```
-
-Suggested CLI (still pending):
-
-```bash
 uv run sfx ucs validate --db ~/.wavwarden/index.db --json
-uv run sfx rename PATH --pattern ucs --ucs-data ~/.wavwarden/ucs_catalog.json
+uv run sfx tag suggest PATH --use-ucs-catalog --min-confidence 0.8 --json
+uv run sfx tag suggest PATH --ucs-catalog ~/.wavwarden/ucs_catalog.json --output ~/reports/tag_suggestions_ucs.json
 ```
 
 Suggested data behavior:

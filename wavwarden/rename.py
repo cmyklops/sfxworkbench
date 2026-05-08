@@ -336,6 +336,7 @@ def apply_rename_plan(
     for entry in plan.entries:
         old = Path(entry.old_path)
         new = Path(entry.new_path)
+        created_parent = False
         if not old.exists():
             result.errors.append({"path": str(old), "error": "source missing"})
             continue
@@ -343,6 +344,9 @@ def apply_rename_plan(
             result.errors.append({"path": str(old), "target": str(new), "error": "target exists"})
             continue
         try:
+            if "create_parent_folder" in entry.issue_fixes and not new.parent.exists():
+                new.parent.mkdir(parents=True)
+                created_parent = True
             old.rename(new)
             applied.append(entry)
             result.renamed += 1
@@ -355,6 +359,11 @@ def apply_rename_plan(
                 console.print(f"[green]Renamed:[/green] {old} -> {new}")
         except OSError as e:
             result.errors.append({"path": str(old), "target": str(new), "error": str(e)})
+            if created_parent:
+                try:
+                    new.parent.rmdir()
+                except OSError:
+                    pass
 
     if conn is not None:
         conn.commit()
@@ -402,6 +411,11 @@ def undo_rename_log(
                     _update_directory_rows(conn, new, old, root)
                 else:
                     _update_file_row(conn, new, old, root)
+            if "create_parent_folder" in entry.issue_fixes:
+                try:
+                    new.parent.rmdir()
+                except OSError:
+                    pass
             if not quiet:
                 console.print(f"[green]Restored:[/green] {new} -> {old}")
         except OSError as e:

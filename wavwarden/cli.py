@@ -210,7 +210,7 @@ def cmd_metadata_audit(
 
     try:
         report = build_metadata_audit_report(db, limit=limit)
-    except ValueError as e:
+    except (FileNotFoundError, ValueError) as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
 
@@ -360,6 +360,59 @@ def cmd_ucs_categories(
         print(json_dumps({"schema_version": 1, "command": "ucs_categories", "result": query}))
 
 
+@ucs_app.command("validate")
+def cmd_ucs_validate(
+    path: Annotated[
+        Path | None,
+        typer.Argument(help="Optional indexed library root to validate. Omits unrelated rows when provided."),
+    ] = None,
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    catalog: Annotated[
+        Path | None, typer.Option("--catalog", help="Override the discovery chain with an explicit catalog path.")
+    ] = None,
+    output: Annotated[
+        Path | None, typer.Option("--output", help="Write UCS validation report JSON to this path.")
+    ] = None,
+    limit: Annotated[int, typer.Option("--limit", help="Maximum miss entries to include; 0 writes all.")] = 200,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Validate UCS-looking indexed filenames against the loaded UCS catalog."""
+    from wavwarden.ucs_validate import (
+        build_ucs_validation_report,
+        show_ucs_validation_report,
+        write_ucs_validation_report,
+    )
+
+    if path is not None and not path.exists():
+        console.print(f"[red]Error: path not found: {path}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        report = build_ucs_validation_report(db, root=path, catalog_path=catalog, limit=limit)
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
+    if output is not None:
+        write_ucs_validation_report(report, output, quiet=json_output)
+    elif not json_output:
+        show_ucs_validation_report(report)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "ucs_validate",
+                    "root": path,
+                    "db_path": db,
+                    "catalog_path": report.catalog_path,
+                    "report_path": output,
+                    "report": report,
+                }
+            )
+        )
+
+
 # ---------------------------------------------------------------------------
 # sfx tag
 # ---------------------------------------------------------------------------
@@ -369,6 +422,14 @@ def cmd_ucs_categories(
 def cmd_tag_suggest(
     path: Annotated[Path, typer.Argument(help="Root path of the indexed library to inspect.")],
     db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    ucs_catalog: Annotated[
+        Path | None,
+        typer.Option("--ucs-catalog", help="Use this UCS catalog JSON for catalog-backed suggestions."),
+    ] = None,
+    use_ucs_catalog: Annotated[
+        bool,
+        typer.Option("--use-ucs-catalog", help="Use the UCS catalog discovery chain for catalog-backed suggestions."),
+    ] = False,
     output: Annotated[
         Path | None, typer.Option("--output", help="Write tag suggestion report JSON to this path.")
     ] = None,
@@ -390,8 +451,15 @@ def cmd_tag_suggest(
         raise typer.Exit(1)
 
     try:
-        report = build_tag_suggestion_report(path, db_path=db, min_confidence=min_confidence, limit=limit)
-    except ValueError as e:
+        report = build_tag_suggestion_report(
+            path,
+            db_path=db,
+            min_confidence=min_confidence,
+            limit=limit,
+            ucs_catalog_path=ucs_catalog,
+            use_ucs_catalog=use_ucs_catalog,
+        )
+    except (FileNotFoundError, ValueError) as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
 
@@ -407,6 +475,7 @@ def cmd_tag_suggest(
                     "command": "tag_suggest",
                     "root": path,
                     "db_path": db,
+                    "ucs_catalog_path": report.ucs_catalog_path,
                     "report_path": output,
                     "report": report,
                 }
@@ -426,7 +495,11 @@ def cmd_organize_audit(
         str,
         typer.Option(
             "--pattern",
-            help="Organization pattern. Supported: 'strip-leading-numbers', 'redundant-nesting'.",
+            help=(
+                "Organization pattern. Supported: 'strip-leading-numbers', "
+                "'common-prefix-folders', 'numeric-series-folders', "
+                "'vendor-product-folders', 'redundant-nesting'."
+            ),
         ),
     ] = "strip-leading-numbers",
     depth: Annotated[int, typer.Option("--depth", help="Folder depth under PATH to inspect.")] = 1,

@@ -33,8 +33,10 @@ from wavwarden.models import (
     TagSuggestionEntry,
     TagSuggestionReport,
     TagSuggestionSummary,
+    UcsCatalog,
 )
 from wavwarden.ucs import normalize_stem, parse_ucs_stem
+from wavwarden.ucs_catalog import load_catalog, lookup_entry, resolve_catalog_path
 
 console = Console()
 
@@ -43,6 +45,7 @@ console = Console()
 # are deliberate floats so a future UCS catalog match can sit at 0.95 above the
 # 0.75 heuristic.
 _CONFIDENCE_UCS_HEURISTIC = 0.75
+_CONFIDENCE_UCS_CATALOG = 0.95
 _CONFIDENCE_GROUP = 0.85
 _CONFIDENCE_FILENAME_ABBREVIATION = 0.65
 _CONFIDENCE_FILENAME_TAKE = 0.60
@@ -198,23 +201,38 @@ def _strip_leading_sort_prefix(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def suggest_from_ucs_stem(stem: str) -> list[TagSuggestion]:
-    """Emit ``category``/``subcategory``/``description``/``take_number`` from a UCS-named stem."""
+def suggest_from_ucs_stem(stem: str, catalog: UcsCatalog | None = None) -> list[TagSuggestion]:
+    """Emit ``category``/``subcategory``/``description``/``take_number`` from a UCS-named stem.
+
+    When a UCS catalog is supplied and the filename's ``CatShort_SubCategory``
+    pair matches, category/subcategory/description suggestions are upgraded to
+    catalog-backed evidence. Non-matches still fall back to the existing
+    heuristic so older report flows keep working.
+    """
     parsed = parse_ucs_stem(stem)
     if not parsed.is_ucs:
         return []
 
+    catalog_entry = lookup_entry(catalog, parsed.category, parsed.subcategory) if catalog is not None else None
+    has_catalog_match = catalog_entry is not None
+    source = "ucs_catalog" if has_catalog_match else "ucs_stem"
+    method = "ucs_catalog_match" if has_catalog_match else "ucs_heuristic"
+    confidence = _CONFIDENCE_UCS_CATALOG if has_catalog_match else _CONFIDENCE_UCS_HEURISTIC
     suggestions: list[TagSuggestion] = []
     evidence = [stem]
+    if catalog is not None and not has_catalog_match:
+        evidence.append(f"catalog_miss:{parsed.category}_{parsed.subcategory}")
+    if catalog_entry is not None:
+        evidence.extend([f"cat_short:{catalog_entry.cat_short}", f"cat_id:{catalog_entry.cat_id}"])
 
     if parsed.category:
         suggestions.append(
             TagSuggestion(
                 field="category",
-                value=parsed.category,
-                source="ucs_stem",
-                method="ucs_heuristic",
-                confidence=_CONFIDENCE_UCS_HEURISTIC,
+                value=catalog_entry.category if catalog_entry is not None else parsed.category,
+                source=source,
+                method=method,
+                confidence=confidence,
                 evidence=evidence,
             )
         )
@@ -222,10 +240,10 @@ def suggest_from_ucs_stem(stem: str) -> list[TagSuggestion]:
         suggestions.append(
             TagSuggestion(
                 field="subcategory",
-                value=parsed.subcategory,
-                source="ucs_stem",
-                method="ucs_heuristic",
-                confidence=_CONFIDENCE_UCS_HEURISTIC,
+                value=catalog_entry.subcategory if catalog_entry is not None else parsed.subcategory,
+                source=source,
+                method=method,
+                confidence=confidence,
                 evidence=evidence,
             )
         )
@@ -245,9 +263,9 @@ def suggest_from_ucs_stem(stem: str) -> list[TagSuggestion]:
             TagSuggestion(
                 field="description",
                 value=description_value,
-                source="ucs_stem",
-                method="ucs_heuristic",
-                confidence=_CONFIDENCE_UCS_HEURISTIC,
+                source=source,
+                method=method,
+                confidence=confidence,
                 evidence=evidence,
             )
         )
@@ -257,7 +275,7 @@ def suggest_from_ucs_stem(stem: str) -> list[TagSuggestion]:
                 field="take_number",
                 value=take,
                 source="ucs_stem",
-                method="ucs_heuristic",
+                method="trailing_number",
                 confidence=_CONFIDENCE_UCS_HEURISTIC,
                 evidence=evidence,
             )
@@ -441,6 +459,8 @@ def build_tag_suggestion_report(
     db_path: Path,
     min_confidence: float = 0.0,
     limit: int = 200,
+    ucs_catalog_path: Path | None = None,
+    use_ucs_catalog: bool = False,
 ) -> TagSuggestionReport:
     """Walk the index for files under ``root`` and produce per-file suggestions."""
     if min_confidence < 0 or min_confidence > 1:
@@ -451,6 +471,13 @@ def build_tag_suggestion_report(
     root = root.resolve()
     rows = _load_files(root, db_path)
     group_index = _build_group_index(root, db_path)
+    catalog: UcsCatalog | None = None
+    resolved_catalog_path: Path | None = None
+    if use_ucs_catalog or ucs_catalog_path is not None:
+        resolved_catalog_path = resolve_catalog_path(ucs_catalog_path)
+        catalog = load_catalog(ucs_catalog_path)
+        if catalog is None:
+            raise ValueError("No UCS catalog loaded. Run `sfx ucs import SOURCE` first or pass --ucs-catalog.")
 
     entries: list[TagSuggestionEntry] = []
     by_source: dict[str, int] = {}
@@ -464,7 +491,7 @@ def build_tag_suggestion_report(
         stem_raw = row["stem"] or path.stem
         stem = normalize_stem(stem_raw)
 
-        ucs_suggestions = suggest_from_ucs_stem(stem)
+        ucs_suggestions = suggest_from_ucs_stem(stem, catalog=catalog)
         has_ucs_description = any(s.field == "description" for s in ucs_suggestions)
 
         group_match = group_index.by_path.get(str(path))
@@ -523,6 +550,8 @@ def build_tag_suggestion_report(
         tool_version=__version__,
         root=str(root),
         db_path=str(db_path),
+        ucs_catalog_path=str(resolved_catalog_path.resolve()) if resolved_catalog_path is not None else None,
+        ucs_catalog_release_version=catalog.provenance.release_version if catalog is not None else None,
         min_confidence=min_confidence,
         limit=limit,
         summary=summary,

@@ -91,6 +91,19 @@ python3 audit.py ~/CommercialLibraries --json
 ## Phase 2 — Cleanup Tooling
 
 `sfx rename` now supports `ucs`, `safe`, and `portable` preview/apply/undo behavior.
+Portable mode is the user-facing cross-platform cleanup path for studios that
+want names to survive Windows/macOS drives, shells, DAWs, sync tools, and CSV
+round-trips. It normalizes Unicode, replaces risky punctuation such as `&` with
+word-safe equivalents where possible, strips or replaces illegal filename
+characters, handles non-ASCII names conservatively, shortens long paths, renames
+folders as well as files, updates SQLite rows, refuses collisions, and writes an
+undo log.
+
+```text
+Series 9000 Open & Close -> Series 9000 Open and Close
+100_C#_Flesh & Bones!.wav -> 100_CSharp_Flesh and Bones_.wav
+```
+
 Pack/folder duplicate detection is the next professional-grade safety layer
 after exact file dedupe and filename/path cleanup. It should ship as a reviewed
 report/plan/apply workflow before broad folder organization features:
@@ -106,8 +119,60 @@ files is a later explicit action and must never overwrite existing files.
 Folder organization follows the same safety model. First workflow:
 `sfx organize audit PATH --depth 1 --pattern strip-leading-numbers`, reporting
 top-level folder changes such as `01 Vendor Pack` -> `Vendor Pack` for
-alphabetized browsing and easier bulk edits. Apply requires a reviewed report,
-refuses collisions, updates SQLite paths, and writes an undo log.
+alphabetized browsing and easier bulk edits. It also strips whole-name wrapper
+brackets/parentheses such as `[99Sounds]` -> `99Sounds` or `(A Sound Effect)` ->
+`A Sound Effect`. Apply requires a reviewed report, refuses collisions, updates
+SQLite paths, and writes an undo log.
+
+Vendor/product re-foldering is implemented as a conservative reviewed workflow:
+`sfx organize audit PATH --pattern vendor-product-folders`. It detects known
+vendor prefixes in sibling folders such as `SoundMorph - Energy`, `SoundMorph -
+Sinematic 2`, `Ghosthack - Pack Name`, or `A Sound Effect - Pack Name` and
+proposes:
+
+```text
+SoundMorph - Energy      -> SoundMorph/Energy
+SoundMorph - Sinematic 2 -> SoundMorph/Sinematic 2
+```
+
+This workflow uses the existing report/review/apply/undo path, creates parent
+folders only as planned, never overwrites existing files, reports collisions as
+unresolved review items, and updates SQLite paths after successful moves.
+
+Sibling family re-foldering is also implemented as a conservative reviewed
+workflow: `sfx organize audit PATH --pattern common-prefix-folders`. It looks
+for three or more sibling folders with the same parsed prefix and proposes a
+shared parent while stripping the repeated prefix from child folders:
+
+```text
+GDC 2015 - Soniss       -> GDC/2015 - Soniss
+GDC SFX 2017            -> GDC/SFX 2017
+GDC+++Game+Audio+Bundle -> GDC/Game Audio Bundle
+GDC2023                 -> GDC/2023
+CreaturesCK_1           -> CreaturesCK/1
+```
+
+This pattern is intentionally separate from vendor/product matching. It is
+useful for folder families, yearly bundles, and numbered series, but should
+still be reviewed before applying because common prefixes can be semantic.
+
+Strict numeric folder organization is implemented as:
+`sfx organize audit PATH --pattern numeric-series-folders`. It first checks a
+small built-in, sourced catalog of popular Sound Ideas series numbers, then
+falls back to a fast filename-token category guess when there is no catalog hit.
+Catalog hits produce vendor/product parents; inferred categories produce named
+category parents:
+
+```text
+6000  -> Sound Ideas/The General Series 6000
+9000  -> Sound Ideas/Series 9000 Open and Close
+12000 -> Sound Ideas/Series 12000 Anchors Away
+4242  -> Animals/4242       # inferred from child filenames, when confident
+```
+
+Unknown numeric folders remain review candidates instead of being moved. Future
+versions should load a user-editable series catalog so studios can add
+proprietary or legacy library number mappings without changing wavwarden code.
 
 The next organization audit is implemented as report-only:
 `sfx organize audit PATH --pattern redundant-nesting --depth 8`, flagging:

@@ -1,12 +1,186 @@
 # wavwarden
 
-Sound library hygiene tools for commercial audio libraries. wavwarden is aimed
-at an **Internal Studio Beta** first: safe, reviewable CLI workflows for real
-libraries before broader public-product polish.
+wavwarden helps sound designers clean up large SFX libraries without guessing
+what will happen to their files.
 
-See [`docs/PHASES.md`](docs/PHASES.md) for the roadmap.
+It is built for commercial audio collections: Sound Ideas, GDC/Soniss bundles,
+vendor packs, downloaded freebies, personal recordings, and years of folders
+that have slowly become hard to search.
 
-Project docs:
+wavwarden is currently an **Internal Studio Beta**. The goal is practical,
+reviewable library cleanup for real studio copies before public v1.0 polish.
+
+## What It Helps With
+
+- Remove junk files such as `.DS_Store`, AppleDouble files, waveform caches, and
+  other non-audio clutter.
+- Scan a library into a local SQLite index for search, audits, duplicate checks,
+  and future UI workflows.
+- Find exact duplicate audio files and quarantine extras instead of deleting
+  them permanently.
+- Clean risky filenames and folder names so libraries are more portable across
+  macOS, Windows, DAWs, sync tools, and external drives.
+- Organize obvious folder patterns, such as numbered Sound Ideas series folders,
+  vendor/product folders, and sibling bundle groups.
+- Report metadata, sample-rate, channel-layout, and related-take issues without
+  changing the audio.
+- Suggest tags from filenames, folders, UCS names, and related file groups.
+
+wavwarden does **not** change audio content. Loudness normalization and sample
+rate conversion are out of scope for the beta safety promise.
+
+## Safety Promise
+
+Filesystem-changing commands are designed to be boring and reversible:
+
+- preview first
+- never overwrite existing files
+- require an explicit apply step
+- write JSON reports or logs
+- update the SQLite index after successful moves
+- prefer quarantine or undo logs over permanent deletion
+
+When in doubt, run the preview command and inspect the report before applying.
+
+## Install
+
+For development or internal beta use from a cloned repo:
+
+```bash
+uv sync --extra dev
+uv run sfx --help
+```
+
+Optional richer WAV metadata reads:
+
+```bash
+uv sync --extra metadata --extra dev
+```
+
+Single-command installs from GitHub or PyPI are planned, but should be tested
+from clean machines before they are documented as the recommended path.
+
+## Common Workflow
+
+Replace `PATH` with your copied library folder. Do not start on your only copy.
+
+```bash
+# 1. Remove obvious junk. Dry-run first.
+uv run sfx clean PATH
+uv run sfx clean PATH --apply
+
+# 2. Build or refresh the local index.
+uv run sfx scan PATH
+
+# 3. Check library health.
+uv run sfx audit
+
+# 4. Find exact duplicates.
+uv run sfx dedupe --summary-only
+uv run sfx dedupe --output ~/reports/dedupe_plan.json
+uv run sfx dedupe --review ~/reports/dedupe_plan.json --approve-all
+uv run sfx dedupe --apply ~/reports/dedupe_plan.json --require-reviewed
+
+# 5. Preview portable filename cleanup.
+uv run sfx rename PATH --pattern portable
+uv run sfx rename PATH --pattern portable --apply --log ~/reports/portable_rename_log.json
+
+# 6. Search indexed filenames.
+uv run sfx search "gunshot exterior"
+```
+
+Default database:
+
+```text
+~/.wavwarden/index.db
+```
+
+Override it with `--db` when needed.
+
+## Folder Organization
+
+Folder organization is report-first. Preview, review, then apply.
+
+```bash
+# Remove simple numeric prefixes such as "01 Pack Name".
+uv run sfx organize audit PATH --depth 1 --output ~/reports/organize_report.json
+
+# Group known vendor/product folders.
+uv run sfx organize audit PATH --pattern vendor-product-folders --output ~/reports/vendor_folders.json
+
+# Group sibling families such as GDC 2015, GDC 2016, GDC2023.
+uv run sfx organize audit PATH --pattern common-prefix-folders --output ~/reports/common_prefix_folders.json
+
+# Group strict numeric library folders such as Sound Ideas 6000/7000/9000.
+uv run sfx organize audit PATH --pattern numeric-series-folders --output ~/reports/numeric_series_folders.json
+
+# Apply an approved organization report.
+uv run sfx organize review ~/reports/organize_report.json --approve-all
+uv run sfx organize apply ~/reports/organize_report.json --require-reviewed --log ~/reports/organize_log.json
+```
+
+Examples:
+
+```text
+6000 -> Sound Ideas/The General Series 6000
+9000 -> Sound Ideas/Series 9000 Open and Close
+SoundMorph - Energy -> SoundMorph/Energy
+GDC 2015 - Soniss -> GDC/2015 - Soniss
+CreaturesCK_1 -> CreaturesCK/1
+```
+
+## Portable Rename Mode
+
+Use portable rename when a library needs safer names for drives, DAWs, shells,
+CSV exports, and cross-platform collaboration.
+
+```bash
+uv run sfx rename PATH --pattern portable
+uv run sfx rename PATH --pattern portable --apply --log ~/reports/portable_rename_log.json
+```
+
+Examples:
+
+```text
+Series 9000 Open & Close -> Series 9000 Open and Close
+100_C#_Flesh & Bones!.wav -> 100_CSharp_Flesh and Bones_.wav
+Bad:Name.wav -> Bad_Name.wav
+```
+
+Portable mode handles Unicode normalization, risky punctuation, non-ASCII
+characters, illegal filename characters, and conservative long-path shortening.
+
+## Reports And Metadata
+
+These commands are report-only today:
+
+```bash
+uv run sfx metadata audit --output ~/reports/metadata_report.json
+uv run sfx groups audit PATH --output ~/reports/related_groups_report.json
+uv run sfx format audit PATH --output ~/reports/format_report.json
+uv run sfx packs audit PATH --output ~/reports/pack_overlap_report.json
+uv run sfx tag suggest PATH --use-ucs-catalog --min-confidence 0.8 --output ~/reports/tag_suggestions.json
+```
+
+UCS catalog support:
+
+```bash
+uv run sfx ucs import ~/Desktop/_categorylist.csv --release-version v8.2.1
+uv run sfx ucs validate PATH --json
+```
+
+## Standalone First-Look Audit
+
+`audit.py` is a no-install, zero-dependency script for a first look at a library.
+It does not import the `wavwarden` package.
+
+```bash
+python3 audit.py PATH --output-dir ~/reports
+python3 audit.py PATH --no-hash
+python3 audit.py PATH --json
+```
+
+## Project Docs
 
 - [`NEXT.md`](NEXT.md): current solo-dev sprint note
 - [`docs/PHASES.md`](docs/PHASES.md): roadmap, safety model, JSON contracts
@@ -16,128 +190,20 @@ Project docs:
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): contribution policy during internal beta
 - [`SECURITY.md`](SECURITY.md): private reporting guidance
 
-## Install
-
-```bash
-uv pip install -e ".[dev]"
-# Optional richer WAV metadata reads:
-uv pip install -e ".[metadata,dev]"
-```
-
-## Current CLI
-
-Every filesystem-changing command defaults to dry-run or review-first behavior.
-Use `--json` on core commands for machine-readable output.
-
-```bash
-uv run sfx clean PATH                 # dry-run junk cleanup
-uv run sfx clean PATH --apply         # remove junk after review
-uv run sfx scan PATH                  # index audio files into SQLite
-uv run sfx audit                      # report index health
-uv run sfx metadata audit --output ~/reports/metadata_report.json
-uv run sfx groups audit PATH --output ~/reports/related_groups_report.json
-uv run sfx format audit PATH --output ~/reports/format_report.json
-uv run sfx scan-errors --output ~/reports/scan_error_plan.json
-uv run sfx scan-errors --apply ~/reports/scan_error_plan.json
-uv run sfx search QUERY               # FTS filename search
-uv run sfx export --output library.csv
-uv run sfx dedupe --summary-only      # count duplicate groups without writing a plan
-uv run sfx dedupe --output ~/reports/dedupe_plan.json
-uv run sfx dedupe --review PLAN.json --approve-all
-uv run sfx dedupe --apply PLAN.json --require-reviewed
-uv run sfx packs audit PATH --output ~/reports/pack_overlap_report.json
-uv run sfx organize audit PATH --depth 1 --output ~/reports/organize_report.json
-uv run sfx organize audit PATH --pattern redundant-nesting --depth 8 --output ~/reports/nesting_report.json
-uv run sfx organize nesting-plan ~/reports/nesting_report.json --output ~/reports/nesting_plan.json
-uv run sfx organize nesting-plan ~/reports/nesting_report.json --kind single_child_chain --output ~/reports/single_child_plan.json
-uv run sfx organize nesting-plan ~/reports/nesting_report.json --kind low_value_wrapper --output ~/reports/wrapper_plan.json
-uv run sfx organize review ~/reports/nesting_plan.json --approve-all
-uv run sfx organize nesting-apply ~/reports/nesting_plan.json --require-reviewed
-uv run sfx organize nesting-apply ~/reports/nesting_plan.json --apply --require-reviewed --log nesting_log.json
-uv run sfx organize nesting-undo nesting_log.json --apply
-uv run sfx organize review ~/reports/organize_report.json --approve-all
-uv run sfx organize apply ~/reports/organize_report.json --require-reviewed --log organize_log.json
-uv run sfx organize undo organize_log.json --apply
-uv run sfx rename PATH --pattern ucs  # dry-run UCS-oriented rename preview
-uv run sfx rename PATH --pattern safe # dry-run safe filename/path cleanup
-uv run sfx rename PATH --pattern portable # dry-run portable filename/path cleanup
-uv run sfx rename PATH --pattern ucs --apply --log rename_log.json
-uv run sfx rename PATH --pattern safe --apply --allow-partial --log safe_rename_log.json
-uv run sfx rename PATH --pattern portable --apply --log portable_rename_log.json
-uv run sfx rename --undo rename_log.json --apply
-```
-
-Default database: `~/.wavwarden/index.db`. Override with `--db`.
-
-## Standalone Phase 0 Audit
-
-`audit.py` is a no-install, zero-dependency auditor for first looks at a library.
-It does not import the `wavwarden` package.
-
-```bash
-python3 audit.py ~/CommercialLibraries --output-dir ~/reports
-python3 audit.py ~/CommercialLibraries --no-hash
-python3 audit.py ~/CommercialLibraries --json
-```
-
-## Safety Model
-
-- `clean` is dry-run by default and can write a JSON log.
-- `dedupe --summary-only` reports counts without writing a plan.
-- `dedupe --output PLAN.json` writes a plan; `--review` stamps approvals and `--apply` quarantines by default.
-- `packs audit` reports duplicated commercial packs and overlapping bundle folders
-  without changing the filesystem or SQLite index.
-- `organize audit/review/apply/undo` previews and applies safe folder-structure
-  cleanup with review and undo.
-- `organize audit --pattern redundant-nesting` is report-only; it flags repeated
-  folder names, one-child chains, and generic wrapper folders for human review.
-- `organize nesting-plan/apply/undo` safely promotes repeated folder names and
-  selected low-risk nesting cleanup into reviewed flatten operations with collision checks and undo.
-- Pack/folder consolidation is planned as a separate reviewed workflow
-  for duplicated commercial packs and overlapping bundle folders.
-- `scan-errors` writes a plan for unreadable indexed files; only obvious
-  artifacts are marked for quarantine automatically.
-- `metadata audit` is report-only; it lists files missing BWF/iXML metadata and
-  files with unusual sample rates before any tag-writing work is attempted.
-- `groups audit` is report-only; it infers obvious related sound groups such as
-  numbered takes and channel sets from indexed filenames.
-- `format audit` is report-only; it flags mixed sample rate, bit depth, or
-  channel counts inside related groups without recommending conversion.
-- `rename` previews first, refuses collisions, writes an undo log on apply, and
-  can restore from that log. `--pattern portable` handles Unicode normalization,
-  risky cross-platform characters, non-ASCII names, and conservative long-path shortening.
-- Audio format conversion and loudness changes are out of scope for the beta
-  safety promise; wavwarden preserves original audio content.
-
-## Tests
-
-```bash
-uv run pytest tests/ -v
-```
-
-## Development Workflow
-
-Canonical local tasks live in `pyproject.toml` via Poe:
+## Development
 
 ```bash
 uv run --extra dev poe test
 uv run --extra dev poe lint
 uv run --extra dev poe fmt-check
 uv run --extra dev poe check
-uv run --extra dev poe json-smoke
-uv run --extra dev poe bench-scan --files 1000 --no-hash
 ```
 
-There is also a thin `Makefile` for muscle-memory aliases:
+Run the full check before committing:
 
 ```bash
-make test
-make lint
-make json-smoke
-make bench-scan BENCH_LIMIT=1000
+uv run --extra dev poe check
 ```
-
-Roadmap details and JSON output contracts live in [`docs/PHASES.md`](docs/PHASES.md).
 
 ## License
 

@@ -487,6 +487,38 @@ class UcsCategoriesQuery(BaseModel):
     entries: list[UcsEntry] = []
 
 
+class UcsValidationIssue(BaseModel):
+    file_id: int
+    path: str
+    filename: str
+    cat_short: str | None = None
+    subcategory: str | None = None
+    reason: str
+
+
+class UcsValidationSummary(BaseModel):
+    files_considered: int = 0
+    ucs_looking: int = 0
+    catalog_matches: int = 0
+    catalog_misses: int = 0
+    non_ucs: int = 0
+    by_miss_reason: dict[str, int] = {}
+
+
+class UcsValidationReport(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    root: str | None = None
+    db_path: str
+    catalog_path: str
+    catalog_release_version: str | None = None
+    limit: int = 200
+    summary: UcsValidationSummary
+    issues: list[UcsValidationIssue] = []
+
+
 # ---------------------------------------------------------------------------
 # Tag suggestions (Phase B — report-only)
 # ---------------------------------------------------------------------------
@@ -527,6 +559,8 @@ class TagSuggestionReport(BaseModel):
     tool_version: str
     root: str
     db_path: str
+    ucs_catalog_path: str | None = None
+    ucs_catalog_release_version: str | None = None
     min_confidence: float = 0.0
     limit: int = 200
     summary: TagSuggestionSummary

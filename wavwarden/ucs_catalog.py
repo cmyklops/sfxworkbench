@@ -79,6 +79,18 @@ def default_cache_path() -> Path:
     return DEFAULT_DB_PATH.parent / "ucs_catalog.json"
 
 
+def resolve_catalog_path(path: Path | None = None) -> Path | None:
+    """Resolve the catalog discovery chain without reading the catalog."""
+    if path is not None:
+        return path.expanduser()
+    if ENV_OVERRIDE in os.environ and os.environ[ENV_OVERRIDE]:
+        return Path(os.environ[ENV_OVERRIDE]).expanduser()
+    cache = default_cache_path()
+    if cache.exists():
+        return cache
+    return None
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -166,13 +178,7 @@ def load_catalog(path: Path | None = None) -> UcsCatalog | None:
     ``default_cache_path()`` → ``None``. Returns ``None`` only when no cache
     exists and no override is set, so callers can fall back gracefully.
     """
-    candidate: Path | None = None
-    if path is not None:
-        candidate = path
-    elif ENV_OVERRIDE in os.environ and os.environ[ENV_OVERRIDE]:
-        candidate = Path(os.environ[ENV_OVERRIDE]).expanduser()
-    elif default_cache_path().exists():
-        candidate = default_cache_path()
+    candidate = resolve_catalog_path(path)
 
     if candidate is None:
         return None
@@ -184,6 +190,17 @@ def load_catalog(path: Path | None = None) -> UcsCatalog | None:
         return UcsCatalog.model_validate(payload)
     except ValidationError as exc:
         raise ValueError(f"UCS catalog at {candidate} is malformed: {exc}") from exc
+
+
+def lookup_entry(catalog: UcsCatalog, cat_short: str | None, subcategory: str | None) -> UcsEntry | None:
+    """Return the UCS catalog entry for a filename ``CatShort_SubCategory`` pair."""
+    if not cat_short or not subcategory:
+        return None
+    wanted = (cat_short.strip().upper(), subcategory.strip().upper())
+    for entry in catalog.entries:
+        if (entry.cat_short, entry.subcategory) == wanted:
+            return entry
+    return None
 
 
 # ---------------------------------------------------------------------------

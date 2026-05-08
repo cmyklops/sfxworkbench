@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from wavwarden.db import get_connection
-from wavwarden.models import RelatedSoundFile, RelatedSoundGroup
+from wavwarden.models import RelatedSoundFile, RelatedSoundGroup, UcsCatalog, UcsCatalogProvenance, UcsEntry
 from wavwarden.tag_suggest import (
     build_tag_suggestion_report,
     suggest_from_filename,
@@ -15,6 +15,26 @@ from wavwarden.tag_suggest import (
     suggest_from_ucs_stem,
     write_tag_suggestion_report,
 )
+
+
+def _sample_catalog() -> UcsCatalog:
+    return UcsCatalog(
+        tool_version="test",
+        provenance=UcsCatalogProvenance(
+            source_url="https://universalcategorysystem.com/",
+            source_path="/tmp/_categorylist.csv",
+            source_format="soundminer_csv",
+            release_version="v8.2.1",
+            imported_at="2026-01-01T00:00:00+00:00",
+            attribution="test",
+            entry_count=2,
+        ),
+        entries=[
+            UcsEntry(cat_short="AMB", category="AMBIENCE", subcategory="RAIN", cat_id="AMBRain"),
+            UcsEntry(cat_short="SFX", category="SOUND EFFECT", subcategory="GUNSHOT", cat_id="SFXGunshot"),
+        ],
+    )
+
 
 # ---------------------------------------------------------------------------
 # Pure suggestor unit tests
@@ -32,6 +52,19 @@ def test_ucs_stem_emits_category_subcategory_description_take() -> None:
     assert by_field["description"].value == "Gunshot Pistol"
     assert by_field["take_number"].value == "01"
     assert all(s.confidence == 0.75 for s in suggestions)
+
+
+def test_ucs_stem_uses_catalog_match_when_available() -> None:
+    suggestions = suggest_from_ucs_stem("SFX_GUNSHOT_PISTOL_01", catalog=_sample_catalog())
+    by_field = {s.field: s for s in suggestions}
+
+    assert by_field["category"].value == "SOUND EFFECT"
+    assert by_field["category"].source == "ucs_catalog"
+    assert by_field["category"].method == "ucs_catalog_match"
+    assert by_field["category"].confidence == 0.95
+    assert by_field["subcategory"].value == "GUNSHOT"
+    assert "cat_id:SFXGunshot" in by_field["category"].evidence
+    assert by_field["take_number"].source == "ucs_stem"
 
 
 def test_ucs_stem_with_only_subcategory_and_take() -> None:
@@ -238,6 +271,25 @@ def test_report_combines_ucs_path_group_evidence(tmp_path: Path, tmp_db: Path) -
     assert {"ucs_stem", "group", "path"}.issubset(sources_used)
     fields = set(report.summary.by_field.keys())
     assert {"category", "subcategory", "description", "take_number"}.issubset(fields)
+
+
+def test_report_can_use_explicit_ucs_catalog(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "Ambience"
+    folder.mkdir(parents=True)
+    _seed_files(tmp_db, [{"path": folder / "AMB_RAIN_01.wav", "md5": "A"}])
+
+    catalog_path = tmp_path / "ucs_catalog.json"
+    catalog_path.write_text(json.dumps(_sample_catalog().model_dump()), encoding="utf-8")
+
+    report = build_tag_suggestion_report(root, tmp_db, ucs_catalog_path=catalog_path)
+
+    assert report.ucs_catalog_path == str(catalog_path.resolve())
+    assert report.ucs_catalog_release_version == "v8.2.1"
+    assert report.summary.by_source["ucs_catalog"] == 3
+    suggestion = next(s for s in report.entries[0].suggestions if s.field == "category")
+    assert suggestion.value == "AMBIENCE"
+    assert suggestion.confidence == 0.95
 
 
 def test_report_min_confidence_filters_low_confidence(tmp_path: Path, tmp_db: Path) -> None:

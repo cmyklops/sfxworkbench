@@ -21,6 +21,12 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
 - Unicode normalization duplicates: quarantined.
 - Pack overlap report: zero exact-hash pack candidates after dedupe.
 - Top-level numeric sort-prefix folder organization: applied.
+- Numeric-series folder organization: applied for Sound Ideas series folders;
+  `13000` is kept under `Vehicles/13000` as an inferred category.
+- Vendor/product folder organization: applied for known `A Sound Effect`,
+  `Ghosthack`, and `SoundMorph` folders.
+- Common-prefix sibling organization: applied for `GDC...` and `CreaturesCK_...`
+  folder families.
 - Redundant nesting audit: report-only CLI pattern added and run.
 - Redundant nesting report: `/Users/mattwesdock/reports/redundant_nesting_report_20260508.json`
   found 52 candidates: 30 one-child chains, 12 repeated folder names, 10 low-value wrappers.
@@ -41,6 +47,9 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
   undo log at `/Users/mattwesdock/reports/portable_rename_log_20260508.json`.
 - Portable long-path shortening apply: done, 32 file renames,
   undo log at `/Users/mattwesdock/reports/portable_path_shortening_log_20260508.json`.
+- Portable ampersand cleanup: done, `Sound Ideas/Series 9000 Open & Close` renamed
+  to `Sound Ideas/Series 9000 Open and Close`, undo log at
+  `/Users/mattwesdock/reports/open_and_close_portable_rename_20260508.json`.
 - Current indexed filename issues: 0.
 - Metadata audit report: `/Users/mattwesdock/reports/metadata_audit_full_20260508.json`.
 - Missing BWF/iXML metadata: 22,412 files.
@@ -64,6 +73,11 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
   the official UCS v8.2.1 Soundminer CSV: 753 entries, 100 unique CatShort
   prefixes across 82 long-form categories. Cached at
   `/Users/mattwesdock/.wavwarden/ucs_catalog.json` with full provenance.
+- UCS catalog-aware tag suggestions implemented. `sfx tag suggest --use-ucs-catalog`
+  or `--ucs-catalog PATH` boosts verified `(CatShort, SubCategory)` matches
+  from 0.75 heuristic confidence to 0.95 catalog-backed confidence.
+- UCS validation implemented: `sfx ucs validate [PATH] --db ~/.wavwarden/index.db`
+  counts indexed files whose UCS-looking stem matches or misses the catalog.
 
 Current audit focus:
 
@@ -73,19 +87,34 @@ Current audit focus:
 - Related sound group reporting: implemented as report-only.
 - Format consistency reporting: implemented as report-only.
 - Tag suggestion (Phase B): implemented as report-only.
+- UCS catalog validation: implemented as report-only.
+- Vendor/product re-foldering preview/apply/undo: implemented for known vendor
+  prefixes via `sfx organize audit --pattern vendor-product-folders`.
+- Common-prefix sibling re-foldering preview/apply/undo: implemented for three
+  or more sibling folders with the same parsed prefix, such as `GDC...` or
+  `CreaturesCK_...`.
+- Numeric-series folder preview/apply/undo: implemented for strict numeric
+  folders, with built-in Sound Ideas series mappings and filename-token category
+  fallback for unknown numeric folders.
+- Redundant nesting guard: category parents such as `Vehicles/13000` are treated
+  as meaningful and will not be collapsed by the single-child-chain planner.
+- Current redundant nesting report:
+  `/Users/mattwesdock/reports/redundant_nesting_current_after_guard_20260508.json`
+  found 15 review candidates, 0 errors, and 0 safe applyable nesting plans.
 
 ## Next
 
 1. Move on from folder nesting unless you want a manual review flow for semantic wrappers.
-2. Wire the imported UCS catalog into `tag_suggest` so a verified
-   `(cat_short, subcategory)` match boosts confidence from 0.75 to 0.95
-   (catalog-aware suggestions, slice 2 of UCS work).
-3. Add `sfx ucs validate --db` to count indexed files whose UCS heuristic
-   matches the catalog vs. those that don't.
-4. Decide review flow for tag suggestions (`sfx tag review` + `sfx tag apply`,
+2. Continue with metadata/tag suggestion review.
+3. Run `sfx ucs validate ~/CommercialLibraries --db ~/.wavwarden/index.db --json`
+   against the copied library and inspect any catalog misses.
+4. Re-run `sfx tag suggest ~/CommercialLibraries --db ~/.wavwarden/index.db
+   --use-ucs-catalog --min-confidence 0.8 --output ~/reports/tag_suggestions_ucs.json`
+   for a cleaner high-confidence suggestion report.
+5. Decide review flow for tag suggestions (`sfx tag review` + `sfx tag apply`,
    Phase C of `docs/METADATA_TAGGING.md`). Start DB-only and add sidecar
    exports before any binary BWF/iXML write.
-5. Keep audio conversion and loudness normalization out of scope.
+6. Keep audio conversion and loudness normalization out of scope.
 
 ## Later
 

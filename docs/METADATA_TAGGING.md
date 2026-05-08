@@ -6,6 +6,24 @@ Tagging should follow wavwarden's existing safety model:
 plans -> `tag --apply` validates and writes metadata -> `scan --force` confirms
 results.
 
+Core product rule: respect existing filenames and embedded metadata. Many users
+have years of muscle memory around vendor names, custom descriptions, DAW search
+terms, and private tagging conventions. wavwarden should preserve existing
+human-entered metadata by default and propose additions as reviewed suggestions,
+not replacements.
+
+Default metadata-write policy:
+
+- read existing embedded tags before planning writes
+- never overwrite a non-empty existing value unless the plan explicitly marks
+  that field as `replace`
+- treat new fields and empty-field fills as `add`
+- keep original value, proposed value, source, confidence, and evidence in the
+  reviewed plan
+- apply only reviewed entries
+- write an immutable apply log with tool versions and file anchors
+- prefer DB-only accepted tags and sidecars before binary WAV mutation
+
 ## Phase A: Inventory, No Writes
 
 First, improve metadata reads before adding writers.
@@ -74,6 +92,9 @@ Each plan entry should include validation anchors:
 - size and mtime
 - MD5 when available
 - target metadata fields
+- action per field: `add`, `skip_existing`, or explicit `replace`
+- existing value when present
+- proposed value
 - source, confidence, and evidence
 
 Apply should refuse or warn when files changed after the plan was created.

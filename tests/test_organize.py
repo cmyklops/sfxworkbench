@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from wavwarden.db import get_connection
+from wavwarden.models import NestingCandidate
 from wavwarden.organize import (
     apply_nesting_plan,
     apply_organize_report,
@@ -23,6 +24,9 @@ def test_organize_audit_strips_obvious_top_level_sort_prefixes(tmp_path: Path) -
         "01 Ancient_Game",
         "1 Boom TRAX",
         "1. SoundMorph - Energy",
+        "[99Sounds]",
+        "(A Sound Effect)",
+        "[02 - SoundMorph - Impacts]",
         "00  SoundMorph - Sinematic 2",
         "10 Years Anniversary Addition - Cinematic Metal Impacts",
         "10000",
@@ -37,10 +41,13 @@ def test_organize_audit_strips_obvious_top_level_sort_prefixes(tmp_path: Path) -
         "01 Ancient_Game": "Ancient_Game",
         "1 Boom TRAX": "Boom TRAX",
         "1. SoundMorph - Energy": "SoundMorph - Energy",
+        "[99Sounds]": "99Sounds",
+        "(A Sound Effect)": "A Sound Effect",
+        "[02 - SoundMorph - Impacts]": "SoundMorph - Impacts",
         "00  SoundMorph - Sinematic 2": "SoundMorph - Sinematic 2",
     }
-    assert report.summary.directories_scanned == 7
-    assert report.summary.planned == 5
+    assert report.summary.directories_scanned == 10
+    assert report.summary.planned == 8
     assert report.summary.errors == 0
 
 
@@ -69,6 +76,161 @@ def test_organize_audit_respects_depth(tmp_path: Path) -> None:
     assert [entry.new_name for entry in nested_report.entries] == ["Pack"]
 
 
+def test_vendor_product_folders_preview_known_vendors(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    for name in [
+        "SoundMorph - Energy",
+        "SoundMorph_Universe_Bundle_Free_Sounds",
+        "1. Ghosthack - Ultimate Foley Sounds",
+        "Ghosthack_-_Free_Whooshes_and_Impacts",
+        "[A Sound Effect - Whooshes]",
+        "Unknown Vendor - Pack",
+    ]:
+        (root / name).mkdir()
+
+    report = audit_organization(root, pattern="vendor-product-folders")
+
+    planned = {entry.old_name: entry.new_path for entry in report.entries}
+    assert planned == {
+        "SoundMorph - Energy": str(root.resolve() / "SoundMorph" / "Energy"),
+        "SoundMorph_Universe_Bundle_Free_Sounds": str(root.resolve() / "SoundMorph" / "Universe_Bundle_Free_Sounds"),
+        "1. Ghosthack - Ultimate Foley Sounds": str(root.resolve() / "Ghosthack" / "Ultimate Foley Sounds"),
+        "Ghosthack_-_Free_Whooshes_and_Impacts": str(root.resolve() / "Ghosthack" / "Free_Whooshes_and_Impacts"),
+        "[A Sound Effect - Whooshes]": str(root.resolve() / "A Sound Effect" / "Whooshes"),
+    }
+    assert report.summary.directories_scanned == 6
+    assert report.summary.planned == 5
+    assert report.summary.errors == 0
+
+
+def test_vendor_product_folders_reports_collision(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    (root / "SoundMorph - Energy").mkdir()
+    (root / "SoundMorph" / "Energy").mkdir(parents=True)
+
+    report = audit_organization(root, pattern="vendor-product-folders")
+
+    assert report.entries == []
+    assert report.summary.errors == 1
+    assert report.errors[0]["error"] == "target exists"
+
+
+def test_common_prefix_folders_groups_gdc_family(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    for name in [
+        "GDC 2015 - Soniss",
+        "GDC 2016 - Soniss",
+        "GDC SFX 2015",
+        "GDC SFX 2017",
+        "GDC+++Game+Audio+Bundle",
+        "GDC2023",
+        "Crowd",
+    ]:
+        (root / name).mkdir()
+
+    report = audit_organization(root, pattern="common-prefix-folders")
+
+    planned = {entry.old_name: entry.new_path for entry in report.entries}
+    assert planned == {
+        "GDC 2015 - Soniss": str(root.resolve() / "GDC" / "2015 - Soniss"),
+        "GDC 2016 - Soniss": str(root.resolve() / "GDC" / "2016 - Soniss"),
+        "GDC SFX 2015": str(root.resolve() / "GDC" / "SFX 2015"),
+        "GDC SFX 2017": str(root.resolve() / "GDC" / "SFX 2017"),
+        "GDC+++Game+Audio+Bundle": str(root.resolve() / "GDC" / "Game Audio Bundle"),
+        "GDC2023": str(root.resolve() / "GDC" / "2023"),
+    }
+    assert report.summary.directories_scanned == 7
+    assert report.summary.planned == 6
+    assert report.summary.errors == 0
+
+
+def test_common_prefix_folders_groups_numbered_family(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    for name in ["Creature Consolidated", "CreaturesCK_1", "CreaturesCK_2", "CreaturesCK_3", "Crowd"]:
+        (root / name).mkdir()
+
+    report = audit_organization(root, pattern="common-prefix-folders")
+
+    planned = {entry.old_name: entry.new_path for entry in report.entries}
+    assert planned == {
+        "CreaturesCK_1": str(root.resolve() / "CreaturesCK" / "1"),
+        "CreaturesCK_2": str(root.resolve() / "CreaturesCK" / "2"),
+        "CreaturesCK_3": str(root.resolve() / "CreaturesCK" / "3"),
+    }
+
+
+def test_common_prefix_folders_requires_three_siblings(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    (root / "Tiny_1").mkdir()
+    (root / "Tiny_2").mkdir()
+
+    report = audit_organization(root, pattern="common-prefix-folders")
+
+    assert report.entries == []
+    assert report.summary.planned == 0
+
+
+def test_common_prefix_folders_ignores_title_case_words(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    for name in ["Magic Arcane", "Magic Fire", "Magic Ice", "Dark Elements", "Dark Engine", "Dark Side"]:
+        (root / name).mkdir()
+
+    report = audit_organization(root, pattern="common-prefix-folders")
+
+    assert report.entries == []
+
+
+def test_numeric_series_folders_uses_known_catalog(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    (root / "6000").mkdir()
+    (root / "9000").mkdir()
+
+    report = audit_organization(root, pattern="numeric-series-folders")
+
+    planned = {entry.old_name: entry.new_path for entry in report.entries}
+    assert planned == {
+        "6000": str(root.resolve() / "Sound Ideas" / "The General Series 6000"),
+        "9000": str(root.resolve() / "Sound Ideas" / "Series 9000 Open and Close"),
+    }
+    assert report.summary.planned == 2
+    assert report.summary.candidates == 0
+
+
+def test_numeric_series_folders_infers_category_from_filenames(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "4242"
+    folder.mkdir(parents=True)
+    for name in ["bird_chirp_01.wav", "bird_wing_02.wav", "dog_bark_03.wav", "animal_scurry_04.wav"]:
+        (folder / name).write_bytes(b"audio")
+
+    report = audit_organization(root, pattern="numeric-series-folders")
+
+    assert len(report.entries) == 1
+    assert report.entries[0].old_name == "4242"
+    assert report.entries[0].new_path == str(root.resolve() / "Animals" / "4242")
+    assert report.entries[0].reason == "numeric_series_inferred_category"
+
+
+def test_numeric_series_folders_reports_unknown_candidates(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "4242"
+    folder.mkdir(parents=True)
+    (folder / "mystery.wav").write_bytes(b"audio")
+
+    report = audit_organization(root, pattern="numeric-series-folders")
+
+    assert report.entries == []
+    assert report.summary.candidates == 1
+    assert report.candidates[0].kind == "numeric_series_unknown"
+
+
 def test_organize_audit_rejects_unknown_pattern(tmp_path: Path) -> None:
     root = tmp_path / "library"
     root.mkdir()
@@ -77,6 +239,9 @@ def test_organize_audit_rejects_unknown_pattern(tmp_path: Path) -> None:
         audit_organization(root, pattern="unknown")
     except ValueError as e:
         assert "strip-leading-numbers" in str(e)
+        assert "common-prefix-folders" in str(e)
+        assert "numeric-series-folders" in str(e)
+        assert "vendor-product-folders" in str(e)
         assert "redundant-nesting" in str(e)
     else:
         raise AssertionError("Expected ValueError")
@@ -126,6 +291,117 @@ def test_apply_organize_report_requires_review(tmp_path: Path) -> None:
     assert source.exists()
 
 
+def test_apply_and_undo_vendor_product_folder_updates_filesystem_and_db(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    source = root / "SoundMorph - Energy"
+    source.mkdir(parents=True)
+    audio = source / "hit.wav"
+    audio.write_bytes(b"audio")
+    conn = get_connection(tmp_db)
+    conn.execute(
+        """INSERT INTO files (path, filename, stem, extension, size_bytes, mtime, md5, scanned_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (str(audio), audio.name, audio.stem, audio.suffix, audio.stat().st_size, 0.0, "abc", "2026"),
+    )
+    conn.commit()
+    conn.close()
+
+    report = audit_organization(root, pattern="vendor-product-folders")
+    report_path = tmp_path / "vendor_report.json"
+    log_path = tmp_path / "vendor_log.json"
+    write_organize_audit_report(report, report_path, quiet=True)
+    review_organize_report(report_path, approve_all=True, quiet=True)
+
+    result = apply_organize_report(report_path, db_path=tmp_db, log_path=log_path, require_reviewed=True, quiet=True)
+
+    moved = root / "SoundMorph" / "Energy" / "hit.wav"
+    assert result.renamed == 1
+    assert moved.exists()
+    conn = get_connection(tmp_db)
+    indexed_path = conn.execute("SELECT path FROM files").fetchone()[0]
+    conn.close()
+    assert indexed_path == str(moved)
+
+    undo = undo_organize_log(log_path, db_path=tmp_db, dry_run=False, quiet=True)
+
+    assert undo.undone == 1
+    assert audio.exists()
+    assert not (root / "SoundMorph").exists()
+    conn = get_connection(tmp_db)
+    indexed_path = conn.execute("SELECT path FROM files").fetchone()[0]
+    conn.close()
+    assert indexed_path == str(audio)
+
+
+def test_apply_common_prefix_folder_creates_parent_and_updates_db(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    for name in ["CreaturesCK_1", "CreaturesCK_2", "CreaturesCK_3"]:
+        folder = root / name
+        folder.mkdir(parents=True)
+        (folder / "hit.wav").write_bytes(b"audio")
+    audio = root / "CreaturesCK_1" / "hit.wav"
+    conn = get_connection(tmp_db)
+    conn.execute(
+        """INSERT INTO files (path, filename, stem, extension, size_bytes, mtime, md5, scanned_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (str(audio), audio.name, audio.stem, audio.suffix, audio.stat().st_size, 0.0, "abc", "2026"),
+    )
+    conn.commit()
+    conn.close()
+
+    report = audit_organization(root, pattern="common-prefix-folders")
+    report_path = tmp_path / "common_prefix_report.json"
+    write_organize_audit_report(report, report_path, quiet=True)
+    review_organize_report(report_path, approve_all=True, quiet=True)
+
+    result = apply_organize_report(
+        report_path, db_path=tmp_db, log_path=tmp_path / "common_prefix_log.json", require_reviewed=True, quiet=True
+    )
+
+    moved = root / "CreaturesCK" / "1" / "hit.wav"
+    assert result.renamed == 3
+    assert moved.exists()
+    conn = get_connection(tmp_db)
+    indexed_path = conn.execute("SELECT path FROM files").fetchone()[0]
+    conn.close()
+    assert indexed_path == str(moved)
+
+
+def test_apply_numeric_series_folder_creates_parent_and_updates_db(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "4242"
+    folder.mkdir(parents=True)
+    audio = folder / "bird_chirp_01.wav"
+    audio.write_bytes(b"audio")
+    for name in ["bird_wing_02.wav", "dog_bark_03.wav", "animal_scurry_04.wav"]:
+        (folder / name).write_bytes(b"audio")
+    conn = get_connection(tmp_db)
+    conn.execute(
+        """INSERT INTO files (path, filename, stem, extension, size_bytes, mtime, md5, scanned_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (str(audio), audio.name, audio.stem, audio.suffix, audio.stat().st_size, 0.0, "abc", "2026"),
+    )
+    conn.commit()
+    conn.close()
+
+    report = audit_organization(root, pattern="numeric-series-folders")
+    report_path = tmp_path / "numeric_series_report.json"
+    write_organize_audit_report(report, report_path, quiet=True)
+    review_organize_report(report_path, approve_all=True, quiet=True)
+
+    result = apply_organize_report(
+        report_path, db_path=tmp_db, log_path=tmp_path / "numeric_series_log.json", require_reviewed=True, quiet=True
+    )
+
+    moved = root / "Animals" / "4242" / "bird_chirp_01.wav"
+    assert result.renamed == 1
+    assert moved.exists()
+    conn = get_connection(tmp_db)
+    indexed_path = conn.execute("SELECT path FROM files").fetchone()[0]
+    conn.close()
+    assert indexed_path == str(moved)
+
+
 def test_redundant_nesting_reports_repeated_folder_names(tmp_path: Path) -> None:
     root = tmp_path / "library"
     audio = root / "Vendor" / "Pack" / "Pack" / "hit.wav"
@@ -153,6 +429,17 @@ def test_redundant_nesting_reports_single_child_chains(tmp_path: Path) -> None:
     chains = [candidate for candidate in report.candidates if candidate.kind == "single_child_chain"]
     assert any(candidate.path == str(root / "Vendor" / "Wrapper") for candidate in chains)
     assert all(candidate.suggested_action == "review_collapse_wrapper" for candidate in chains)
+
+
+def test_redundant_nesting_keeps_numeric_category_parents(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    audio = root / "Vehicles" / "13000" / "car.wav"
+    audio.parent.mkdir(parents=True)
+    audio.write_bytes(b"audio")
+
+    report = audit_organization(root, pattern="redundant-nesting", depth=2)
+
+    assert not [candidate for candidate in report.candidates if candidate.path == str(root / "Vehicles")]
 
 
 def test_redundant_nesting_reports_low_value_wrappers(tmp_path: Path) -> None:
@@ -239,6 +526,37 @@ def test_build_nesting_plan_from_single_child_chain(tmp_path: Path) -> None:
     assert plan.entries[0].action == "collapse_single_child_wrapper"
     assert plan.entries[0].moves[0].old_path == str(child)
     assert plan.entries[0].moves[0].new_path == str(root / "Real Pack")
+    assert plan.errors == []
+
+
+def test_build_nesting_plan_skips_numeric_category_parents_from_older_reports(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    child = root / "Vehicles" / "13000"
+    child.mkdir(parents=True)
+    (child / "car.wav").write_bytes(b"audio")
+    report = audit_organization(root, pattern="redundant-nesting", depth=2)
+    report.candidates.append(
+        NestingCandidate(
+            path=str(root / "Vehicles"),
+            name="Vehicles",
+            kind="single_child_chain",
+            suggested_action="review_collapse_wrapper",
+            reason="folder only contains one child folder and no direct files",
+            depth=1,
+            parent_path=str(root),
+            target_path=str(child),
+            child_dirs=1,
+            direct_files=0,
+            audio_files=1,
+            confidence="medium",
+        )
+    )
+    report_path = tmp_path / "nesting_report.json"
+    write_organize_audit_report(report, report_path, quiet=True)
+
+    plan = build_nesting_plan_from_report(report_path, kind="single_child_chain", quiet=True)
+
+    assert plan.entries == []
     assert plan.errors == []
 
 

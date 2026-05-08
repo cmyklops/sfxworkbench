@@ -45,6 +45,7 @@ uv run sfx organize nesting-undo nesting_log.json --db ~/.wavwarden/index.db --a
 uv run sfx organize review ~/reports/organize_report.json --approve-all
 uv run sfx organize apply ~/reports/organize_report.json --db ~/.wavwarden/index.db --require-reviewed --log organize_log.json
 uv run sfx organize undo organize_log.json --db ~/.wavwarden/index.db --apply
+uv run sfx organize audit ~/CommercialLibraries --pattern vendor-product-folders --output ~/reports/vendor_folders.json
 uv run sfx search "gunshot exterior"
 uv run sfx rename ~/CommercialLibraries --pattern ucs                   # dry-run
 uv run sfx rename ~/CommercialLibraries --pattern safe                  # dry-run
@@ -54,9 +55,13 @@ uv run sfx rename ~/CommercialLibraries --pattern safe --apply --allow-partial -
 uv run sfx rename ~/CommercialLibraries --pattern portable --apply --log portable_rename_log.json
 uv run sfx tag suggest ~/CommercialLibraries --db ~/.wavwarden/index.db --output ~/reports/tag_suggestions.json
 uv run sfx tag suggest ~/CommercialLibraries --db ~/.wavwarden/index.db --min-confidence 0.6 --json
+uv run sfx tag suggest ~/CommercialLibraries --db ~/.wavwarden/index.db --use-ucs-catalog --min-confidence 0.8 --json
 uv run sfx ucs import ~/Desktop/_categorylist.csv --release-version v8.2.1
 uv run sfx ucs info
 uv run sfx ucs categories --cat-short AMB
+uv run sfx ucs validate ~/CommercialLibraries --db ~/.wavwarden/index.db --json
+uv run sfx organize audit ~/CommercialLibraries --pattern common-prefix-folders --output ~/reports/common_prefix_folders.json
+uv run sfx organize audit ~/CommercialLibraries --pattern numeric-series-folders --output ~/reports/numeric_series_folders.json
 
 # Run the standalone Phase 0 auditor (no install required, Python 3.9+)
 python3 audit.py ~/CommercialLibraries --output-dir ~/reports
@@ -90,6 +95,9 @@ sfx dedupe --review PLAN → approve groups
 sfx dedupe --apply PLAN → validate size/hash → quarantine duplicates + update SQLite
 sfx packs audit PATH → folder hash signatures + overlap candidates → report JSON
 sfx organize audit/review/apply/undo PATH → folder-structure cleanup with undo log
+sfx organize audit --pattern common-prefix-folders PATH → reviewed sibling family re-foldering preview
+sfx organize audit --pattern numeric-series-folders PATH → reviewed numeric library-series re-foldering preview
+sfx organize audit --pattern vendor-product-folders PATH → reviewed vendor/product re-foldering preview
 sfx organize audit --pattern redundant-nesting PATH → report-only nested-folder review
 sfx organize nesting-plan/apply/undo → reviewed repeated-folder, non-generic single-child, and strict leaf-wrapper flatten workflow
 sfx rename PATH → preview/apply UCS-oriented, safe, or portable names → rename_log_TIMESTAMP.json
@@ -116,13 +124,14 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 - **`packs.py`** — report-only pack/folder duplicate detection. Computes recursive folder signatures from indexed MD5 hashes and reports exact duplicate folders plus high-overlap pack candidates.
 - **`organize.py`** — folder organization preview/review/apply/undo. Conservative numeric sort-prefix removal reuses the rename engine for apply; repeated-folder nesting and non-generic one-child chains have reviewed plan/apply/undo; generic wrappers remain report-only.
 - **`rename.py`** — UCS-oriented, safe, and portable filename/path rename preview/apply/undo. Refuses collisions and updates SQLite paths after apply.
-- **`tag_suggest.py`** — Phase B report-only tag suggestions. Pure suggestor: composes UCS stem parsing, filename heuristics (abbreviation expansion, take-number extraction), parent-folder evidence, and related-group membership into versioned JSON suggestion plans. No filesystem or DB writes.
-- **`ucs_catalog.py`** — UCS catalog import, cache, and lookup. Parses the official `Soundminer/_categorylist.csv` from `UCS Release.zip`, writes a normalized JSON cache at `~/.wavwarden/ucs_catalog.json` with provenance (source URL, release version, import timestamp, attribution). Discovery chain for `load_catalog()`: explicit path → `WAVWARDEN_UCS_DATA` env var → default cache → `None`. XLSX import is deferred. Catalog data is not yet wired into rename/tag_suggest — those integrations come in follow-up slices.
+- **`tag_suggest.py`** — Phase B report-only tag suggestions. Pure suggestor: composes UCS stem parsing, optional UCS catalog matches, filename heuristics (abbreviation expansion, take-number extraction), parent-folder evidence, and related-group membership into versioned JSON suggestion plans. No filesystem or DB writes.
+- **`ucs_catalog.py`** — UCS catalog import, cache, and lookup. Parses the official `Soundminer/_categorylist.csv` from `UCS Release.zip`, writes a normalized JSON cache at `~/.wavwarden/ucs_catalog.json` with provenance (source URL, release version, import timestamp, attribution). Discovery chain for `load_catalog()`: explicit path → `WAVWARDEN_UCS_DATA` env var → default cache → `None`. XLSX import is deferred.
+- **`ucs_validate.py`** — report-only validation of UCS-looking indexed filenames against a loaded UCS catalog.
 - **`ucs.py`** — shared UCS-looking filename heuristic/parser. This is not a full official UCS catalog validator yet.
 
 ### Critical design constraints
 
-- **Every destructive command defaults to dry-run, quarantine, or undoable behavior.** `clean --apply`, `dedupe --apply`, and `rename --apply` are the commands that modify the filesystem.
+- **Every destructive command defaults to dry-run, quarantine, review-first, or undoable behavior.** Filesystem-changing commands include `clean --apply`, `dedupe --apply`, `scan-errors --apply`, `rename --apply`, `organize apply`, and `organize nesting-apply --apply`.
 - **`soundfile` over stdlib `wave`.** The stdlib `wave` module can't read 32-bit float WAV, which is the default format for modern field recorders (Sound Devices, Zoom F-series). Using stdlib wave produces ~30% false-positive "unreadable" counts on real libraries.
 - **Junk patterns live in one place:** `junk.py`. If you add a new junk pattern, add it there and cover it in tests.
 - **UCS naming heuristic**: `^[A-Z]{2,5}_[A-Z]{2,8}(_|$)` matched against the file stem. This is a heuristic, not a full UCS validator.

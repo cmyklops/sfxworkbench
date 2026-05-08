@@ -148,6 +148,38 @@ def test_portable_rename_spaces_ampersand_replacement(tmp_path: Path) -> None:
     assert plan.entries[0].new_filename == "Doors and Building stuff.wav"
 
 
+def test_portable_rename_directory_ampersand_updates_db_and_issues(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "lib"
+    bad_dir = root / "Series 9000 Open & Close"
+    bad_dir.mkdir(parents=True)
+    wav = bad_dir / "Door 01.wav"
+    wav.write_bytes(
+        b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x44\xac\x00\x00\x88X\x01\x00\x02\x00\x10\x00data\x04\x00\x00\x00\x00\x00\x00\x00"
+    )
+    scan_library(root, tmp_db, skip_hash=True, quiet=True)
+
+    plan = build_rename_plan(root, pattern="portable")
+
+    assert len(plan.entries) == 1
+    assert plan.entries[0].old_filename == "Series 9000 Open & Close"
+    assert plan.entries[0].new_filename == "Series 9000 Open and Close"
+
+    log_path = tmp_path / "portable_rename_log.json"
+    result = apply_rename_plan(plan, db_path=tmp_db, log_path=log_path, dry_run=False, quiet=True)
+
+    new_wav = root / "Series 9000 Open and Close" / "Door 01.wav"
+    assert result.renamed == 1
+    assert new_wav.exists()
+    assert not wav.exists()
+
+    conn = get_connection(tmp_db)
+    paths = [row["path"] for row in conn.execute("SELECT path FROM files").fetchall()]
+    issues = conn.execute("SELECT issue FROM fn_issues").fetchall()
+    conn.close()
+    assert paths == [str(new_wav)]
+    assert issues == []
+
+
 def test_portable_rename_shortens_long_paths(tmp_path: Path) -> None:
     root = tmp_path / "lib"
     deep = root / ("Long Folder " * 8).strip()

@@ -457,6 +457,78 @@ def test_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
     assert out.exists()
 
 
+def test_ucs_validate_and_catalog_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
+    src = tmp_path / "_categorylist.csv"
+    src.write_text(
+        "\n".join(
+            [
+                "Category,SubCategory,CatID,CatShort,Explanations,Synonyms - Comma Separated",
+                'AMBIENCE,RAIN,AMBRain,AMB,"Rain ambience.","Rain"',
+                'SOUND EFFECT,GUNSHOT,SFXGunshot,SFX,"Gunshot.","Gunshot"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    cache = tmp_path / "ucs_catalog.json"
+    runner.invoke(app, ["ucs", "import", str(src), "--output", str(cache), "--json"])
+    runner.invoke(app, ["scan", str(tmp_library), "--db", str(tmp_db), "--no-hash", "--json"])
+
+    validate_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "ucs",
+                    "validate",
+                    str(tmp_library),
+                    "--db",
+                    str(tmp_db),
+                    "--catalog",
+                    str(cache),
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert validate_payload["schema_version"] == 1
+    assert validate_payload["command"] == "ucs_validate"
+    assert validate_payload["root"] == "<ROOT>"
+    assert validate_payload["db_path"] == "<DB>"
+    assert validate_payload["catalog_path"] == "<TMP>/ucs_catalog.json"
+    assert validate_payload["report"]["catalog_path"] == "<TMP>/ucs_catalog.json"
+    assert validate_payload["report"]["summary"]["catalog_matches"] == 2
+    assert validate_payload["report"]["summary"]["catalog_misses"] == 0
+
+    suggest_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "tag",
+                    "suggest",
+                    str(tmp_library),
+                    "--db",
+                    str(tmp_db),
+                    "--ucs-catalog",
+                    str(cache),
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert suggest_payload["command"] == "tag_suggest"
+    assert suggest_payload["ucs_catalog_path"] == "<TMP>/ucs_catalog.json"
+    assert suggest_payload["report"]["ucs_catalog_path"] == "<TMP>/ucs_catalog.json"
+    assert suggest_payload["report"]["summary"]["by_source"]["ucs_catalog"] >= 1
+
+
 def test_organize_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
     folder = tmp_library / "01 Pack"
     folder.mkdir()
@@ -506,3 +578,74 @@ def test_organize_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library:
         },
     }
     assert out.exists()
+
+
+def test_vendor_product_organize_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
+    folder = tmp_library / "SoundMorph - Energy"
+    folder.mkdir()
+    payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                ["organize", "audit", str(tmp_library), "--pattern", "vendor-product-folders", "--json"],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "organize_audit"
+    assert payload["report"]["pattern"] == "vendor-product-folders"
+    assert payload["report"]["summary"]["planned"] == 1
+    assert payload["report"]["entries"][0]["old_path"] == "<ROOT>/SoundMorph - Energy"
+    assert payload["report"]["entries"][0]["new_path"] == "<ROOT>/SoundMorph/Energy"
+    assert payload["report"]["entries"][0]["reason"] == "vendor_product_refolder"
+
+
+def test_common_prefix_organize_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
+    for name in ["GDC 2015 - Soniss", "GDC SFX 2017", "GDC2023"]:
+        (tmp_library / name).mkdir()
+    payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                ["organize", "audit", str(tmp_library), "--pattern", "common-prefix-folders", "--json"],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "organize_audit"
+    assert payload["report"]["pattern"] == "common-prefix-folders"
+    assert payload["report"]["summary"]["planned"] == 3
+    assert payload["report"]["entries"][0]["old_path"] == "<ROOT>/GDC 2015 - Soniss"
+    assert payload["report"]["entries"][0]["new_path"] == "<ROOT>/GDC/2015 - Soniss"
+    assert payload["report"]["entries"][0]["reason"] == "common_prefix_refolder"
+
+
+def test_numeric_series_organize_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
+    (tmp_library / "6000").mkdir()
+    payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                ["organize", "audit", str(tmp_library), "--pattern", "numeric-series-folders", "--json"],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "organize_audit"
+    assert payload["report"]["pattern"] == "numeric-series-folders"
+    assert payload["report"]["summary"]["planned"] == 1
+    assert payload["report"]["entries"][0]["old_path"] == "<ROOT>/6000"
+    assert payload["report"]["entries"][0]["new_path"] == "<ROOT>/Sound Ideas/The General Series 6000"
+    assert payload["report"]["entries"][0]["reason"] == "numeric_series_catalog"
