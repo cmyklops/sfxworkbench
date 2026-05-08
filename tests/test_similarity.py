@@ -47,12 +47,22 @@ def test_similarity_crawl_writes_descriptors_and_skips_current_rows(tmp_path: Pa
     assert (tmp_path / "cache" / f"similarity_crawl_{first.run_id}.json").exists()
 
     conn = get_connection(tmp_db)
-    row = conn.execute("SELECT peak, rms, error FROM audio_descriptors").fetchone()
+    row = conn.execute(
+        """
+        SELECT peak, rms, spectral_centroid, spectral_bandwidth, spectral_rolloff,
+               spectral_flatness, error
+        FROM audio_descriptors
+        """
+    ).fetchone()
     run_count = conn.execute("SELECT COUNT(*) FROM analysis_runs").fetchone()[0]
     conn.close()
 
     assert row["peak"] > 0
     assert row["rms"] > 0
+    assert row["spectral_centroid"] > 0
+    assert row["spectral_bandwidth"] > 0
+    assert row["spectral_rolloff"] > 0
+    assert row["spectral_flatness"] >= 0
     assert row["error"] is None
     assert run_count == 1
 
@@ -110,6 +120,29 @@ def test_similarity_crawl_respects_json_descriptor_limit(tmp_path: Path, tmp_db:
     assert len(payload["descriptors"]) == 1
 
 
+def test_similarity_descriptors_capture_spectral_difference(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    low = _make_tone(root / "low.wav", frequency=220.0)
+    high = _make_tone(root / "high.wav", frequency=1760.0)
+    scan_library(root, tmp_db, skip_hash=False, quiet=True)
+
+    crawl_similarity_descriptors(root, db_path=tmp_db, cache_path=None, quiet=True)
+
+    conn = get_connection(tmp_db)
+    rows = conn.execute(
+        """
+        SELECT path, spectral_centroid, spectral_rolloff
+        FROM audio_descriptors
+        ORDER BY path
+        """
+    ).fetchall()
+    conn.close()
+    by_path = {row["path"]: row for row in rows}
+
+    assert by_path[str(high)]["spectral_centroid"] > by_path[str(low)]["spectral_centroid"]
+    assert by_path[str(high)]["spectral_rolloff"] > by_path[str(low)]["spectral_rolloff"]
+
+
 def test_similarity_search_returns_nearest_cached_descriptors(tmp_path: Path, tmp_db: Path) -> None:
     root = tmp_path / "library"
     low = _make_tone(root / "low.wav", frequency=220.0)
@@ -126,6 +159,8 @@ def test_similarity_search_returns_nearest_cached_descriptors(tmp_path: Path, tm
     assert report.results[0].distance < report.results[1].distance
     assert report.query_descriptor.file_id == 0
     assert report.query_descriptor.path == str(query.resolve())
+    assert report.query_descriptor.spectral_centroid is not None
+    assert report.results[0].spectral_centroid is not None
 
 
 def test_similarity_search_requires_matching_analysis_window(tmp_path: Path, tmp_db: Path) -> None:

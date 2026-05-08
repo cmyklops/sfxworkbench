@@ -47,7 +47,8 @@ Implemented first slice:
 - optional cache directory for run report JSON
 - incremental skips when path anchors still match size, mtime, and MD5
 - descriptor fields for peak, RMS, crest factor, silence ratio, clipping count,
-  zero-crossing rate, transient density, and duration bucket
+  zero-crossing rate, transient density, spectral centroid/bandwidth/rolloff/
+  flatness, and duration bucket
 - nearest-neighbor search over cached descriptor vectors with distance and
   0-1 score output
 - report-only near-duplicate groups from cached descriptors, with exact MD5
@@ -79,7 +80,7 @@ scale:
 The first implementation should be boring and report-first:
 
 1. Cheap audio descriptors: implemented in the first crawler slice.
-   peak, RMS, crest factor, silence, rough brightness, transient density,
+   peak, RMS, crest factor, silence, spectral shape, transient density,
    duration buckets, clipping flags, channel count, sample rate, bit depth.
 2. Segment/event detection:
    identify candidate regions inside longer files so one ambience or designed

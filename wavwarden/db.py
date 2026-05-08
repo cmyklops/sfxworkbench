@@ -97,6 +97,10 @@ CREATE TABLE IF NOT EXISTS audio_descriptors (
     clipping_count INTEGER DEFAULT 0,
     zero_crossing_rate REAL,
     transient_density REAL,
+    spectral_centroid REAL,
+    spectral_bandwidth REAL,
+    spectral_rolloff REAL,
+    spectral_flatness REAL,
     duration_bucket TEXT,
     generated_at TEXT NOT NULL,
     error TEXT,
@@ -122,6 +126,10 @@ _FILES_COLUMN_MIGRATIONS = {
 
 _AUDIO_DESCRIPTORS_COLUMN_MIGRATIONS = {
     "max_duration_s": "REAL",
+    "spectral_centroid": "REAL",
+    "spectral_bandwidth": "REAL",
+    "spectral_rolloff": "REAL",
+    "spectral_flatness": "REAL",
 }
 
 

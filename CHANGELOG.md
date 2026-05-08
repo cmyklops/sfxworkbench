@@ -11,10 +11,11 @@ versioning once public releases begin.
   descriptor crawler. It analyzes indexed files, skips unchanged descriptor
   rows by size/mtime/hash anchors, stores results in SQLite, writes an optional
   cache run report, and reports peak/RMS/crest/silence/clipping plus simple
-  zero-crossing and transient-density descriptors. Added `sfx similarity search
-  --file QUERY` to rank cached descriptors against a query audio file. Added
-  `sfx similarity audit` to produce report-only near-duplicate groups from
-  cached descriptor rows, excluding exact MD5 duplicate pairs by default.
+  zero-crossing, transient-density, and spectral centroid/bandwidth/rolloff/
+  flatness descriptors. Added `sfx similarity search --file QUERY` to rank
+  cached descriptors against a query audio file. Added `sfx similarity audit`
+  to produce report-only near-duplicate groups from cached descriptor rows,
+  excluding exact MD5 duplicate pairs by default.
 - Added preservation-priority evidence for duplicate keep decisions. `sfx
   dedupe --output PLAN --prefer-folder PATH --prefer-extension EXT` and `sfx
   packs plan --prefer-folder PATH` store ordered rule evidence in generated

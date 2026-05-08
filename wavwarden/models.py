@@ -78,6 +78,10 @@ class SimilarityDescriptor(BaseModel):
     clipping_count: int = 0
     zero_crossing_rate: float | None = None
     transient_density: float | None = None
+    spectral_centroid: float | None = None
+    spectral_bandwidth: float | None = None
+    spectral_rolloff: float | None = None
+    spectral_flatness: float | None = None
     duration_bucket: str | None = None
     generated_at: str
     error: str | None = None
@@ -123,6 +127,10 @@ class SimilaritySearchResult(BaseModel):
     clipping_count: int = 0
     zero_crossing_rate: float | None = None
     transient_density: float | None = None
+    spectral_centroid: float | None = None
+    spectral_bandwidth: float | None = None
+    spectral_rolloff: float | None = None
+    spectral_flatness: float | None = None
     duration_bucket: str | None = None
 
 

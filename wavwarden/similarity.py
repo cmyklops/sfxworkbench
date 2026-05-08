@@ -63,6 +63,11 @@ def _existing_descriptor_is_current(row, descriptor_row, *, max_duration_s: floa
         return False
     if descriptor_row["error"] is not None:
         return False
+    if any(
+        descriptor_row[column] is None
+        for column in ("spectral_centroid", "spectral_bandwidth", "spectral_rolloff", "spectral_flatness")
+    ):
+        return False
     return (
         descriptor_row["size_bytes"] == row["size_bytes"]
         and descriptor_row["mtime"] == row["mtime"]
@@ -99,6 +104,10 @@ def _compute_audio_descriptor(path: Path, *, max_duration_s: float | None) -> di
             "clipping_count": 0,
             "zero_crossing_rate": 0.0,
             "transient_density": 0.0,
+            "spectral_centroid": 0.0,
+            "spectral_bandwidth": 0.0,
+            "spectral_rolloff": 0.0,
+            "spectral_flatness": 0.0,
             "error": None,
         }
 
@@ -129,6 +138,8 @@ def _compute_audio_descriptor(path: Path, *, max_duration_s: float | None) -> di
             threshold = max(0.01, float(np.mean(frame_rms)) * 0.5)
             transient_density = float(np.count_nonzero(deltas > threshold) / analyzed_duration_s)
 
+    spectral = _compute_spectral_features(mono, sample_rate, np)
+
     return {
         "analyzed_duration_s": analyzed_duration_s,
         "peak": peak,
@@ -138,7 +149,62 @@ def _compute_audio_descriptor(path: Path, *, max_duration_s: float | None) -> di
         "clipping_count": clipping_count,
         "zero_crossing_rate": zero_crossing_rate,
         "transient_density": transient_density,
+        **spectral,
         "error": None,
+    }
+
+
+def _compute_spectral_features(mono, sample_rate: int, np) -> dict[str, float]:
+    if mono.size < 2 or sample_rate <= 0:
+        return {
+            "spectral_centroid": 0.0,
+            "spectral_bandwidth": 0.0,
+            "spectral_rolloff": 0.0,
+            "spectral_flatness": 0.0,
+        }
+
+    frame_size = 2048
+    if mono.size < frame_size:
+        frame_size = 2 ** max(8, int(math.floor(math.log2(mono.size))))
+    hop_size = max(1, frame_size // 2)
+    if mono.size < frame_size:
+        padded = np.pad(mono, (0, frame_size - mono.size))
+        frames_view = padded.reshape(1, frame_size)
+    else:
+        frame_count = 1 + ((mono.size - frame_size) // hop_size)
+        shape = (frame_count, frame_size)
+        strides = (mono.strides[0] * hop_size, mono.strides[0])
+        frames_view = np.lib.stride_tricks.as_strided(mono, shape=shape, strides=strides)
+
+    frame_rms = np.sqrt(np.mean(np.square(frames_view), axis=1))
+    active_frames = frames_view[frame_rms > 0.000001]
+    if active_frames.size == 0:
+        return {
+            "spectral_centroid": 0.0,
+            "spectral_bandwidth": 0.0,
+            "spectral_rolloff": 0.0,
+            "spectral_flatness": 0.0,
+        }
+
+    window = np.hanning(frame_size).astype("float32")
+    magnitudes = np.abs(np.fft.rfft(active_frames * window, axis=1))
+    magnitudes = np.maximum(magnitudes, 1e-12)
+    freqs = np.fft.rfftfreq(frame_size, d=1.0 / sample_rate)
+    magnitude_sums = np.sum(magnitudes, axis=1)
+    centroid = np.sum(magnitudes * freqs, axis=1) / magnitude_sums
+    bandwidth = np.sqrt(np.sum(magnitudes * np.square(freqs - centroid[:, None]), axis=1) / magnitude_sums)
+
+    cumulative = np.cumsum(magnitudes, axis=1)
+    rolloff_threshold = magnitude_sums[:, None] * 0.85
+    rolloff_indices = np.argmax(cumulative >= rolloff_threshold, axis=1)
+    rolloff = freqs[rolloff_indices]
+
+    flatness = np.exp(np.mean(np.log(magnitudes), axis=1)) / np.mean(magnitudes, axis=1)
+    return {
+        "spectral_centroid": float(np.mean(centroid)),
+        "spectral_bandwidth": float(np.mean(bandwidth)),
+        "spectral_rolloff": float(np.mean(rolloff)),
+        "spectral_flatness": float(np.mean(flatness)),
     }
 
 
@@ -188,6 +254,10 @@ def _descriptor_vector(values: dict) -> tuple[float, ...] | None:
         "clipping_count": values.get("clipping_count"),
         "zero_crossing_rate": values.get("zero_crossing_rate"),
         "transient_density": values.get("transient_density"),
+        "spectral_centroid": values.get("spectral_centroid"),
+        "spectral_bandwidth": values.get("spectral_bandwidth"),
+        "spectral_rolloff": values.get("spectral_rolloff"),
+        "spectral_flatness": values.get("spectral_flatness"),
         "analyzed_duration_s": values.get("analyzed_duration_s"),
     }
     if raw["peak"] is None or raw["rms"] is None:
@@ -200,6 +270,10 @@ def _descriptor_vector(values: dict) -> tuple[float, ...] | None:
         math.log1p(float(raw["clipping_count"] or 0.0)) / 10.0,
         math.log1p(float(raw["zero_crossing_rate"] or 0.0)) / 10.0,
         math.log1p(float(raw["transient_density"] or 0.0)) / 5.0,
+        math.log1p(float(raw["spectral_centroid"] or 0.0)) / 10.0,
+        math.log1p(float(raw["spectral_bandwidth"] or 0.0)) / 10.0,
+        math.log1p(float(raw["spectral_rolloff"] or 0.0)) / 10.0,
+        float(raw["spectral_flatness"] or 0.0),
         math.log1p(float(raw["analyzed_duration_s"] or 0.0)) / 10.0,
     )
 
@@ -218,8 +292,9 @@ def _write_descriptor(conn, descriptor: SimilarityDescriptor) -> None:
         INSERT INTO audio_descriptors (
             file_id, backend, path, size_bytes, mtime, md5, max_duration_s, analyzed_duration_s,
             peak, rms, crest_factor, silence_ratio, clipping_count,
-            zero_crossing_rate, transient_density, duration_bucket, generated_at, error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            zero_crossing_rate, transient_density, spectral_centroid, spectral_bandwidth,
+            spectral_rolloff, spectral_flatness, duration_bucket, generated_at, error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(file_id, backend) DO UPDATE SET
             path=excluded.path,
             size_bytes=excluded.size_bytes,
@@ -234,6 +309,10 @@ def _write_descriptor(conn, descriptor: SimilarityDescriptor) -> None:
             clipping_count=excluded.clipping_count,
             zero_crossing_rate=excluded.zero_crossing_rate,
             transient_density=excluded.transient_density,
+            spectral_centroid=excluded.spectral_centroid,
+            spectral_bandwidth=excluded.spectral_bandwidth,
+            spectral_rolloff=excluded.spectral_rolloff,
+            spectral_flatness=excluded.spectral_flatness,
             duration_bucket=excluded.duration_bucket,
             generated_at=excluded.generated_at,
             error=excluded.error
@@ -254,6 +333,10 @@ def _write_descriptor(conn, descriptor: SimilarityDescriptor) -> None:
             descriptor.clipping_count,
             descriptor.zero_crossing_rate,
             descriptor.transient_density,
+            descriptor.spectral_centroid,
+            descriptor.spectral_bandwidth,
+            descriptor.spectral_rolloff,
+            descriptor.spectral_flatness,
             descriptor.duration_bucket,
             descriptor.generated_at,
             descriptor.error,
@@ -318,7 +401,8 @@ def crawl_similarity_descriptors(
     for row in rows:
         existing = conn.execute(
             """
-            SELECT size_bytes, mtime, md5, max_duration_s, error
+            SELECT size_bytes, mtime, md5, max_duration_s, error, spectral_centroid,
+                   spectral_bandwidth, spectral_rolloff, spectral_flatness
             FROM audio_descriptors
             WHERE file_id = ? AND backend = ?
             """,
@@ -392,6 +476,8 @@ def _descriptor_rows(conn, *, root: Path | None, max_duration_s: float | None):
                f.bit_depth, f.channels, f.duration_s, d.analyzed_duration_s,
                d.peak, d.rms, d.crest_factor, d.silence_ratio,
                d.clipping_count, d.zero_crossing_rate, d.transient_density,
+               d.spectral_centroid, d.spectral_bandwidth, d.spectral_rolloff,
+               d.spectral_flatness,
                d.duration_bucket, d.error
         FROM audio_descriptors d
         JOIN files f ON f.id = d.file_id
@@ -463,6 +549,10 @@ def search_similarity_descriptors(
                 clipping_count=row["clipping_count"],
                 zero_crossing_rate=row["zero_crossing_rate"],
                 transient_density=row["transient_density"],
+                spectral_centroid=row["spectral_centroid"],
+                spectral_bandwidth=row["spectral_bandwidth"],
+                spectral_rolloff=row["spectral_rolloff"],
+                spectral_flatness=row["spectral_flatness"],
                 duration_bucket=row["duration_bucket"],
             )
         )

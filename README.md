@@ -182,10 +182,11 @@ uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --threshold 0.92 --o
 ```
 
 This first slice stores deterministic descriptors in SQLite and skips unchanged
-files on later runs. It can also rank cached descriptors against a query file
-and produce report-only near-duplicate groups. The larger roadmap folds
-Sononym-style descriptor discovery together with a Soundminer-style resumable
-cache builder. See
+files on later runs. It captures loudness, silence, transient, zero-crossing,
+and basic spectral-shape evidence, then can rank cached descriptors against a
+query file and produce report-only near-duplicate groups. The larger roadmap
+folds Sononym-style descriptor discovery together with a Soundminer-style
+resumable cache builder. See
 [`docs/SIMILARITY.md`](docs/SIMILARITY.md).
 
 ## Standalone First-Look Audit

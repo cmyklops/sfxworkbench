@@ -155,7 +155,8 @@ python3 audit.py ~/CommercialLibraries --json
   only obvious artifacts/all-zero blobs by default.
 - `similarity crawl`: experimental, optional deterministic descriptor crawler
   over indexed files. It stores SQLite descriptor rows, writes an optional cache
-  run report, and skips unchanged files by size/mtime/hash anchors.
+  run report, captures loudness/transient/spectral descriptors, and skips
+  unchanged files by size/mtime/hash anchors.
 - `similarity search`: experimental nearest-neighbor search over cached
   deterministic descriptor rows using a query audio file.
 - `similarity audit`: experimental report-only near-duplicate grouping over

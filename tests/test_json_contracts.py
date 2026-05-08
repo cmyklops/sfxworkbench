@@ -165,6 +165,7 @@ def test_similarity_crawl_json_contract(tmp_library: Path, tmp_db: Path, tmp_pat
     assert payload["report"]["summary"]["analyzed"] == 4
     assert len(payload["report"]["descriptors"]) == 2
     assert payload["report"]["descriptors"][0]["duration_bucket"] is not None
+    assert "spectral_centroid" in payload["report"]["descriptors"][0]
 
     search_payload = _normalize(
         _load(
@@ -195,6 +196,8 @@ def test_similarity_crawl_json_contract(tmp_library: Path, tmp_db: Path, tmp_pat
     assert search_payload["report"]["backend"] == "deterministic_v1"
     assert search_payload["report"]["candidates_considered"] == 4
     assert len(search_payload["report"]["results"]) == 2
+    assert "spectral_centroid" in search_payload["report"]["query_descriptor"]
+    assert "spectral_centroid" in search_payload["report"]["results"][0]
     assert search_payload["report"]["results"][0]["score"] >= search_payload["report"]["results"][1]["score"]
 
     audit_out = tmp_path / "similarity_audit.json"
