@@ -18,6 +18,7 @@ import json
 import re
 import struct
 import sys
+import unicodedata
 import wave
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -28,9 +29,131 @@ AUDIO_EXTENSIONS = {".wav", ".aif", ".aiff", ".mp3", ".flac", ".ogg", ".opus", "
 # UCS: first segment is 2–5 uppercase letters (category), second is 2–8 uppercase letters (subcategory)
 _UCS_RE = re.compile(r"^[A-Z]{2,5}_[A-Z]{2,8}(_|$)")
 
+# Characters that are illegal on Windows/exFAT (breaks cross-platform portability)
+_ILLEGAL_CHARS = set(':*?"<>|')
+# Characters that cause issues in shells, URLs, or some DAWs even on macOS
+_RISKY_CHARS = set("#&;'\\!")
+# Max safe byte length for a single path component (APFS/HFS+ limit is 255 bytes UTF-8)
+_MAX_NAME_BYTES = 255
+# Warn when a full absolute path exceeds this (Windows MAX_PATH default)
+_MAX_PATH_BYTES = 260
+
 
 def _looks_ucs(name: str) -> bool:
     return bool(_UCS_RE.match(Path(name).stem))
+
+
+def _check_filename_health(path: Path, root: Path) -> list[dict]:
+    """
+    Return a list of issue dicts for this path. Each issue has:
+      - file: str (absolute path)
+      - component: str (the specific filename or folder name that has the problem)
+      - issue: str (short machine-readable tag)
+      - detail: str (human-readable explanation)
+
+    Checks performed on every component of the path relative to root:
+      1. unicode_normalization — name is NFD; rsync will silently skip it on APFS (NFC)
+      2. illegal_chars        — contains characters illegal on Windows/exFAT (:*?"<>|)
+      3. risky_chars          — contains characters that break shells or some DAWs (#&;\\'!)
+      4. name_too_long        — component exceeds 255 UTF-8 bytes (APFS/HFS+ limit)
+      5. path_too_long        — full absolute path exceeds 260 bytes (Windows MAX_PATH)
+      6. non_ascii            — contains non-ASCII characters (informational; not always a problem)
+      7. leading_trailing_space — name starts or ends with a space (breaks some tools)
+      8. dot_prefix           — name starts with a dot (hidden on macOS/Linux; can surprise users)
+    """
+    issues = []
+    abs_str = str(path)
+
+    try:
+        rel_parts = path.relative_to(root).parts
+    except ValueError:
+        rel_parts = path.parts
+
+    for component in rel_parts:
+        file_str = abs_str
+
+        # 1. Unicode normalization: NFD names are invisible to rsync on APFS
+        nfc = unicodedata.normalize("NFC", component)
+        if component != nfc:
+            issues.append({
+                "file": file_str,
+                "component": component,
+                "issue": "unicode_normalization",
+                "detail": (
+                    f"Name is NFD-normalized. rsync will silently skip this path "
+                    f"when copying to APFS. Use `ditto` or normalize names first. "
+                    f"NFC form: {nfc!r}"
+                ),
+            })
+
+        # 2. Illegal characters (Windows/exFAT)
+        found_illegal = sorted(_ILLEGAL_CHARS & set(component))
+        if found_illegal:
+            issues.append({
+                "file": file_str,
+                "component": component,
+                "issue": "illegal_chars",
+                "detail": f"Contains characters illegal on Windows/exFAT: {found_illegal}",
+            })
+
+        # 3. Risky characters (shells, DAWs, URLs)
+        found_risky = sorted(_RISKY_CHARS & set(component))
+        if found_risky:
+            issues.append({
+                "file": file_str,
+                "component": component,
+                "issue": "risky_chars",
+                "detail": f"Contains characters that may break shells or DAW imports: {found_risky}",
+            })
+
+        # 4. Component byte length
+        name_bytes = len(component.encode("utf-8"))
+        if name_bytes > _MAX_NAME_BYTES:
+            issues.append({
+                "file": file_str,
+                "component": component,
+                "issue": "name_too_long",
+                "detail": f"Component is {name_bytes} UTF-8 bytes; APFS limit is {_MAX_NAME_BYTES}.",
+            })
+
+        # 6. Non-ASCII (informational — flag but don't treat as blocking)
+        if any(ord(c) > 127 for c in component):
+            issues.append({
+                "file": file_str,
+                "component": component,
+                "issue": "non_ascii",
+                "detail": "Contains non-ASCII characters. May cause issues on non-Unicode filesystems.",
+            })
+
+        # 7. Leading/trailing spaces
+        if component != component.strip():
+            issues.append({
+                "file": file_str,
+                "component": component,
+                "issue": "leading_trailing_space",
+                "detail": "Name starts or ends with a space. Breaks many tools and shells.",
+            })
+
+        # 8. Dot-prefixed (hidden files)
+        if component.startswith(".") and component not in (".", ".."):
+            issues.append({
+                "file": file_str,
+                "component": component,
+                "issue": "dot_prefix",
+                "detail": "Name starts with a dot; file will be hidden on macOS/Linux.",
+            })
+
+    # 5. Full path byte length (check once per file)
+    path_bytes = len(abs_str.encode("utf-8"))
+    if path_bytes > _MAX_PATH_BYTES:
+        issues.append({
+            "file": abs_str,
+            "component": abs_str,
+            "issue": "path_too_long",
+            "detail": f"Full path is {path_bytes} bytes; Windows MAX_PATH is {_MAX_PATH_BYTES}.",
+        })
+
+    return issues
 
 
 def _read_wav_info(path: Path) -> dict:
@@ -135,9 +258,14 @@ def run_audit(root: Path, skip_hash: bool = False) -> dict:
         "max_folder_depth": 0,
         "duplicate_groups": [],
         "total_duplicate_copies": 0,
+        # Filename health
+        "filename_issues_by_type": {},
+        "filename_issues_total": 0,
+        "filename_issues": [],          # full list for JSON; capped in Markdown
     }
 
     size_groups: dict[int, list[Path]] = defaultdict(list)
+    seen_components: set[str] = set()   # avoid re-checking the same folder name twice
 
     print("  Pass 1/2 — crawling files...", flush=True)
     audio_files: list[tuple[Path, int]] = []
@@ -159,6 +287,18 @@ def run_audit(root: Path, skip_hash: bool = False) -> dict:
 
         ext = f.suffix.lower()
         report["extensions"][ext] = report["extensions"].get(ext, 0) + 1
+
+        # Filename health check (run on every file path)
+        issues = _check_filename_health(f, root)
+        for iss in issues:
+            # De-duplicate: same component + same issue only reported once
+            dedup_key = f"{iss['component']}|{iss['issue']}"
+            if dedup_key not in seen_components:
+                seen_components.add(dedup_key)
+                report["filename_issues"].append(iss)
+                report["filename_issues_total"] += 1
+                t = iss["issue"]
+                report["filename_issues_by_type"][t] = report["filename_issues_by_type"].get(t, 0) + 1
 
         if ext not in AUDIO_EXTENSIONS:
             continue
@@ -248,6 +388,7 @@ def render_markdown(r: dict) -> str:
     a(f"| Unreadable / corrupt | {r['corrupt_or_unreadable']:,} |")
     a(f"| Exact duplicate copies | {r['total_duplicate_copies']:,} |")
     a(f"| Max folder depth | {r['max_folder_depth']} |")
+    a(f"| Filename issues | {r['filename_issues_total']:,} |")
 
     wav_total = r["total_audio_files"]
     if wav_total > 0:
@@ -291,6 +432,48 @@ def render_markdown(r: dict) -> str:
         a("|-------|-------|")
         for depth in sorted(r["folder_depth_distribution"], key=int):
             a(f"| {depth} | {r['folder_depth_distribution'][depth]:,} |")
+
+    # --- Filename health ---
+    fn_issues = r.get("filename_issues", [])
+    fn_by_type = r.get("filename_issues_by_type", {})
+    if fn_issues:
+        a(f"\n## Filename Health — {r['filename_issues_total']:,} issues")
+
+        # Severity order for display
+        _SEVERITY = {
+            "unicode_normalization": ("🔴 Critical", "rsync silently skips these; files will NOT transfer"),
+            "illegal_chars":         ("🔴 Critical", "illegal on Windows/exFAT; breaks portability"),
+            "name_too_long":         ("🔴 Critical", "exceeds filesystem name limit (255 bytes)"),
+            "path_too_long":         ("🟠 Warning",  "exceeds Windows MAX_PATH (260 bytes)"),
+            "risky_chars":           ("🟠 Warning",  "may break shells or DAW imports"),
+            "leading_trailing_space":("🟠 Warning",  "breaks many tools and shells"),
+            "non_ascii":             ("🟡 Info",     "may cause issues on non-Unicode filesystems"),
+            "dot_prefix":            ("🟡 Info",     "hidden on macOS/Linux"),
+        }
+
+        a("\n### Summary by issue type")
+        a("| Severity | Issue | Count | Impact |")
+        a("|----------|-------|-------|--------|")
+        for issue_type, count in sorted(fn_by_type.items(), key=lambda x: list(_SEVERITY).index(x[0]) if x[0] in _SEVERITY else 99):
+            sev, impact = _SEVERITY.get(issue_type, ("🟡 Info", ""))
+            a(f"| {sev} | `{issue_type}` | {count:,} | {impact} |")
+
+        # Group issues by type for the detail listing
+        by_type: dict[str, list[dict]] = defaultdict(list)
+        for iss in fn_issues:
+            by_type[iss["issue"]].append(iss)
+
+        for issue_type in _SEVERITY:
+            group = by_type.get(issue_type, [])
+            if not group:
+                continue
+            sev, _ = _SEVERITY[issue_type]
+            a(f"\n### {sev} — `{issue_type}` ({len(group):,})")
+            shown = group[:20]
+            for iss in shown:
+                a(f"- `{iss['component']}` — {iss['detail']}")
+            if len(group) > 20:
+                a(f"\n_…{len(group) - 20} more in JSON report._")
 
     dup_groups = r["duplicate_groups"]
     if dup_groups:
