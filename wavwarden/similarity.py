@@ -20,6 +20,10 @@ from wavwarden.models import (
     SimilarityCrawlReport,
     SimilarityCrawlSummary,
     SimilarityDescriptor,
+    SimilarityFeedbackChange,
+    SimilarityFeedbackEntry,
+    SimilarityFeedbackReport,
+    SimilarityFeedbackSummary,
     SimilaritySearchReport,
     SimilaritySearchResult,
     SimilaritySegment,
@@ -34,6 +38,7 @@ DEFAULT_SIMILARITY_CACHE = Path.home() / ".wavwarden" / "similarity"
 DETERMINISTIC_BACKEND = "deterministic_v1"
 SEGMENT_METHOD = "rms_event_v2"
 _COMMIT_BATCH = 250
+FEEDBACK_STATES = {"favorite", "hidden", "ignored", "accepted", "rejected"}
 
 
 def _utc_now() -> str:
@@ -771,6 +776,122 @@ def _segment_rows(conn, *, root: Path | None, max_duration_s: float | None):
     return [row for row in rows if Path(row["path"]) == root or _is_relative_to(Path(row["path"]), root)]
 
 
+def _normalize_scope(scope: str) -> str:
+    normalized = scope.lower()
+    if normalized not in {"file", "segment"}:
+        raise ValueError("scope must be 'file' or 'segment'")
+    return normalized
+
+
+def _normalize_feedback_state(state: str) -> str:
+    normalized = state.lower()
+    if normalized not in FEEDBACK_STATES:
+        allowed = ", ".join(sorted(FEEDBACK_STATES))
+        raise ValueError(f"state must be one of: {allowed}")
+    return normalized
+
+
+def _resolve_file_row(conn, path: Path):
+    resolved = path.expanduser().resolve()
+    row = conn.execute(
+        "SELECT id, path, filename FROM files WHERE path = ?",
+        (str(resolved),),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"file is not indexed: {resolved}")
+    return row
+
+
+def _validate_feedback_segments(
+    conn,
+    *,
+    left_file_id: int,
+    right_file_id: int,
+    left_segment_index: int | None,
+    right_segment_index: int | None,
+    max_duration_s: float | None,
+) -> tuple[int, int]:
+    if left_segment_index is None or right_segment_index is None:
+        raise ValueError("--left-segment and --right-segment are required for segment feedback")
+    for file_id, segment_index in (
+        (left_file_id, left_segment_index),
+        (right_file_id, right_segment_index),
+    ):
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM audio_segments
+            WHERE file_id = ? AND backend = ? AND method = ? AND segment_index = ?
+              AND ((? IS NULL AND max_duration_s IS NULL) OR max_duration_s = ?)
+            """,
+            (file_id, DETERMINISTIC_BACKEND, SEGMENT_METHOD, segment_index, max_duration_s, max_duration_s),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"segment {segment_index} is not cached for indexed file id {file_id}")
+    return left_segment_index, right_segment_index
+
+
+def _normalized_feedback_pair(
+    *,
+    left_file_id: int,
+    right_file_id: int,
+    left_segment_index: int,
+    right_segment_index: int,
+) -> tuple[int, int, int, int]:
+    left_key = (left_file_id, left_segment_index)
+    right_key = (right_file_id, right_segment_index)
+    if left_key == right_key:
+        raise ValueError("feedback requires two different files or segments")
+    if right_key < left_key:
+        return right_file_id, left_file_id, right_segment_index, left_segment_index
+    return left_file_id, right_file_id, left_segment_index, right_segment_index
+
+
+def _feedback_entry_from_row(row) -> SimilarityFeedbackEntry:
+    left_segment_index = row["left_segment_index"]
+    right_segment_index = row["right_segment_index"]
+    return SimilarityFeedbackEntry(
+        id=row["id"],
+        backend=row["backend"],
+        scope=row["scope"],
+        state=row["state"],
+        left_file_id=row["left_file_id"],
+        right_file_id=row["right_file_id"],
+        left_path=row["left_path"],
+        right_path=row["right_path"],
+        left_filename=row["left_filename"],
+        right_filename=row["right_filename"],
+        left_segment_index=None if left_segment_index < 0 else left_segment_index,
+        right_segment_index=None if right_segment_index < 0 else right_segment_index,
+        note=row["note"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _feedback_select_sql(where_sql: str = "") -> str:
+    return f"""
+        SELECT fb.id, fb.backend, fb.scope, fb.state,
+               fb.left_file_id, fb.right_file_id,
+               fb.left_segment_index, fb.right_segment_index,
+               fb.note, fb.created_at, fb.updated_at,
+               lf.path AS left_path, rf.path AS right_path,
+               lf.filename AS left_filename, rf.filename AS right_filename
+        FROM similarity_feedback fb
+        JOIN files lf ON lf.id = fb.left_file_id
+        JOIN files rf ON rf.id = fb.right_file_id
+        {where_sql}
+        ORDER BY fb.updated_at DESC, fb.id DESC
+    """
+
+
+def _feedback_entry_by_id(conn, feedback_id: int) -> SimilarityFeedbackEntry:
+    row = conn.execute(_feedback_select_sql("WHERE fb.id = ?"), (feedback_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"feedback row not found: {feedback_id}")
+    return _feedback_entry_from_row(row)
+
+
 def search_similarity_descriptors(
     query_path: Path,
     db_path: Path = DEFAULT_DB_PATH,
@@ -1127,6 +1248,212 @@ def list_similarity_segments(
     return report
 
 
+def set_similarity_feedback(
+    *,
+    left_path: Path,
+    right_path: Path,
+    state: str,
+    db_path: Path = DEFAULT_DB_PATH,
+    scope: str = "file",
+    left_segment_index: int | None = None,
+    right_segment_index: int | None = None,
+    max_duration_s: float | None = 30.0,
+    note: str | None = None,
+    quiet: bool = False,
+) -> SimilarityFeedbackChange:
+    """Store a DB-only review state for a similarity relationship."""
+    scope = _normalize_scope(scope)
+    state = _normalize_feedback_state(state)
+    conn = get_connection(db_path)
+    left_row = _resolve_file_row(conn, left_path)
+    right_row = _resolve_file_row(conn, right_path)
+    if scope == "segment":
+        left_segment, right_segment = _validate_feedback_segments(
+            conn,
+            left_file_id=left_row["id"],
+            right_file_id=right_row["id"],
+            left_segment_index=left_segment_index,
+            right_segment_index=right_segment_index,
+            max_duration_s=max_duration_s,
+        )
+    else:
+        if left_segment_index is not None or right_segment_index is not None:
+            raise ValueError("segment indexes are only valid with --scope segment")
+        left_segment = -1
+        right_segment = -1
+
+    left_file_id, right_file_id, left_segment, right_segment = _normalized_feedback_pair(
+        left_file_id=left_row["id"],
+        right_file_id=right_row["id"],
+        left_segment_index=left_segment,
+        right_segment_index=right_segment,
+    )
+    now = _utc_now()
+    row = conn.execute(
+        """
+        INSERT INTO similarity_feedback (
+            backend, scope, left_file_id, right_file_id,
+            left_segment_index, right_segment_index, state, note, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (
+            backend, scope, left_file_id, right_file_id,
+            left_segment_index, right_segment_index
+        ) DO UPDATE SET
+            state = excluded.state,
+            note = excluded.note,
+            updated_at = excluded.updated_at
+        RETURNING id
+        """,
+        (
+            DETERMINISTIC_BACKEND,
+            scope,
+            left_file_id,
+            right_file_id,
+            left_segment,
+            right_segment,
+            state,
+            note,
+            now,
+            now,
+        ),
+    ).fetchone()
+    conn.commit()
+    entry = _feedback_entry_by_id(conn, int(row["id"]))
+    conn.close()
+    result = SimilarityFeedbackChange(
+        generated_at=now,
+        tool_version=__version__,
+        db_path=str(db_path),
+        backend=DETERMINISTIC_BACKEND,
+        action="set",
+        entry=entry,
+    )
+    if not quiet:
+        show_similarity_feedback_change(result)
+    return result
+
+
+def clear_similarity_feedback(
+    *,
+    left_path: Path,
+    right_path: Path,
+    db_path: Path = DEFAULT_DB_PATH,
+    scope: str = "file",
+    left_segment_index: int | None = None,
+    right_segment_index: int | None = None,
+    max_duration_s: float | None = 30.0,
+    state: str | None = None,
+    quiet: bool = False,
+) -> SimilarityFeedbackChange:
+    """Remove a DB-only review state for a similarity relationship."""
+    scope = _normalize_scope(scope)
+    normalized_state = _normalize_feedback_state(state) if state is not None else None
+    conn = get_connection(db_path)
+    left_row = _resolve_file_row(conn, left_path)
+    right_row = _resolve_file_row(conn, right_path)
+    if scope == "segment":
+        left_segment, right_segment = _validate_feedback_segments(
+            conn,
+            left_file_id=left_row["id"],
+            right_file_id=right_row["id"],
+            left_segment_index=left_segment_index,
+            right_segment_index=right_segment_index,
+            max_duration_s=max_duration_s,
+        )
+    else:
+        if left_segment_index is not None or right_segment_index is not None:
+            raise ValueError("segment indexes are only valid with --scope segment")
+        left_segment = -1
+        right_segment = -1
+
+    left_file_id, right_file_id, left_segment, right_segment = _normalized_feedback_pair(
+        left_file_id=left_row["id"],
+        right_file_id=right_row["id"],
+        left_segment_index=left_segment,
+        right_segment_index=right_segment,
+    )
+    params: list[object] = [
+        DETERMINISTIC_BACKEND,
+        scope,
+        left_file_id,
+        right_file_id,
+        left_segment,
+        right_segment,
+    ]
+    state_sql = ""
+    if normalized_state is not None:
+        state_sql = " AND state = ?"
+        params.append(normalized_state)
+    cursor = conn.execute(
+        f"""
+        DELETE FROM similarity_feedback
+        WHERE backend = ? AND scope = ? AND left_file_id = ? AND right_file_id = ?
+          AND left_segment_index = ? AND right_segment_index = ?
+          {state_sql}
+        """,
+        params,
+    )
+    conn.commit()
+    conn.close()
+    result = SimilarityFeedbackChange(
+        generated_at=_utc_now(),
+        tool_version=__version__,
+        db_path=str(db_path),
+        backend=DETERMINISTIC_BACKEND,
+        action="clear",
+        removed=cursor.rowcount,
+    )
+    if not quiet:
+        show_similarity_feedback_change(result)
+    return result
+
+
+def list_similarity_feedback(
+    *,
+    db_path: Path = DEFAULT_DB_PATH,
+    scope: str | None = None,
+    state: str | None = None,
+    limit: int = 200,
+    quiet: bool = False,
+) -> SimilarityFeedbackReport:
+    """List DB-only similarity review feedback."""
+    if limit < 0:
+        raise ValueError("limit must be 0 or greater")
+    normalized_scope = _normalize_scope(scope) if scope is not None else None
+    normalized_state = _normalize_feedback_state(state) if state is not None else None
+    where: list[str] = ["fb.backend = ?"]
+    params: list[object] = [DETERMINISTIC_BACKEND]
+    if normalized_scope is not None:
+        where.append("fb.scope = ?")
+        params.append(normalized_scope)
+    if normalized_state is not None:
+        where.append("fb.state = ?")
+        params.append(normalized_state)
+    where_sql = "WHERE " + " AND ".join(where)
+
+    conn = get_connection(db_path)
+    rows = conn.execute(_feedback_select_sql(where_sql), params).fetchall()
+    conn.close()
+    by_state: dict[str, int] = {}
+    for row in rows:
+        by_state[row["state"]] = by_state.get(row["state"], 0) + 1
+    reported_rows = rows if limit == 0 else rows[:limit]
+    report = SimilarityFeedbackReport(
+        generated_at=_utc_now(),
+        tool_version=__version__,
+        db_path=str(db_path),
+        backend=DETERMINISTIC_BACKEND,
+        scope=normalized_scope,
+        state=normalized_state,
+        limit=limit,
+        summary=SimilarityFeedbackSummary(total=len(rows), by_state=by_state),
+        entries=[_feedback_entry_from_row(row) for row in reported_rows],
+    )
+    if not quiet:
+        show_similarity_feedback_report(report)
+    return report
+
+
 def show_similarity_crawl_report(report: SimilarityCrawlReport) -> None:
     table = Table(title="Similarity descriptor crawl", show_lines=False)
     table.add_column("Metric")
@@ -1217,3 +1544,49 @@ def show_similarity_segments_report(report: SimilaritySegmentsReport) -> None:
             f"{segment.confidence or 0.0:.2f}",
         )
     console.print(segment_table)
+
+
+def show_similarity_feedback_report(report: SimilarityFeedbackReport) -> None:
+    table = Table(title="Similarity feedback", show_lines=False)
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_row("Total", f"{report.summary.total:,}")
+    if report.scope:
+        table.add_row("Scope", report.scope)
+    if report.state:
+        table.add_row("State", report.state)
+    for state, count in sorted(report.summary.by_state.items()):
+        table.add_row(state, f"{count:,}")
+    console.print(table)
+    if not report.entries:
+        return
+
+    entries_table = Table(title="Review states", show_lines=False)
+    entries_table.add_column("State")
+    entries_table.add_column("Scope")
+    entries_table.add_column("Left")
+    entries_table.add_column("Right")
+    entries_table.add_column("Note")
+    for entry in report.entries[:20]:
+        left = entry.left_filename
+        right = entry.right_filename
+        if entry.scope == "segment":
+            left = f"{left}#{entry.left_segment_index}"
+            right = f"{right}#{entry.right_segment_index}"
+        entries_table.add_row(entry.state, entry.scope, left, right, entry.note or "")
+    console.print(entries_table)
+
+
+def show_similarity_feedback_change(result: SimilarityFeedbackChange) -> None:
+    table = Table(title="Similarity feedback change", show_lines=False)
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_row("Action", result.action)
+    if result.action == "clear":
+        table.add_row("Removed", f"{result.removed:,}")
+    if result.entry is not None:
+        table.add_row("State", result.entry.state)
+        table.add_row("Scope", result.entry.scope)
+        table.add_row("Left", result.entry.left_path)
+        table.add_row("Right", result.entry.right_path)
+    console.print(table)

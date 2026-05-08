@@ -72,3 +72,40 @@ def test_internal_beta_audit_can_include_advanced_format_report(tmp_path: Path, 
     assert payload["include_format"] is True
     assert "format" in payload["summary"]
     assert Path(payload["artifacts"]["format_report"]).exists()
+
+
+def test_internal_beta_audit_can_include_similarity_reports(tmp_path: Path, tmp_library: Path) -> None:
+    script = Path(__file__).resolve().parents[1] / "scripts" / "internal_beta_audit.py"
+    output_dir = tmp_path / "beta_reports"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            str(tmp_library),
+            "--output-dir",
+            str(output_dir),
+            "--include-similarity",
+            "--similarity-threshold",
+            "0.9",
+            "--limit",
+            "10",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(result.stdout)
+
+    assert payload["include_similarity"] is True
+    assert payload["similarity_threshold"] == 0.9
+    assert "similarity" in payload["summary"]
+    assert payload["summary"]["similarity"]["crawl"]["total_files"] == 4
+    for artifact in [
+        "similarity_cache",
+        "similarity_crawl_report",
+        "similarity_segments_report",
+        "similarity_audit_file_report",
+        "similarity_audit_segment_report",
+    ]:
+        assert Path(payload["artifacts"][artifact]).exists()

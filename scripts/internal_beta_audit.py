@@ -32,6 +32,9 @@ def run_internal_beta_audit(
     force_rescan: bool = True,
     limit: int = 200,
     include_format: bool = False,
+    include_similarity: bool = False,
+    similarity_threshold: float = 0.95,
+    similarity_max_duration_s: float | None = 30.0,
 ) -> dict:
     """Run the beta-safe audit path and return a manifest of generated artifacts."""
     root = root.expanduser().resolve()
@@ -88,6 +91,73 @@ def run_internal_beta_audit(
         format_path = output_dir / "format_report.json"
         write_format_audit_report(format_report, format_path, quiet=True)
 
+    similarity = {}
+    if include_similarity:
+        from wavwarden.similarity import (
+            audit_similarity_descriptors,
+            crawl_similarity_descriptors,
+            list_similarity_segments,
+        )
+
+        similarity_cache = output_dir / "similarity_cache"
+        crawl_report = crawl_similarity_descriptors(
+            root,
+            db_path=db_path,
+            cache_path=similarity_cache,
+            max_duration_s=similarity_max_duration_s,
+            limit=limit,
+            quiet=True,
+        )
+        crawl_path = similarity_cache / f"similarity_crawl_{crawl_report.run_id}.json"
+
+        segments_report = list_similarity_segments(
+            root,
+            db_path=db_path,
+            max_duration_s=similarity_max_duration_s,
+            limit=limit,
+            quiet=True,
+        )
+        segments_path = output_dir / "similarity_segments_report.json"
+        _write_json(segments_path, segments_report.model_dump(mode="json"))
+
+        file_audit_path = output_dir / "similarity_audit_file_report.json"
+        file_audit_report = audit_similarity_descriptors(
+            root,
+            db_path=db_path,
+            threshold=similarity_threshold,
+            max_duration_s=similarity_max_duration_s,
+            scope="file",
+            limit=limit,
+            output_path=file_audit_path,
+            quiet=True,
+        )
+
+        segment_audit_path = output_dir / "similarity_audit_segment_report.json"
+        segment_audit_report = audit_similarity_descriptors(
+            root,
+            db_path=db_path,
+            threshold=similarity_threshold,
+            max_duration_s=similarity_max_duration_s,
+            scope="segment",
+            limit=limit,
+            output_path=segment_audit_path,
+            quiet=True,
+        )
+
+        similarity = {
+            "cache_dir": similarity_cache,
+            "crawl_report": crawl_path,
+            "segments_report": segments_path,
+            "file_audit_report": file_audit_path,
+            "segment_audit_report": segment_audit_path,
+            "summary": {
+                "crawl": crawl_report.summary,
+                "segments": segments_report.summary,
+                "file_audit": file_audit_report.summary,
+                "segment_audit": segment_audit_report.summary,
+            },
+        }
+
     pack_report = audit_packs(root, db_path=db_path)
     pack_report_path = output_dir / "pack_overlap_report.json"
     write_pack_audit_report(pack_report, pack_report_path, quiet=True)
@@ -119,6 +189,9 @@ def run_internal_beta_audit(
         "skip_hash": skip_hash,
         "force_rescan": force_rescan,
         "include_format": include_format,
+        "include_similarity": include_similarity,
+        "similarity_threshold": similarity_threshold,
+        "similarity_max_duration_s": similarity_max_duration_s,
         "artifacts": {
             "scan_result": scan_path,
             "audit_result": audit_path,
@@ -141,6 +214,13 @@ def run_internal_beta_audit(
     if format_report is not None and format_path is not None:
         manifest["artifacts"]["format_report"] = format_path
         manifest["summary"]["format"] = format_report.summary
+    if similarity:
+        manifest["artifacts"]["similarity_cache"] = similarity["cache_dir"]
+        manifest["artifacts"]["similarity_crawl_report"] = similarity["crawl_report"]
+        manifest["artifacts"]["similarity_segments_report"] = similarity["segments_report"]
+        manifest["artifacts"]["similarity_audit_file_report"] = similarity["file_audit_report"]
+        manifest["artifacts"]["similarity_audit_segment_report"] = similarity["segment_audit_report"]
+        manifest["summary"]["similarity"] = similarity["summary"]
     manifest_path = output_dir / "manifest.json"
     _write_json(manifest_path, manifest)
     manifest["artifacts"]["manifest"] = manifest_path
@@ -165,6 +245,23 @@ def main() -> int:
         action="store_true",
         help="Also run the advanced mixed-format report. Skipped by default because mixed formats are often intentional.",
     )
+    parser.add_argument(
+        "--include-similarity",
+        action="store_true",
+        help="Also run the experimental report-only similarity crawl, segment listing, and near-duplicate audits.",
+    )
+    parser.add_argument(
+        "--similarity-threshold",
+        type=float,
+        default=0.95,
+        help="Minimum similarity score for optional similarity audit reports.",
+    )
+    parser.add_argument(
+        "--similarity-max-duration",
+        type=float,
+        default=30.0,
+        help="Maximum seconds analyzed per file for optional similarity reports; 0 reads each full file.",
+    )
     args = parser.parse_args()
 
     root = args.path.expanduser()
@@ -172,8 +269,11 @@ def main() -> int:
         parser.error(f"path not found: {root}")
     if args.limit < 0:
         parser.error("--limit must be >= 0")
+    if not 0 < args.similarity_threshold <= 1:
+        parser.error("--similarity-threshold must be > 0 and <= 1")
 
     output_dir = args.output_dir or Path(f"wavwarden_internal_beta_audit_{_now_stamp()}")
+    similarity_max_duration_s = None if args.similarity_max_duration == 0 else args.similarity_max_duration
     manifest = run_internal_beta_audit(
         root,
         output_dir=output_dir,
@@ -182,6 +282,9 @@ def main() -> int:
         force_rescan=not args.incremental,
         limit=args.limit,
         include_format=args.include_format,
+        include_similarity=args.include_similarity,
+        similarity_threshold=args.similarity_threshold,
+        similarity_max_duration_s=similarity_max_duration_s,
     )
     print(json_dumps(manifest))
     return 0

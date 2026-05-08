@@ -268,6 +268,55 @@ class SimilarityAuditReport(BaseModel):
     groups: list[SimilarityAuditGroup] = []
 
 
+class SimilarityFeedbackEntry(BaseModel):
+    id: int
+    backend: str = "deterministic_v1"
+    scope: str = "file"
+    state: str
+    left_file_id: int
+    right_file_id: int
+    left_path: str
+    right_path: str
+    left_filename: str
+    right_filename: str
+    left_segment_index: int | None = None
+    right_segment_index: int | None = None
+    note: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class SimilarityFeedbackSummary(BaseModel):
+    total: int = 0
+    by_state: dict[str, int] = {}
+
+
+class SimilarityFeedbackReport(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    db_path: str
+    backend: str = "deterministic_v1"
+    scope: str | None = None
+    state: str | None = None
+    limit: int = 200
+    summary: SimilarityFeedbackSummary
+    entries: list[SimilarityFeedbackEntry] = []
+
+
+class SimilarityFeedbackChange(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    db_path: str
+    backend: str = "deterministic_v1"
+    action: str
+    removed: int = 0
+    entry: SimilarityFeedbackEntry | None = None
+
+
 class ScanErrorEntry(BaseModel):
     path: str
     action: str = "review"

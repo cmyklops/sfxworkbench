@@ -17,6 +17,7 @@ uv run --extra dev poe json-smoke
 # Run a single test file or test
 uv run pytest tests/test_clean.py -v
 uv run pytest tests/test_health.py::test_unicode_normalization_detected -v
+uv run pytest tests/test_similarity.py tests/test_internal_beta_audit.py -v
 
 # Run the sfx CLI
 uv run sfx --help
@@ -43,6 +44,9 @@ uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --limit
 uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --scope segment --limit 20 --json
 uv run sfx similarity audit ~/CommercialLibraries --db ~/.wavwarden/index.db --threshold 0.92 --output ~/reports/similarity_audit.json
 uv run sfx similarity audit ~/CommercialLibraries --db ~/.wavwarden/index.db --scope segment --threshold 0.95 --json
+uv run sfx similarity feedback set --left one.wav --right two.wav --state ignored --db ~/.wavwarden/index.db
+uv run sfx similarity feedback list --db ~/.wavwarden/index.db --state ignored --json
+uv run sfx similarity feedback clear --left one.wav --right two.wav --db ~/.wavwarden/index.db
 uv run sfx organize audit ~/CommercialLibraries --depth 1 --output ~/reports/organize_report.json
 uv run sfx organize audit ~/CommercialLibraries --pattern redundant-nesting --depth 8 --output ~/reports/nesting_report.json
 uv run sfx organize nesting-plan ~/reports/nesting_report.json --output ~/reports/nesting_plan.json
@@ -80,6 +84,7 @@ python3 audit.py ~/CommercialLibraries --no-hash   # skip MD5
 
 # Developer benchmark
 uv run --extra dev poe bench-scan --files 1000 --no-hash
+uv run --extra dev poe beta-audit ~/CommercialLibraries --output-dir ~/reports/wavwarden_beta_audit --include-similarity
 ```
 
 ## Architecture
@@ -110,6 +115,7 @@ sfx similarity crawl PATH → optional audio descriptor + segment cache
 sfx similarity segments PATH → list cached event windows
 sfx similarity search --file QUERY → whole-file or segment nearest-neighbor search
 sfx similarity audit PATH → report-only whole-file or segment near-duplicate groups
+sfx similarity feedback set/list/clear → DB-only favorite/hidden/ignored/accepted/rejected review states
 sfx organize audit/review/apply/undo PATH → folder-structure cleanup with undo log
 sfx organize audit --pattern common-prefix-folders PATH → reviewed sibling family re-foldering preview
 sfx organize audit --pattern numeric-series-folders PATH → reviewed numeric library-series re-foldering preview
@@ -144,7 +150,7 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 - **`ucs_catalog.py`** — UCS catalog import, cache, and lookup. Parses the official `Soundminer/_categorylist.csv` from `UCS Release.zip`, writes a normalized JSON cache at `~/.wavwarden/ucs_catalog.json` with provenance (source URL, release version, import timestamp, attribution). Discovery chain for `load_catalog()`: explicit path → `WAVWARDEN_UCS_DATA` env var → default cache → `None`. XLSX import is deferred.
 - **`ucs_validate.py`** — report-only validation of UCS-looking indexed filenames against a loaded UCS catalog.
 - **`ucs.py`** — shared UCS-looking filename heuristic/parser. This is not a full official UCS catalog validator yet.
-- **`similarity.py`** — optional deterministic audio descriptor crawler, cached event segment detection, whole-file/segment similarity search, and report-only similarity audit. It never mutates audio or makes cleanup decisions.
+- **`similarity.py`** — optional deterministic audio descriptor crawler, cached event segment detection, whole-file/segment similarity search, report-only similarity audit, and DB-only review feedback. It never mutates audio or makes cleanup decisions.
 
 ### Critical design constraints
 
@@ -165,6 +171,7 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 | `analysis_runs` | Similarity/audio-analysis run metadata |
 | `audio_descriptors` | Cached deterministic per-file audio descriptors |
 | `audio_segments` | Cached event-like segment windows and per-segment descriptors |
+| `similarity_feedback` | DB-only review states for similarity relationships |
 
 ### Tests
 

@@ -326,6 +326,94 @@ def test_similarity_crawl_json_contract(tmp_library: Path, tmp_db: Path, tmp_pat
     assert segment_audit_payload["report"]["scope"] == "segment"
     assert isinstance(segment_audit_payload["report"]["groups"], list)
 
+    feedback_set_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "similarity",
+                    "feedback",
+                    "set",
+                    "--left",
+                    str(tmp_library / "sounds" / "AMB_RAIN_01.wav"),
+                    "--right",
+                    str(tmp_library / "sounds" / "SFX_GUNSHOT_01.wav"),
+                    "--state",
+                    "favorite",
+                    "--note",
+                    "contract",
+                    "--db",
+                    str(tmp_db),
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert feedback_set_payload["schema_version"] == 1
+    assert feedback_set_payload["command"] == "similarity_feedback_set"
+    assert feedback_set_payload["db_path"] == "<DB>"
+    assert feedback_set_payload["result"]["action"] == "set"
+    assert feedback_set_payload["result"]["entry"]["state"] == "favorite"
+    assert feedback_set_payload["result"]["entry"]["left_path"] == "<ROOT>/sounds/AMB_RAIN_01.wav"
+    assert feedback_set_payload["result"]["entry"]["right_path"] == "<ROOT>/sounds/SFX_GUNSHOT_01.wav"
+
+    feedback_list_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "similarity",
+                    "feedback",
+                    "list",
+                    "--db",
+                    str(tmp_db),
+                    "--state",
+                    "favorite",
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert feedback_list_payload["schema_version"] == 1
+    assert feedback_list_payload["command"] == "similarity_feedback_list"
+    assert feedback_list_payload["report"]["summary"]["total"] == 1
+    assert feedback_list_payload["report"]["entries"][0]["note"] == "contract"
+
+    feedback_clear_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "similarity",
+                    "feedback",
+                    "clear",
+                    "--left",
+                    str(tmp_library / "sounds" / "AMB_RAIN_01.wav"),
+                    "--right",
+                    str(tmp_library / "sounds" / "SFX_GUNSHOT_01.wav"),
+                    "--db",
+                    str(tmp_db),
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert feedback_clear_payload["schema_version"] == 1
+    assert feedback_clear_payload["command"] == "similarity_feedback_clear"
+    assert feedback_clear_payload["result"]["removed"] == 1
+
 
 def test_rename_json_contract(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
     runner.invoke(app, ["scan", str(tmp_library), "--db", str(tmp_db), "--no-hash", "--json"])

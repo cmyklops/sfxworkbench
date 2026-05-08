@@ -73,6 +73,13 @@ similarity_app = typer.Typer(
     no_args_is_help=True,
     rich_markup_mode="rich",
 )
+similarity_feedback_app = typer.Typer(
+    name="feedback",
+    help="Review DB-only similarity relationships without changing audio files.",
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+)
+similarity_app.add_typer(similarity_feedback_app, name="feedback")
 app.add_typer(similarity_app, name="similarity")
 
 console = Console()
@@ -296,6 +303,152 @@ def cmd_similarity_audit(
                     "db_path": db,
                     "report_path": output,
                     "report": report,
+                }
+            )
+        )
+
+
+@similarity_feedback_app.command("set")
+def cmd_similarity_feedback_set(
+    left: Annotated[Path, typer.Option("--left", help="Indexed left-side file path.")],
+    right: Annotated[Path, typer.Option("--right", help="Indexed right-side file path.")],
+    state: Annotated[
+        str,
+        typer.Option("--state", help="Review state: favorite, hidden, ignored, accepted, or rejected."),
+    ],
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    scope: Annotated[str, typer.Option("--scope", help="Feedback scope: 'file' or 'segment'.")] = "file",
+    left_segment: Annotated[
+        int | None, typer.Option("--left-segment", help="Left segment index for segment feedback.")
+    ] = None,
+    right_segment: Annotated[
+        int | None, typer.Option("--right-segment", help="Right segment index for segment feedback.")
+    ] = None,
+    max_duration: Annotated[
+        float | None,
+        typer.Option(
+            "--max-duration", help="Descriptor analysis window for segment lookup; 0 uses full-file segments."
+        ),
+    ] = 30.0,
+    note: Annotated[str | None, typer.Option("--note", help="Optional reviewer note.")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Set a DB-only review state for a similarity relationship."""
+    from wavwarden.similarity import set_similarity_feedback
+
+    effective_max_duration = None if max_duration == 0 else max_duration
+    try:
+        result = set_similarity_feedback(
+            left_path=left,
+            right_path=right,
+            state=state,
+            db_path=db,
+            scope=scope,
+            left_segment_index=left_segment,
+            right_segment_index=right_segment,
+            max_duration_s=effective_max_duration,
+            note=note,
+            quiet=json_output,
+        )
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "similarity_feedback_set",
+                    "db_path": db,
+                    "result": result,
+                }
+            )
+        )
+
+
+@similarity_feedback_app.command("list")
+def cmd_similarity_feedback_list(
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    scope: Annotated[str | None, typer.Option("--scope", help="Filter to 'file' or 'segment'.")] = None,
+    state: Annotated[
+        str | None,
+        typer.Option("--state", help="Filter to favorite, hidden, ignored, accepted, or rejected."),
+    ] = None,
+    limit: Annotated[int, typer.Option("--limit", help="Maximum entries to include; 0 writes all.")] = 200,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """List DB-only similarity review states."""
+    from wavwarden.similarity import list_similarity_feedback
+
+    try:
+        report = list_similarity_feedback(db_path=db, scope=scope, state=state, limit=limit, quiet=json_output)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "similarity_feedback_list",
+                    "db_path": db,
+                    "report": report,
+                }
+            )
+        )
+
+
+@similarity_feedback_app.command("clear")
+def cmd_similarity_feedback_clear(
+    left: Annotated[Path, typer.Option("--left", help="Indexed left-side file path.")],
+    right: Annotated[Path, typer.Option("--right", help="Indexed right-side file path.")],
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    scope: Annotated[str, typer.Option("--scope", help="Feedback scope: 'file' or 'segment'.")] = "file",
+    left_segment: Annotated[
+        int | None, typer.Option("--left-segment", help="Left segment index for segment feedback.")
+    ] = None,
+    right_segment: Annotated[
+        int | None, typer.Option("--right-segment", help="Right segment index for segment feedback.")
+    ] = None,
+    max_duration: Annotated[
+        float | None,
+        typer.Option(
+            "--max-duration", help="Descriptor analysis window for segment lookup; 0 uses full-file segments."
+        ),
+    ] = 30.0,
+    state: Annotated[
+        str | None,
+        typer.Option("--state", help="Only clear this state if the relationship currently has it."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Clear a DB-only review state for a similarity relationship."""
+    from wavwarden.similarity import clear_similarity_feedback
+
+    effective_max_duration = None if max_duration == 0 else max_duration
+    try:
+        result = clear_similarity_feedback(
+            left_path=left,
+            right_path=right,
+            db_path=db,
+            scope=scope,
+            left_segment_index=left_segment,
+            right_segment_index=right_segment,
+            max_duration_s=effective_max_duration,
+            state=state,
+            quiet=json_output,
+        )
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "similarity_feedback_clear",
+                    "db_path": db,
+                    "result": result,
                 }
             )
         )

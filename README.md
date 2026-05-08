@@ -49,6 +49,7 @@ For development or internal beta use from a cloned repo:
 ```bash
 uv sync --extra dev
 uv run sfx --help
+uv run --extra dev poe beta-audit PATH --output-dir ~/reports/wavwarden_beta_audit --include-similarity
 ```
 
 Optional richer WAV metadata reads:
@@ -187,6 +188,8 @@ uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --limit
 uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --scope segment --limit 20 --json
 uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --threshold 0.92 --output ~/reports/similarity_audit.json
 uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --scope segment --threshold 0.95 --json
+uv run sfx similarity feedback set --left one.wav --right two.wav --state ignored --db ~/.wavwarden/index.db
+uv run sfx similarity feedback list --db ~/.wavwarden/index.db --state ignored --json
 ```
 
 This first slice stores deterministic descriptors in SQLite and skips unchanged
@@ -195,7 +198,8 @@ basic spectral-shape evidence, and RMS-based event windows, then can rank
 cached whole-file or segment descriptors against a query file and produce
 report-only near-duplicate groups at either whole-file or event-window scope.
 Segment audit uses coarse descriptor buckets to keep comparisons bounded and
-reports how many candidate comparisons were evaluated.
+reports how many candidate comparisons were evaluated. Review feedback such as
+favorite, hidden, ignored, accepted, and rejected is stored only in SQLite.
 The larger roadmap folds Sononym-style descriptor discovery together with a
 Soundminer-style resumable cache builder. See
 [`docs/SIMILARITY.md`](docs/SIMILARITY.md).

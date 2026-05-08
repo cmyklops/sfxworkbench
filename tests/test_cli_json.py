@@ -128,6 +128,51 @@ def test_similarity_cli_json_smoke(tmp_library, tmp_db, tmp_path) -> None:
     assert segment_audit.exit_code == 0
     assert json.loads(segment_audit.stdout)["report"]["scope"] == "segment"
 
+    other_file = tmp_library / "sounds" / "SFX_GUNSHOT_01.wav"
+    feedback_set = runner.invoke(
+        app,
+        [
+            "similarity",
+            "feedback",
+            "set",
+            "--left",
+            str(query_file),
+            "--right",
+            str(other_file),
+            "--state",
+            "ignored",
+            "--db",
+            str(tmp_db),
+            "--json",
+        ],
+    )
+    assert feedback_set.exit_code == 0
+    assert json.loads(feedback_set.stdout)["command"] == "similarity_feedback_set"
+
+    feedback_list = runner.invoke(
+        app, ["similarity", "feedback", "list", "--db", str(tmp_db), "--state", "ignored", "--json"]
+    )
+    assert feedback_list.exit_code == 0
+    assert json.loads(feedback_list.stdout)["report"]["summary"]["total"] == 1
+
+    feedback_clear = runner.invoke(
+        app,
+        [
+            "similarity",
+            "feedback",
+            "clear",
+            "--left",
+            str(query_file),
+            "--right",
+            str(other_file),
+            "--db",
+            str(tmp_db),
+            "--json",
+        ],
+    )
+    assert feedback_clear.exit_code == 0
+    assert json.loads(feedback_clear.stdout)["result"]["removed"] == 1
+
 
 def test_organize_audit_json(tmp_library, tmp_path) -> None:
     (tmp_library / "01 Pack").mkdir()

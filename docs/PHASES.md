@@ -96,6 +96,9 @@ uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --limit
 uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --scope segment --limit 20 --json
 uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --threshold 0.92 --output ~/reports/similarity_audit.json
 uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --scope segment --threshold 0.95 --json
+uv run sfx similarity feedback set --left one.wav --right two.wav --state ignored --db ~/.wavwarden/index.db
+uv run sfx similarity feedback list --db ~/.wavwarden/index.db --state ignored --json
+uv run sfx similarity feedback clear --left one.wav --right two.wav --db ~/.wavwarden/index.db
 uv run sfx dedupe --summary-only
 uv run sfx dedupe --output ~/reports/dedupe_plan.json
 uv run sfx dedupe --output ~/reports/dedupe_plan.json --safe-folder ~/CommercialLibraries/Master
@@ -179,6 +182,8 @@ python3 audit.py ~/CommercialLibraries --json
   duplicate pairs are excluded by default because `dedupe` owns exact duplicate
   cleanup. Segment audit uses coarse descriptor buckets to reduce candidate
   comparisons.
+- `similarity feedback`: DB-only review states for similarity relationships
+  such as favorite, hidden, ignored, accepted, and rejected.
 - `dedupe --summary-only`: finds exact MD5 duplicate groups and prints counts without writing a plan.
 - `dedupe --output PLAN.json`: writes a reviewed duplicate plan to an explicit path. Repeated `--safe-folder PATH` options prefer protected duplicate files as keep copies and mark protected extra copies as ignored. Repeated `--prefer-folder PATH` and `--prefer-extension EXT` options store preservation-priority evidence and choose keep copies accordingly.
 - `dedupe --review PLAN.json`: stamps all or selected duplicate groups as approved.
@@ -398,6 +403,8 @@ uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --limit
 uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --scope segment --limit 50 --json
 uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --threshold 0.92 --output similarity_report.json
 uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --scope segment --threshold 0.95 --json
+uv run sfx similarity feedback set --left one.wav --right two.wav --state favorite --db ~/.wavwarden/index.db
+uv run sfx similarity feedback list --db ~/.wavwarden/index.db --json
 ```
 
 First useful slice:
@@ -412,7 +419,7 @@ First useful slice:
   implemented for whole-file and segment search
 - report-only whole-file and segment near-duplicate audits with coarse pruning
 - DB-only feedback states such as favorite, hidden, ignored, accepted, or
-  rejected similarity matches
+  rejected similarity matches, implemented with `similarity feedback`
 
 The crawler must never mutate audio or make cleanup decisions. At most, it can
 feed later reviewed reports for near duplicates, audio-listening tag
@@ -531,7 +538,8 @@ updates.
 
 Run report-only commands against a copied or read-only real library before beta.
 Capture scan performance, junk false positives, rename and organization review
-quality, pack-overlap usefulness, metadata coverage, and edge cases from vendor
+quality, pack-overlap usefulness, metadata coverage, similarity crawl runtime,
+cache size, noisy matches, segment-audit thresholds, and edge cases from vendor
 folder conventions. Do not apply changes during the first pass.
 
 ### SQLite Schema Audit
@@ -572,12 +580,15 @@ uv run --extra dev poe check
 uv run --extra dev poe json-smoke
 uv run --extra dev poe bench-scan --files 1000 --no-hash
 uv run --extra dev poe beta-audit PATH --output-dir ~/reports/wavwarden_beta_audit
+uv run --extra dev poe beta-audit PATH --output-dir ~/reports/wavwarden_beta_audit --include-similarity
 ```
 
 The JSON automation surface is documented below. Synthetic scan benchmarking
 lives in `scripts/bench_large_library.py`; real-library sampling lives in
 `scripts/bench_scan.py`. The report-only Internal Studio Beta audit harness
-lives in `scripts/internal_beta_audit.py`.
+lives in `scripts/internal_beta_audit.py`; use `--include-similarity` when
+validating crawler runtime, cache size, segment counts, and audit thresholds on
+a copied or read-only real library.
 
 ## JSON Contracts
 
@@ -630,6 +641,8 @@ Command contracts:
   candidate count, and ranked whole-file or segment results.
 - `similarity audit PATH --json`: includes scope, threshold, comparison counts,
   and whole-file or segment candidate groups.
+- `similarity feedback set/list/clear --json`: includes DB-only review-state
+  changes or filtered feedback entries.
 - `tag suggest PATH --json`: includes suggestion summary and per-file evidence.
 - `ucs import/info/categories/validate --json`: includes catalog provenance,
   filtered UCS categories, or validation report data.

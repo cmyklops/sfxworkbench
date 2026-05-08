@@ -8,9 +8,12 @@ from wavwarden.db import get_connection
 from wavwarden.scan import scan_library
 from wavwarden.similarity import (
     audit_similarity_descriptors,
+    clear_similarity_feedback,
     crawl_similarity_descriptors,
+    list_similarity_feedback,
     list_similarity_segments,
     search_similarity_descriptors,
+    set_similarity_feedback,
 )
 
 
@@ -213,6 +216,77 @@ def test_similarity_search_can_rank_cached_segments(tmp_path: Path, tmp_db: Path
     assert report.results[0].segment_method == "rms_event_v2"
     assert report.results[0].spectral_centroid is not None
     assert report.results[0].distance < report.results[1].distance
+
+
+def test_similarity_feedback_tracks_file_relationships(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    left = _make_tone(root / "left.wav", frequency=220.0)
+    right = _make_tone(root / "right.wav", frequency=221.0)
+    scan_library(root, tmp_db, skip_hash=False, quiet=True)
+
+    created = set_similarity_feedback(
+        left_path=right,
+        right_path=left,
+        state="favorite",
+        db_path=tmp_db,
+        note="worth checking",
+        quiet=True,
+    )
+
+    assert created.action == "set"
+    assert created.entry is not None
+    assert created.entry.state == "favorite"
+    assert {created.entry.left_path, created.entry.right_path} == {str(left), str(right)}
+    assert created.entry.note == "worth checking"
+
+    updated = set_similarity_feedback(
+        left_path=left,
+        right_path=right,
+        state="rejected",
+        db_path=tmp_db,
+        quiet=True,
+    )
+    assert updated.entry is not None
+    assert updated.entry.id == created.entry.id
+    assert updated.entry.state == "rejected"
+
+    report = list_similarity_feedback(db_path=tmp_db, state="rejected", quiet=True)
+    assert report.summary.total == 1
+    assert report.summary.by_state == {"rejected": 1}
+    assert report.entries[0].left_segment_index is None
+
+    cleared = clear_similarity_feedback(left_path=left, right_path=right, db_path=tmp_db, quiet=True)
+    assert cleared.action == "clear"
+    assert cleared.removed == 1
+    assert list_similarity_feedback(db_path=tmp_db, quiet=True).summary.total == 0
+
+
+def test_similarity_feedback_tracks_segment_relationships(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    first = _make_pulses(root / "first.wav")
+    second = _make_pulses(root / "second.wav")
+    scan_library(root, tmp_db, skip_hash=False, quiet=True)
+    crawl_similarity_descriptors(root, db_path=tmp_db, cache_path=None, quiet=True)
+
+    result = set_similarity_feedback(
+        left_path=first,
+        right_path=second,
+        state="accepted",
+        db_path=tmp_db,
+        scope="segment",
+        left_segment_index=0,
+        right_segment_index=1,
+        quiet=True,
+    )
+
+    assert result.entry is not None
+    assert result.entry.scope == "segment"
+    assert result.entry.state == "accepted"
+    assert result.entry.left_segment_index == 0
+    assert result.entry.right_segment_index == 1
+    report = list_similarity_feedback(db_path=tmp_db, scope="segment", quiet=True)
+    assert report.summary.total == 1
+    assert report.entries[0].scope == "segment"
 
 
 def test_similarity_search_returns_nearest_cached_descriptors(tmp_path: Path, tmp_db: Path) -> None:

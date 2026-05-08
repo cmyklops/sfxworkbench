@@ -45,9 +45,10 @@ Implemented first slice:
 - `sfx similarity segments PATH`
 - `sfx similarity audit PATH`
 - `sfx similarity audit PATH --scope segment`
+- `sfx similarity feedback set/list/clear`
 - deterministic backend name: `deterministic_v1`
-- SQLite-backed `analysis_runs`, `audio_descriptors`, and `audio_segments`
-  tables
+- SQLite-backed `analysis_runs`, `audio_descriptors`, `audio_segments`, and
+  `similarity_feedback` tables
 - optional cache directory for run report JSON
 - incremental skips when path anchors still match size, mtime, and MD5
 - descriptor fields for peak, RMS, crest factor, silence ratio, clipping count,
@@ -61,6 +62,8 @@ Implemented first slice:
   segment descriptors, with exact MD5 duplicate pairs excluded by default
 - segment audit candidate pruning via coarse descriptor buckets, with
   `candidate_comparisons` in the report summary
+- DB-only feedback states for favorite, hidden, ignored, accepted, and rejected
+  similarity relationships
 
 ## Product Lessons
 
@@ -111,13 +114,13 @@ Similarity data lives outside the existing `files` row shape. Current tables:
   status, failure counts
 - `audio_descriptors`: cheap computed descriptors keyed to indexed file anchors
 - `audio_segments`: file id, start time, end time, method, confidence
+- `similarity_feedback`: DB-only accepted, ignored, hidden, favorite, or
+  rejected neighbor relationships
 
 Future tables:
 
 - `audio_embeddings`: file id, optional segment id, backend, dimensions, vector
   storage reference or packed blob
-- `similarity_feedback`: DB-only accepted, ignored, hidden, favorite, or
-  rejected neighbor relationships
 
 Every analysis record should include enough anchors to detect staleness:
 

@@ -133,6 +133,26 @@ CREATE TABLE IF NOT EXISTS audio_segments (
     generated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS similarity_feedback (
+    id INTEGER PRIMARY KEY,
+    backend TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    left_file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    right_file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    left_segment_index INTEGER NOT NULL DEFAULT -1,
+    right_segment_index INTEGER NOT NULL DEFAULT -1,
+    state TEXT NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(scope IN ('file', 'segment')),
+    CHECK(state IN ('favorite', 'hidden', 'ignored', 'accepted', 'rejected')),
+    UNIQUE (
+        backend, scope, left_file_id, right_file_id,
+        left_segment_index, right_segment_index
+    )
+);
+
 CREATE INDEX IF NOT EXISTS idx_files_ext ON files(extension);
 CREATE INDEX IF NOT EXISTS idx_files_md5 ON files(md5);
 CREATE INDEX IF NOT EXISTS idx_files_size ON files(size_bytes);
@@ -142,6 +162,9 @@ CREATE INDEX IF NOT EXISTS idx_audio_descriptors_backend ON audio_descriptors(ba
 CREATE INDEX IF NOT EXISTS idx_audio_descriptors_path ON audio_descriptors(path);
 CREATE INDEX IF NOT EXISTS idx_audio_segments_backend ON audio_segments(backend);
 CREATE INDEX IF NOT EXISTS idx_audio_segments_file ON audio_segments(file_id);
+CREATE INDEX IF NOT EXISTS idx_similarity_feedback_state ON similarity_feedback(state);
+CREATE INDEX IF NOT EXISTS idx_similarity_feedback_left ON similarity_feedback(left_file_id);
+CREATE INDEX IF NOT EXISTS idx_similarity_feedback_right ON similarity_feedback(right_file_id);
 """
 
 _FILES_COLUMN_MIGRATIONS = {
