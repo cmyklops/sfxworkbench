@@ -10,6 +10,9 @@ target is an **Internal Studio Beta** before public v1.0.
 - CLI behavior is the source of truth; future TUI/GUI layers consume CLI JSON.
 - Reports, plans, and logs are plain JSON/Markdown.
 - Audio-content mutation is high risk and stays experimental until proven.
+- `sfx` stays the user-facing command for the Internal Studio Beta. `wavwarden`
+  remains the project/package name; no `wavwarden` CLI alias is planned before
+  beta unless user testing shows confusion.
 
 ## Current Phase — Hardened CLI Core
 
@@ -99,6 +102,18 @@ Next organization audits should stay report-first:
 Physical folder cleanup is useful for browsing and bulk edits, but future
 integrations should primarily consume indexed metadata and inferred group
 relationships instead of depending on folder layout.
+
+Workflow orchestration should be a later wrapper over existing commands, not a
+hidden one-shot cleanup. Planned shape:
+
+```bash
+uv run sfx workflow audit PATH --preset internal-beta
+uv run sfx workflow plan PATH --preset library-cleanup --output workflow_plan.json
+uv run sfx workflow apply workflow_plan.json --require-reviewed
+```
+
+Each workflow step must preserve its own report, plan, quarantine, or undo log
+so large batch runs remain explainable and recoverable.
 
 Metadata writing follows after rename and pack review workflows stabilize:
 

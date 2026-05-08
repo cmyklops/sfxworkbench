@@ -7,6 +7,7 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
 
 - Work from real library findings into reusable, tested CLI workflows.
 - Keep filesystem-changing commands plan-first, quarantine-first, or undoable.
+- Keep `sfx` as the user-facing command for now; `wavwarden` is the project/package name.
 - Use `uv run --extra dev poe check` before every commit.
 
 ## Current Library State
