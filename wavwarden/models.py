@@ -212,6 +212,14 @@ class OrganizeAuditReport(BaseModel):
     errors: list[dict] = []
 
 
+class OrganizeReviewResult(BaseModel):
+    report_path: str
+    output_path: str
+    total_entries: int = 0
+    approved_entries: int = 0
+    invalid_entries: list[int] = []
+
+
 class DedupeReviewResult(BaseModel):
     plan_path: str
     output_path: str

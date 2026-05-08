@@ -2,7 +2,14 @@
 
 from pathlib import Path
 
-from wavwarden.organize import audit_organization, write_organize_audit_report
+from wavwarden.db import get_connection
+from wavwarden.organize import (
+    apply_organize_report,
+    audit_organization,
+    review_organize_report,
+    undo_organize_log,
+    write_organize_audit_report,
+)
 
 
 def test_organize_audit_strips_obvious_top_level_sort_prefixes(tmp_path: Path) -> None:
@@ -82,3 +89,72 @@ def test_write_organize_audit_report(tmp_path: Path) -> None:
 
     assert out.exists()
     assert '"new_name": "Pack"' in out.read_text()
+
+
+def test_review_organize_report_approves_entries(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    (root / "01 Pack").mkdir()
+    report = audit_organization(root)
+    report_path = tmp_path / "organize.json"
+    write_organize_audit_report(report, report_path, quiet=True)
+
+    result = review_organize_report(report_path, approve_all=True, quiet=True)
+
+    assert result.total_entries == 1
+    assert result.approved_entries == 1
+    assert '"approved_entries": [\n      0\n    ]' in report_path.read_text()
+
+
+def test_apply_organize_report_requires_review(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    source = root / "01 Pack"
+    source.mkdir()
+    report = audit_organization(root)
+    report_path = tmp_path / "organize.json"
+    write_organize_audit_report(report, report_path, quiet=True)
+
+    result = apply_organize_report(report_path, require_reviewed=True, quiet=True)
+
+    assert result.renamed == 0
+    assert result.errors
+    assert source.exists()
+
+
+def test_apply_and_undo_organize_report_updates_filesystem_and_db(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    source = root / "01 Pack"
+    source.mkdir(parents=True)
+    audio = source / "sound.wav"
+    audio.write_bytes(b"audio")
+    conn = get_connection(tmp_db)
+    conn.execute(
+        """INSERT INTO files (path, filename, stem, extension, size_bytes, mtime, md5, scanned_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (str(audio), audio.name, audio.stem, audio.suffix, audio.stat().st_size, 0.0, "abc", "2026"),
+    )
+    conn.commit()
+    conn.close()
+
+    report = audit_organization(root)
+    report_path = tmp_path / "organize.json"
+    log_path = tmp_path / "organize_log.json"
+    write_organize_audit_report(report, report_path, quiet=True)
+    review_organize_report(report_path, approve_all=True, quiet=True)
+
+    result = apply_organize_report(report_path, db_path=tmp_db, log_path=log_path, require_reviewed=True, quiet=True)
+
+    target_audio = root / "Pack" / "sound.wav"
+    assert result.renamed == 1
+    assert target_audio.exists()
+    assert not audio.exists()
+    conn = get_connection(tmp_db)
+    rows = conn.execute("SELECT path FROM files").fetchall()
+    conn.close()
+    assert [row["path"] for row in rows] == [str(target_audio)]
+
+    undo = undo_organize_log(log_path, db_path=tmp_db, dry_run=False, quiet=True)
+
+    assert undo.undone == 1
+    assert audio.exists()

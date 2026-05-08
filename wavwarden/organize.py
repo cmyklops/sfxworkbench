@@ -11,7 +11,16 @@ from rich.console import Console
 from rich.table import Table
 
 from wavwarden import __version__
-from wavwarden.models import OrganizeAuditReport, OrganizeAuditSummary, OrganizeEntry
+from wavwarden.models import (
+    OrganizeAuditReport,
+    OrganizeAuditSummary,
+    OrganizeEntry,
+    OrganizeReviewResult,
+    RenameEntry,
+    RenamePlan,
+    RenameResult,
+)
+from wavwarden.rename import apply_rename_plan, undo_rename_log
 
 console = Console()
 
@@ -114,6 +123,106 @@ def write_organize_audit_report(report: OrganizeAuditReport, output_path: Path, 
     output_path.write_text(json.dumps(report.model_dump(), indent=2))
     if not quiet:
         console.print(f"Organization preview written to [cyan]{output_path}[/cyan]")
+
+
+def review_organize_report(
+    report_path: Path,
+    output_path: Path | None = None,
+    approve_all: bool = False,
+    entries: list[int] | None = None,
+    quiet: bool = False,
+) -> OrganizeReviewResult:
+    """Stamp an organization report with approved entry indexes."""
+    report = json.loads(report_path.read_text())
+    total = len(report.get("entries", []))
+    requested = set(entries or [])
+    invalid = sorted(entry for entry in requested if entry < 1 or entry > total)
+    if approve_all:
+        approved = set(range(total))
+    else:
+        approved = {entry - 1 for entry in requested if 1 <= entry <= total}
+
+    existing_review = report.get("review", {})
+    approved.update(existing_review.get("approved_entries", []))
+    approved_entries = sorted(approved)
+    report["review"] = {
+        "status": "approved" if len(approved_entries) == total and total else "partially_approved",
+        "approved_at": _now_iso(),
+        "approved_entries": approved_entries,
+    }
+
+    output = output_path or report_path
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, indent=2))
+    result = OrganizeReviewResult(
+        report_path=str(report_path),
+        output_path=str(output),
+        total_entries=total,
+        approved_entries=len(approved_entries),
+        invalid_entries=invalid,
+    )
+    if not quiet:
+        console.print(
+            f"Approved [yellow]{result.approved_entries:,}[/yellow] of "
+            f"[yellow]{result.total_entries:,}[/yellow] organization entry/entries in [cyan]{output}[/cyan]"
+        )
+        if invalid:
+            console.print(f"[red]Ignored invalid entry number(s): {', '.join(str(i) for i in invalid)}[/red]")
+    return result
+
+
+def _rename_plan_from_report(report: OrganizeAuditReport, raw_report: dict, require_reviewed: bool) -> RenamePlan:
+    approved = set(raw_report.get("review", {}).get("approved_entries", []))
+    entries: list[RenameEntry] = []
+    errors = list(report.errors)
+    if require_reviewed and not approved:
+        errors.append({"path": raw_report.get("root"), "error": "report has no approved entries"})
+
+    for index, entry in enumerate(report.entries):
+        if require_reviewed and index not in approved:
+            errors.append({"path": entry.old_path, "error": f"entry {index + 1} is not approved"})
+            continue
+        entries.append(
+            RenameEntry(
+                old_path=entry.old_path,
+                new_path=entry.new_path,
+                old_filename=entry.old_name,
+                new_filename=entry.new_name,
+                issue_fixes=[entry.reason],
+            )
+        )
+
+    return RenamePlan(
+        generated_at=_now_iso(),
+        root=report.root,
+        pattern=f"organize:{report.pattern}",
+        entries=sorted(entries, key=lambda entry: (len(Path(entry.old_path).parts), entry.old_path), reverse=True),
+        errors=errors,
+    )
+
+
+def apply_organize_report(
+    report_path: Path,
+    db_path: Path | None = None,
+    log_path: Path | None = None,
+    require_reviewed: bool = False,
+    quiet: bool = False,
+) -> RenameResult:
+    """Apply a reviewed organization report using the rename engine."""
+    raw_report = json.loads(report_path.read_text())
+    report = OrganizeAuditReport.model_validate(raw_report)
+    plan = _rename_plan_from_report(report, raw_report, require_reviewed=require_reviewed)
+    return apply_rename_plan(plan, db_path=db_path, log_path=log_path, dry_run=False, quiet=quiet)
+
+
+def undo_organize_log(
+    log_path: Path,
+    db_path: Path | None = None,
+    dry_run: bool = True,
+    quiet: bool = False,
+) -> RenameResult:
+    """Undo a previously applied organization log."""
+    return undo_rename_log(log_path, db_path=db_path, dry_run=dry_run, quiet=quiet)
 
 
 def show_organize_audit_report(report: OrganizeAuditReport) -> None:

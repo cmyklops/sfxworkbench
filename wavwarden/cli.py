@@ -107,6 +107,74 @@ def cmd_organize_audit(
         )
 
 
+@organize_app.command("review")
+def cmd_organize_review(
+    report: Annotated[Path, typer.Argument(help="Organization report JSON to review.")],
+    output: Annotated[Path | None, typer.Option("--output", help="Write reviewed report to this path.")] = None,
+    approve_all: Annotated[bool, typer.Option("--approve-all", help="Approve every organization entry.")] = False,
+    entry: Annotated[list[int] | None, typer.Option("--entry", help="Approve a 1-based entry number.")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Mark organization preview entries as reviewed/approved."""
+    from wavwarden.organize import review_organize_report
+
+    if not report.exists():
+        console.print(f"[red]Error: report file not found: {report}[/red]")
+        raise typer.Exit(1)
+    if not approve_all and not entry:
+        console.print("[red]Error: pass --approve-all or at least one --entry.[/red]")
+        raise typer.Exit(1)
+
+    result = review_organize_report(
+        report, output_path=output, approve_all=approve_all, entries=entry, quiet=json_output
+    )
+    if json_output:
+        print(json_dumps({"schema_version": 1, "command": "organize_review", "result": result}))
+
+
+@organize_app.command("apply")
+def cmd_organize_apply(
+    report: Annotated[Path, typer.Argument(help="Reviewed organization report JSON to apply.")],
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    log: Annotated[Path | None, typer.Option("--log", help="Write organization undo log to this path.")] = None,
+    require_reviewed: Annotated[
+        bool, typer.Option("--require-reviewed", help="Apply only approved organization entries.")
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Apply approved folder organization entries and write an undo log."""
+    from wavwarden.organize import apply_organize_report
+
+    if not report.exists():
+        console.print(f"[red]Error: report file not found: {report}[/red]")
+        raise typer.Exit(1)
+
+    result = apply_organize_report(
+        report, db_path=db, log_path=log, require_reviewed=require_reviewed, quiet=json_output
+    )
+    if json_output:
+        print(json_dumps({"schema_version": 1, "command": "organize_apply", "result": result}))
+
+
+@organize_app.command("undo")
+def cmd_organize_undo(
+    log: Annotated[Path, typer.Argument(help="Organization undo log to restore.")],
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    apply: Annotated[bool, typer.Option("--apply", help="Actually undo renames (default is dry-run).")] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Undo a previously applied folder organization log."""
+    from wavwarden.organize import undo_organize_log
+
+    if not log.exists():
+        console.print(f"[red]Error: log file not found: {log}[/red]")
+        raise typer.Exit(1)
+
+    result = undo_organize_log(log, db_path=db, dry_run=not apply, quiet=json_output)
+    if json_output:
+        print(json_dumps({"schema_version": 1, "command": "organize_undo", "result": result}))
+
+
 # ---------------------------------------------------------------------------
 # sfx packs
 # ---------------------------------------------------------------------------

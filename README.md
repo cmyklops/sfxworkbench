@@ -44,6 +44,9 @@ uv run sfx dedupe --review PLAN.json --approve-all
 uv run sfx dedupe --apply PLAN.json --require-reviewed
 uv run sfx packs audit PATH --output ~/reports/pack_overlap_report.json
 uv run sfx organize audit PATH --depth 1 --output ~/reports/organize_report.json
+uv run sfx organize review ~/reports/organize_report.json --approve-all
+uv run sfx organize apply ~/reports/organize_report.json --require-reviewed --log organize_log.json
+uv run sfx organize undo organize_log.json --apply
 uv run sfx rename PATH --pattern ucs  # dry-run UCS-oriented rename preview
 uv run sfx rename PATH --pattern safe # dry-run safe filename/path cleanup
 uv run sfx rename PATH --pattern ucs --apply --log rename_log.json
@@ -71,8 +74,8 @@ python3 audit.py ~/CommercialLibraries --json
 - `dedupe --output PLAN.json` writes a plan; `--review` stamps approvals and `--apply` quarantines by default.
 - `packs audit` reports duplicated commercial packs and overlapping bundle folders
   without changing the filesystem or SQLite index.
-- `organize audit` previews safe folder-structure cleanup without changing the
-  filesystem or SQLite index.
+- `organize audit/review/apply/undo` previews and applies safe folder-structure
+  cleanup with review and undo.
 - Pack/folder consolidation is planned as a separate reviewed workflow
   for duplicated commercial packs and overlapping bundle folders.
 - `scan-errors` writes a plan for unreadable indexed files; only obvious

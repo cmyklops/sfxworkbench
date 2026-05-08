@@ -76,3 +76,17 @@ def test_organize_audit_json(tmp_library, tmp_path) -> None:
     assert payload["report_path"] == str(out)
     assert payload["report"]["summary"]["planned"] == 1
     assert out.exists()
+
+    review = runner.invoke(app, ["organize", "review", str(out), "--approve-all", "--json"])
+    assert review.exit_code == 0
+    assert json.loads(review.stdout)["command"] == "organize_review"
+
+    log = tmp_path / "organize_log.json"
+    apply = runner.invoke(app, ["organize", "apply", str(out), "--log", str(log), "--require-reviewed", "--json"])
+    assert apply.exit_code == 0
+    assert json.loads(apply.stdout)["command"] == "organize_apply"
+    assert log.exists()
+
+    undo = runner.invoke(app, ["organize", "undo", str(log), "--apply", "--json"])
+    assert undo.exit_code == 0
+    assert json.loads(undo.stdout)["command"] == "organize_undo"

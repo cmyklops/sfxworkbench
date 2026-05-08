@@ -18,6 +18,7 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
 - Long paths: fixed.
 - Unicode normalization duplicates: quarantined.
 - Pack overlap report: zero exact-hash pack candidates after dedupe.
+- Top-level numeric sort-prefix folder organization: applied.
 
 Current audit focus:
 
@@ -27,8 +28,8 @@ Current audit focus:
 
 ## Next
 
-1. Inspect top-level numbered folders before any organization apply.
-2. Build reviewed `sfx organize plan/apply` only after the preview looks right.
+1. Add report-only redundant nesting audit.
+2. Add report-only related sound groups/collections audit.
 3. Review risky-character filename issues.
 
 ## Later
