@@ -136,6 +136,89 @@ def cmd_organize_review(
         print(json_dumps({"schema_version": 1, "command": "organize_review", "result": result}))
 
 
+@organize_app.command("nesting-plan")
+def cmd_organize_nesting_plan(
+    report: Annotated[Path, typer.Argument(help="Redundant nesting audit report JSON.")],
+    output: Annotated[Path, typer.Option("--output", help="Write reviewed nesting plan JSON to this path.")],
+    kind: Annotated[
+        str,
+        typer.Option("--kind", help="Candidate kind to plan. Currently supported: 'repeated_folder_name'."),
+    ] = "repeated_folder_name",
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Create a safe flatten plan from repeated-folder-name candidates."""
+    from wavwarden.organize import build_nesting_plan_from_report, show_nesting_plan
+
+    if not report.exists():
+        console.print(f"[red]Error: report file not found: {report}[/red]")
+        raise typer.Exit(1)
+
+    plan = build_nesting_plan_from_report(report, kind=kind, output_path=output, quiet=json_output)
+    if not json_output:
+        show_nesting_plan(plan)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "organize_nesting_plan",
+                    "report_path": report,
+                    "plan_path": output,
+                    "plan": plan,
+                }
+            )
+        )
+
+
+@organize_app.command("nesting-apply")
+def cmd_organize_nesting_apply(
+    plan: Annotated[Path, typer.Argument(help="Reviewed nesting flatten plan JSON.")],
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    log: Annotated[Path | None, typer.Option("--log", help="Write nesting undo log to this path.")] = None,
+    apply: Annotated[bool, typer.Option("--apply", help="Actually flatten folders (default is dry-run).")] = False,
+    require_reviewed: Annotated[
+        bool, typer.Option("--require-reviewed", help="Apply only approved nesting plan entries.")
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Apply a reviewed repeated-folder flatten plan."""
+    from wavwarden.organize import apply_nesting_plan
+
+    if not plan.exists():
+        console.print(f"[red]Error: plan file not found: {plan}[/red]")
+        raise typer.Exit(1)
+
+    result = apply_nesting_plan(
+        plan,
+        db_path=db,
+        log_path=log,
+        require_reviewed=require_reviewed,
+        dry_run=not apply,
+        quiet=json_output,
+    )
+    if json_output:
+        print(json_dumps({"schema_version": 1, "command": "organize_nesting_apply", "result": result}))
+
+
+@organize_app.command("nesting-undo")
+def cmd_organize_nesting_undo(
+    log: Annotated[Path, typer.Argument(help="Nesting undo log to restore.")],
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    apply: Annotated[bool, typer.Option("--apply", help="Actually undo nesting flatten operations.")] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Undo a previously applied nesting flatten log."""
+    from wavwarden.organize import undo_nesting_log
+
+    if not log.exists():
+        console.print(f"[red]Error: log file not found: {log}[/red]")
+        raise typer.Exit(1)
+
+    result = undo_nesting_log(log, db_path=db, dry_run=not apply, quiet=json_output)
+    if json_output:
+        print(json_dumps({"schema_version": 1, "command": "organize_nesting_undo", "result": result}))
+
+
 @organize_app.command("apply")
 def cmd_organize_apply(
     report: Annotated[Path, typer.Argument(help="Reviewed organization report JSON to apply.")],

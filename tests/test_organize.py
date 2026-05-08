@@ -4,9 +4,12 @@ from pathlib import Path
 
 from wavwarden.db import get_connection
 from wavwarden.organize import (
+    apply_nesting_plan,
     apply_organize_report,
     audit_organization,
+    build_nesting_plan_from_report,
     review_organize_report,
+    undo_nesting_log,
     undo_organize_log,
     write_organize_audit_report,
 )
@@ -181,6 +184,107 @@ def test_redundant_nesting_report_is_not_applyable(tmp_path: Path) -> None:
     assert result.errors
     assert "report-only" in result.errors[0]["error"]
     assert wrapper.exists()
+
+
+def test_build_nesting_plan_from_repeated_folder_report(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    repeated = root / "Vendor" / "Pack" / "Pack"
+    repeated.mkdir(parents=True)
+    (repeated / "hit.wav").write_bytes(b"audio")
+    report = audit_organization(root, pattern="redundant-nesting", depth=4)
+    report_path = tmp_path / "nesting_report.json"
+    plan_path = tmp_path / "nesting_plan.json"
+    write_organize_audit_report(report, report_path, quiet=True)
+
+    plan = build_nesting_plan_from_report(report_path, output_path=plan_path, quiet=True)
+
+    assert plan_path.exists()
+    assert len(plan.entries) == 1
+    assert plan.entries[0].source_path == str(repeated)
+    assert plan.entries[0].target_path == str(repeated.parent)
+    assert plan.entries[0].moves[0].new_path == str(repeated.parent / "hit.wav")
+    assert plan.errors == []
+
+
+def test_build_nesting_plan_reports_collisions(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    repeated = root / "Vendor" / "Pack" / "Pack"
+    repeated.mkdir(parents=True)
+    (repeated / "hit.wav").write_bytes(b"audio")
+    (repeated.parent / "hit.wav").write_bytes(b"existing")
+    report = audit_organization(root, pattern="redundant-nesting", depth=4)
+    report_path = tmp_path / "nesting_report.json"
+    write_organize_audit_report(report, report_path, quiet=True)
+
+    plan = build_nesting_plan_from_report(report_path, quiet=True)
+
+    assert plan.entries == []
+    assert plan.errors[0]["error"] == "target exists"
+
+
+def test_apply_nesting_plan_requires_review(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    repeated = root / "Vendor" / "Pack" / "Pack"
+    repeated.mkdir(parents=True)
+    (repeated / "hit.wav").write_bytes(b"audio")
+    report = audit_organization(root, pattern="redundant-nesting", depth=4)
+    report_path = tmp_path / "nesting_report.json"
+    plan_path = tmp_path / "nesting_plan.json"
+    write_organize_audit_report(report, report_path, quiet=True)
+    build_nesting_plan_from_report(report_path, output_path=plan_path, quiet=True)
+
+    result = apply_nesting_plan(plan_path, require_reviewed=True, dry_run=False, quiet=True)
+
+    assert result.flattened == 0
+    assert result.errors
+    assert (repeated / "hit.wav").exists()
+
+
+def test_apply_and_undo_nesting_plan_updates_filesystem_and_db(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    repeated = root / "Vendor" / "Pack" / "Pack"
+    repeated.mkdir(parents=True)
+    audio = repeated / "hit.wav"
+    audio.write_bytes(b"audio")
+    conn = get_connection(tmp_db)
+    conn.execute(
+        """INSERT INTO files (path, filename, stem, extension, size_bytes, mtime, md5, scanned_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (str(audio), audio.name, audio.stem, audio.suffix, audio.stat().st_size, 0.0, "abc", "2026"),
+    )
+    conn.commit()
+    conn.close()
+
+    report = audit_organization(root, pattern="redundant-nesting", depth=4)
+    report_path = tmp_path / "nesting_report.json"
+    plan_path = tmp_path / "nesting_plan.json"
+    log_path = tmp_path / "nesting_log.json"
+    write_organize_audit_report(report, report_path, quiet=True)
+    build_nesting_plan_from_report(report_path, output_path=plan_path, quiet=True)
+    review_organize_report(plan_path, approve_all=True, quiet=True)
+
+    result = apply_nesting_plan(
+        plan_path, db_path=tmp_db, log_path=log_path, require_reviewed=True, dry_run=False, quiet=True
+    )
+
+    flattened_audio = repeated.parent / "hit.wav"
+    assert result.flattened == 1
+    assert result.moved == 1
+    assert flattened_audio.exists()
+    assert not repeated.exists()
+    conn = get_connection(tmp_db)
+    rows = conn.execute("SELECT path FROM files").fetchall()
+    conn.close()
+    assert [row["path"] for row in rows] == [str(flattened_audio)]
+
+    undo = undo_nesting_log(log_path, db_path=tmp_db, dry_run=False, quiet=True)
+
+    assert undo.undone == 1
+    assert audio.exists()
+    conn = get_connection(tmp_db)
+    rows = conn.execute("SELECT path FROM files").fetchall()
+    conn.close()
+    assert [row["path"] for row in rows] == [str(audio)]
 
 
 def test_apply_and_undo_organize_report_updates_filesystem_and_db(tmp_path: Path, tmp_db: Path) -> None:

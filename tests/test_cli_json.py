@@ -121,3 +121,23 @@ def test_organize_redundant_nesting_json(tmp_library, tmp_path) -> None:
     assert payload["report"]["summary"]["candidates"] >= 1
     assert any(candidate["kind"] == "repeated_folder_name" for candidate in payload["report"]["candidates"])
     assert out.exists()
+
+    plan_path = tmp_path / "nesting_plan.json"
+    plan = runner.invoke(
+        app,
+        ["organize", "nesting-plan", str(out), "--output", str(plan_path), "--json"],
+    )
+    assert plan.exit_code == 0
+    plan_payload = json.loads(plan.stdout)
+    assert plan_payload["command"] == "organize_nesting_plan"
+    assert plan_payload["plan"]["entries"]
+    assert plan_path.exists()
+
+    review = runner.invoke(app, ["organize", "review", str(plan_path), "--approve-all", "--json"])
+    assert review.exit_code == 0
+
+    apply = runner.invoke(app, ["organize", "nesting-apply", str(plan_path), "--require-reviewed", "--json"])
+    assert apply.exit_code == 0
+    apply_payload = json.loads(apply.stdout)
+    assert apply_payload["command"] == "organize_nesting_apply"
+    assert apply_payload["result"]["dry_run"] is True

@@ -32,6 +32,11 @@ uv run sfx dedupe --apply ~/reports/dedupe_plan.json --db ~/.wavwarden/index.db 
 uv run sfx packs audit ~/CommercialLibraries --db ~/.wavwarden/index.db --output ~/reports/pack_overlap_report.json
 uv run sfx organize audit ~/CommercialLibraries --depth 1 --output ~/reports/organize_report.json
 uv run sfx organize audit ~/CommercialLibraries --pattern redundant-nesting --depth 8 --output ~/reports/nesting_report.json
+uv run sfx organize nesting-plan ~/reports/nesting_report.json --output ~/reports/nesting_plan.json
+uv run sfx organize review ~/reports/nesting_plan.json --approve-all
+uv run sfx organize nesting-apply ~/reports/nesting_plan.json --db ~/.wavwarden/index.db --require-reviewed
+uv run sfx organize nesting-apply ~/reports/nesting_plan.json --db ~/.wavwarden/index.db --apply --require-reviewed --log nesting_log.json
+uv run sfx organize nesting-undo nesting_log.json --db ~/.wavwarden/index.db --apply
 uv run sfx organize review ~/reports/organize_report.json --approve-all
 uv run sfx organize apply ~/reports/organize_report.json --db ~/.wavwarden/index.db --require-reviewed --log organize_log.json
 uv run sfx organize undo organize_log.json --db ~/.wavwarden/index.db --apply
@@ -71,6 +76,7 @@ sfx dedupe --apply PLAN → validate size/hash → quarantine duplicates + updat
 sfx packs audit PATH → folder hash signatures + overlap candidates → report JSON
 sfx organize audit/review/apply/undo PATH → folder-structure cleanup with undo log
 sfx organize audit --pattern redundant-nesting PATH → report-only nested-folder review
+sfx organize nesting-plan/apply/undo → reviewed repeated-folder flatten workflow
 sfx rename PATH → preview/apply UCS-oriented or safe names → rename_log_TIMESTAMP.json
 sfx audit      →  SELECT queries against index
 sfx search Q   →  FTS5 MATCH query on files_fts
@@ -86,7 +92,7 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 - **`scan_errors.py`** — plans quarantine for unreadable indexed files. Only all-zero blobs and AppleDouble artifacts are auto-marked `quarantine`; broken RIFF files stay `review`.
 - **`dedupe.py`** — exact MD5 duplicate grouping. Writes versioned JSON plans and quarantines by default on apply.
 - **`packs.py`** — report-only pack/folder duplicate detection. Computes recursive folder signatures from indexed MD5 hashes and reports exact duplicate folders plus high-overlap pack candidates.
-- **`organize.py`** — folder organization preview/review/apply/undo. Conservative numeric sort-prefix removal reuses the rename engine for apply; redundant nesting is report-only until merge/flatten rules are explicit.
+- **`organize.py`** — folder organization preview/review/apply/undo. Conservative numeric sort-prefix removal reuses the rename engine for apply; repeated-folder nesting has reviewed plan/apply/undo; one-child chains and generic wrappers remain report-only.
 - **`rename.py`** — UCS-oriented and safe filename/path rename preview/apply/undo. Refuses collisions and updates SQLite paths after apply.
 - **`ucs.py`** — shared UCS-looking filename heuristic/parser. This is not a full official UCS catalog validator yet.
 

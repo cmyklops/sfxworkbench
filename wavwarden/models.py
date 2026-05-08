@@ -237,6 +237,43 @@ class OrganizeReviewResult(BaseModel):
     invalid_entries: list[int] = []
 
 
+class NestingMove(BaseModel):
+    old_path: str
+    new_path: str
+    path_type: str
+
+
+class NestingPlanEntry(BaseModel):
+    source_path: str
+    target_path: str
+    kind: str = "repeated_folder_name"
+    action: str = "flatten_child_into_parent"
+    reason: str = "folder name repeats its parent"
+    audio_files: int = 0
+    moves: list[NestingMove] = []
+
+
+class NestingPlan(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    root: str
+    source_report: str | None = None
+    entries: list[NestingPlanEntry] = []
+    errors: list[dict] = []
+
+
+class NestingApplyResult(BaseModel):
+    planned: int = 0
+    flattened: int = 0
+    moved: int = 0
+    undone: int = 0
+    errors: list[dict] = []
+    log_path: str | None = None
+    dry_run: bool = True
+
+
 class DedupeReviewResult(BaseModel):
     plan_path: str
     output_path: str

@@ -33,6 +33,11 @@ uv run sfx dedupe --apply dedupe_plan.json --require-reviewed
 uv run sfx packs audit PATH --output ~/reports/pack_overlap_report.json
 uv run sfx organize audit PATH --depth 1 --output ~/reports/organize_report.json
 uv run sfx organize audit PATH --pattern redundant-nesting --depth 8 --output ~/reports/nesting_report.json
+uv run sfx organize nesting-plan ~/reports/nesting_report.json --output ~/reports/nesting_plan.json
+uv run sfx organize review ~/reports/nesting_plan.json --approve-all
+uv run sfx organize nesting-apply ~/reports/nesting_plan.json --require-reviewed
+uv run sfx organize nesting-apply ~/reports/nesting_plan.json --apply --require-reviewed --log nesting_log.json
+uv run sfx organize nesting-undo nesting_log.json --apply
 uv run sfx organize review organize_report.json --approve-all
 uv run sfx organize apply organize_report.json --require-reviewed --log organize_log.json
 uv run sfx organize undo organize_log.json --apply
@@ -68,6 +73,7 @@ python3 audit.py ~/CommercialLibraries --json
 - `packs audit`: report-only exact duplicate folder and pack-overlap detection; no filesystem or SQLite mutation.
 - `organize audit/review/apply/undo`: safe folder-structure cleanup with review gate, SQLite path updates, and undo log.
 - `organize audit --pattern redundant-nesting`: report-only folder-structure review for repeated names, one-child chains, and low-value wrappers.
+- `organize nesting-plan/apply/undo`: reviewed flatten workflow for repeated folder names only; dry-run by default and never overwrites.
 - `rename`: previews UCS-oriented or safe filename/path changes, refuses collisions, applies with undo log. `--allow-partial` can apply valid entries while keeping unresolved collisions visible in the result.
 
 ## Phase 2 — Cleanup Tooling
@@ -99,9 +105,14 @@ The next organization audit is implemented as report-only:
 - low-value wrapper folders such as `WAV`, `Audio`, or `Files` when they add no
   meaningful category
 
-It intentionally does not feed `sfx organize apply` yet because flattening may
-require merge choices. A future reviewed plan/apply step can promote selected
-candidates once those merge rules are explicit.
+Repeated folder names are promoted into the first reviewed flatten workflow:
+`sfx organize nesting-plan REPORT --output PLAN`, then `sfx organize review PLAN`,
+then `sfx organize nesting-apply PLAN --require-reviewed`. The apply command is
+dry-run by default; `--apply` is required to move anything. It refuses collisions,
+updates SQLite paths, removes the emptied repeated folder, and writes an undo log.
+
+One-child chains and low-value wrappers intentionally remain report-only because
+they can require subjective merge choices.
 
 Future organization audits should stay report-first:
 
@@ -228,6 +239,9 @@ Command contracts:
 - `organize review REPORT --json`: includes review counts and output path.
 - `organize apply REPORT --json`: includes apply result and undo log path.
 - `organize undo LOG --apply --json`: includes undo result.
+- `organize nesting-plan REPORT --json`: includes `report_path`, `plan_path`, and a versioned repeated-folder flatten plan.
+- `organize nesting-apply PLAN --json`: includes dry-run/apply counts, moved child count, errors, and optional undo log path.
+- `organize nesting-undo LOG --apply --json`: includes restored entry and move counts.
 - `rename PATH --json`: includes a dry-run `plan`.
 - `rename PATH --apply --json`: includes `plan` and `result`.
 - `rename --undo LOG --apply --json`: includes undo `result`.

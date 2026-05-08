@@ -12,9 +12,14 @@ from rich.console import Console
 from rich.table import Table
 
 from wavwarden import __version__
+from wavwarden.db import get_connection
 from wavwarden.junk import AUDIO_EXTENSIONS, is_junk_dir
 from wavwarden.models import (
+    NestingApplyResult,
     NestingCandidate,
+    NestingMove,
+    NestingPlan,
+    NestingPlanEntry,
     OrganizeAuditReport,
     OrganizeAuditSummary,
     OrganizeEntry,
@@ -23,7 +28,7 @@ from wavwarden.models import (
     RenamePlan,
     RenameResult,
 )
-from wavwarden.rename import apply_rename_plan, undo_rename_log
+from wavwarden.rename import _update_directory_rows, _update_file_row, apply_rename_plan, undo_rename_log
 
 console = Console()
 
@@ -266,6 +271,98 @@ def write_organize_audit_report(report: OrganizeAuditReport, output_path: Path, 
         console.print(f"Organization preview written to [cyan]{output_path}[/cyan]")
 
 
+def _default_nesting_log_path() -> Path:
+    return Path(f"nesting_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+
+
+def _write_nesting_plan(plan: NestingPlan, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(plan.model_dump(), indent=2))
+
+
+def build_nesting_plan_from_report(
+    report_path: Path,
+    kind: str = "repeated_folder_name",
+    output_path: Path | None = None,
+    quiet: bool = False,
+) -> NestingPlan:
+    """Build a reviewed-plan candidate from a redundant nesting audit."""
+    raw_report = json.loads(report_path.read_text())
+    report = OrganizeAuditReport.model_validate(raw_report)
+    errors: list[dict] = list(report.errors)
+    entries: list[NestingPlanEntry] = []
+
+    if report.pattern != "redundant-nesting":
+        errors.append({"path": report.root, "error": "source report must use pattern='redundant-nesting'"})
+
+    for candidate in report.candidates:
+        if candidate.kind != kind:
+            continue
+        if candidate.kind != "repeated_folder_name":
+            errors.append({"path": candidate.path, "error": f"candidate kind '{candidate.kind}' is report-only"})
+            continue
+        source = Path(candidate.path)
+        target = Path(candidate.target_path) if candidate.target_path is not None else source.parent
+        if source.parent != target:
+            errors.append({"path": str(source), "target": str(target), "error": "target must be source parent"})
+            continue
+        if not source.exists() or not source.is_dir():
+            errors.append({"path": str(source), "error": "source directory missing"})
+            continue
+        if not target.exists() or not target.is_dir():
+            errors.append({"path": str(source), "target": str(target), "error": "target directory missing"})
+            continue
+
+        moves: list[NestingMove] = []
+        planned_targets: set[Path] = set()
+        for child in sorted(source.iterdir(), key=lambda path: path.name.casefold()):
+            destination = target / child.name
+            if destination.exists():
+                errors.append({"path": str(child), "target": str(destination), "error": "target exists"})
+                continue
+            if destination in planned_targets:
+                errors.append(
+                    {"path": str(child), "target": str(destination), "error": "target planned more than once"}
+                )
+                continue
+            planned_targets.add(destination)
+            moves.append(
+                NestingMove(
+                    old_path=str(child),
+                    new_path=str(destination),
+                    path_type="dir" if child.is_dir() else "file",
+                )
+            )
+        if not moves:
+            errors.append({"path": str(source), "error": "no children to flatten"})
+            continue
+        entries.append(
+            NestingPlanEntry(
+                source_path=str(source),
+                target_path=str(target),
+                kind=candidate.kind,
+                action="flatten_child_into_parent",
+                reason=candidate.reason,
+                audio_files=candidate.audio_files,
+                moves=moves,
+            )
+        )
+
+    plan = NestingPlan(
+        generated_at=_now_iso(),
+        tool_version=__version__,
+        root=report.root,
+        source_report=str(report_path),
+        entries=entries,
+        errors=errors,
+    )
+    if output_path is not None:
+        _write_nesting_plan(plan, output_path)
+        if not quiet:
+            console.print(f"Nesting plan written to [cyan]{output_path}[/cyan]")
+    return plan
+
+
 def review_organize_report(
     report_path: Path,
     output_path: Path | None = None,
@@ -373,6 +470,170 @@ def apply_organize_report(
     return apply_rename_plan(plan, db_path=db_path, log_path=log_path, dry_run=False, quiet=quiet)
 
 
+def _approved_entry_indexes(raw_plan: dict) -> set[int]:
+    return set(raw_plan.get("review", {}).get("approved_entries", []))
+
+
+def _update_moved_path_rows(conn, old: Path, new: Path, root: Path) -> None:
+    if new.is_dir():
+        _update_directory_rows(conn, old, new, root)
+    else:
+        _update_file_row(conn, old, new, root)
+
+
+def apply_nesting_plan(
+    plan_path: Path,
+    db_path: Path | None = None,
+    log_path: Path | None = None,
+    require_reviewed: bool = False,
+    dry_run: bool = True,
+    quiet: bool = False,
+) -> NestingApplyResult:
+    """Flatten repeated-folder-name entries from a reviewed nesting plan."""
+    raw_plan = json.loads(plan_path.read_text())
+    plan = NestingPlan.model_validate(raw_plan)
+    approved = _approved_entry_indexes(raw_plan)
+    result = NestingApplyResult(planned=len(plan.entries), dry_run=dry_run)
+    errors = list(plan.errors)
+
+    if errors:
+        result.errors.extend(errors)
+        if not quiet:
+            console.print("[red]Refusing to apply nesting plan with unresolved errors.[/red]")
+        return result
+    if require_reviewed and not approved:
+        result.errors.append({"path": plan.root, "error": "plan has no approved entries"})
+        return result
+
+    selected_entries: list[tuple[int, NestingPlanEntry]] = []
+    for index, entry in enumerate(plan.entries):
+        if require_reviewed and index not in approved:
+            result.errors.append({"path": entry.source_path, "error": f"entry {index + 1} is not approved"})
+            continue
+        selected_entries.append((index, entry))
+
+    if result.errors:
+        return result
+    if dry_run:
+        result.flattened = len(selected_entries)
+        result.moved = sum(len(entry.moves) for _, entry in selected_entries)
+        if not quiet:
+            show_nesting_plan(plan)
+        return result
+
+    if log_path is None:
+        log_path = _default_nesting_log_path()
+    conn = get_connection(db_path) if db_path is not None else None
+    root = Path(plan.root)
+    applied: list[NestingPlanEntry] = []
+
+    for _, entry in selected_entries:
+        source = Path(entry.source_path)
+        target = Path(entry.target_path)
+        if not source.exists() or not source.is_dir():
+            result.errors.append({"path": str(source), "error": "source directory missing"})
+            continue
+        if not target.exists() or not target.is_dir():
+            result.errors.append({"path": str(source), "target": str(target), "error": "target directory missing"})
+            continue
+
+        entry_errors: list[dict] = []
+        for move in entry.moves:
+            old = Path(move.old_path)
+            new = Path(move.new_path)
+            if not old.exists():
+                entry_errors.append({"path": str(old), "error": "source missing"})
+            if new.exists():
+                entry_errors.append({"path": str(old), "target": str(new), "error": "target exists"})
+        if entry_errors:
+            result.errors.extend(entry_errors)
+            continue
+
+        moved_for_entry: list[NestingMove] = []
+        for move in entry.moves:
+            old = Path(move.old_path)
+            new = Path(move.new_path)
+            try:
+                old.rename(new)
+                moved_for_entry.append(move)
+                result.moved += 1
+                if conn is not None:
+                    _update_moved_path_rows(conn, old, new, root)
+            except OSError as e:
+                result.errors.append({"path": str(old), "target": str(new), "error": str(e)})
+                break
+
+        if moved_for_entry:
+            applied.append(entry.model_copy(update={"moves": moved_for_entry}))
+        if moved_for_entry and len(moved_for_entry) == len(entry.moves):
+            try:
+                source.rmdir()
+            except OSError as e:
+                result.errors.append({"path": str(source), "error": f"could not remove emptied folder: {e}"})
+            result.flattened += 1
+
+    if conn is not None:
+        conn.commit()
+        conn.close()
+
+    log_plan = plan.model_copy(update={"entries": applied, "errors": []})
+    _write_nesting_plan(log_plan, log_path)
+    result.log_path = str(log_path)
+    if not quiet:
+        console.print(f"Nesting undo log written to [cyan]{log_path}[/cyan]")
+    return result
+
+
+def undo_nesting_log(
+    log_path: Path,
+    db_path: Path | None = None,
+    dry_run: bool = True,
+    quiet: bool = False,
+) -> NestingApplyResult:
+    """Undo a previously applied nesting flatten log."""
+    plan = NestingPlan.model_validate(json.loads(log_path.read_text()))
+    result = NestingApplyResult(planned=len(plan.entries), dry_run=dry_run, log_path=str(log_path))
+    conn = get_connection(db_path) if db_path is not None and not dry_run else None
+    root = Path(plan.root)
+
+    for entry in reversed(plan.entries):
+        source = Path(entry.source_path)
+        if dry_run:
+            result.undone += 1
+            result.moved += len(entry.moves)
+            continue
+        source.mkdir(exist_ok=True)
+        entry_errors: list[dict] = []
+        for move in reversed(entry.moves):
+            old = Path(move.old_path)
+            new = Path(move.new_path)
+            if not new.exists():
+                entry_errors.append({"path": str(new), "error": "flattened path missing"})
+            if old.exists():
+                entry_errors.append({"path": str(new), "target": str(old), "error": "original path exists"})
+        if entry_errors:
+            result.errors.extend(entry_errors)
+            continue
+        for move in reversed(entry.moves):
+            old = Path(move.old_path)
+            new = Path(move.new_path)
+            try:
+                new.rename(old)
+                result.moved += 1
+                if conn is not None:
+                    _update_moved_path_rows(conn, new, old, root)
+            except OSError as e:
+                result.errors.append({"path": str(new), "target": str(old), "error": str(e)})
+                break
+        else:
+            result.undone += 1
+
+    if conn is not None:
+        conn.commit()
+        conn.close()
+    return result
+
+
 def undo_organize_log(
     log_path: Path,
     db_path: Path | None = None,
@@ -381,6 +642,25 @@ def undo_organize_log(
 ) -> RenameResult:
     """Undo a previously applied organization log."""
     return undo_rename_log(log_path, db_path=db_path, dry_run=dry_run, quiet=quiet)
+
+
+def show_nesting_plan(plan: NestingPlan) -> None:
+    console.print(
+        f"Planned [yellow]{len(plan.entries):,}[/yellow] nesting flatten(s), "
+        f"found [yellow]{len(plan.errors):,}[/yellow] error(s)."
+    )
+    if plan.entries:
+        table = Table(title="Repeated folder flatten plan", show_lines=False)
+        table.add_column("Repeated Folder", style="white")
+        table.add_column("Target", style="cyan")
+        table.add_column("Moves", justify="right", style="yellow")
+        for entry in plan.entries[:50]:
+            table.add_row(entry.source_path, entry.target_path, f"{len(entry.moves):,}")
+        console.print(table)
+        if len(plan.entries) > 50:
+            console.print(f"[dim]...{len(plan.entries) - 50} more flatten(s).[/dim]")
+    if plan.errors:
+        console.print("[red]Plan has collision/error(s); apply would be refused until resolved.[/red]")
 
 
 def show_organize_audit_report(report: OrganizeAuditReport) -> None:

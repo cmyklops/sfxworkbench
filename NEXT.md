@@ -23,6 +23,10 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
 - Redundant nesting audit: report-only CLI pattern added and run.
 - Redundant nesting report: `/Users/mattwesdock/reports/redundant_nesting_report_20260508.json`
   found 52 candidates: 30 one-child chains, 12 repeated folder names, 10 low-value wrappers.
+- Repeated-folder-name flatten workflow: implemented; one-child chains and low-value
+  wrappers remain report-only.
+- Repeated-folder nesting plan: `/Users/mattwesdock/reports/repeated_folder_nesting_plan_20260508.json`
+  is reviewed and dry-run clean: 12 folders, 240 child moves, 0 errors.
 
 Current audit focus:
 
@@ -32,7 +36,7 @@ Current audit focus:
 
 ## Next
 
-1. Review redundant nesting report and decide which candidate types should get reviewed plan/apply.
+1. Apply reviewed repeated-folder nesting plan if the dry-run result still looks right.
 2. Add report-only related sound groups/collections audit.
 3. Review risky-character filename issues.
 
