@@ -105,12 +105,15 @@ audio-listening tag suggestions, but those should stay explicit and reviewable.
 
 ## Suggested Data Model
 
-Similarity data should live outside the existing `files` row shape:
+Similarity data lives outside the existing `files` row shape. Current tables:
 
 - `analysis_runs`: backend, model/tool version, parameters, start/end time,
   status, failure counts
 - `audio_descriptors`: cheap computed descriptors keyed to indexed file anchors
 - `audio_segments`: file id, start time, end time, method, confidence
+
+Future tables:
+
 - `audio_embeddings`: file id, optional segment id, backend, dimensions, vector
   storage reference or packed blob
 - `similarity_feedback`: DB-only accepted, ignored, hidden, favorite, or

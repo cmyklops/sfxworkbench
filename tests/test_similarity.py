@@ -298,6 +298,27 @@ def test_similarity_audit_can_compare_cached_segments(tmp_path: Path, tmp_db: Pa
     assert all(pair.right_segment_index is not None for group in report.groups for pair in group.pairs)
 
 
+def test_similarity_segment_audit_prunes_mixed_candidate_sets(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    frequencies = [220.0, 440.0, 880.0, 1760.0]
+    file_count = 0
+    for frequency in frequencies:
+        for take in range(3):
+            _make_tone(root / f"tone_{int(frequency)}_{take}.wav", frequency=frequency)
+            file_count += 1
+    scan_library(root, tmp_db, skip_hash=False, quiet=True)
+    crawl_similarity_descriptors(root, db_path=tmp_db, cache_path=None, quiet=True)
+
+    report = audit_similarity_descriptors(
+        root, db_path=tmp_db, threshold=0.95, scope="segment", exclude_exact_md5=False, quiet=True
+    )
+
+    raw_all_pairs = file_count * (file_count - 1) // 2
+    assert report.summary.descriptors_considered == file_count
+    assert 0 < report.summary.candidate_comparisons < raw_all_pairs
+    assert report.summary.candidate_pairs > 0
+
+
 def test_similarity_audit_writes_limited_report(tmp_path: Path, tmp_db: Path) -> None:
     root = tmp_path / "library"
     _make_tone(root / "one.wav", frequency=220.0)

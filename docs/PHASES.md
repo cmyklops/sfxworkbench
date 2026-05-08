@@ -91,8 +91,11 @@ uv run sfx scan-errors --apply ~/reports/scan_error_plan.json
 uv run sfx search QUERY
 uv run sfx export --output library.csv
 uv run sfx similarity crawl PATH --db ~/.wavwarden/index.db --cache ~/.wavwarden/similarity
+uv run sfx similarity segments PATH --db ~/.wavwarden/index.db --limit 200 --json
 uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --limit 20 --json
+uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --scope segment --limit 20 --json
 uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --threshold 0.92 --output ~/reports/similarity_audit.json
+uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --scope segment --threshold 0.95 --json
 uv run sfx dedupe --summary-only
 uv run sfx dedupe --output ~/reports/dedupe_plan.json
 uv run sfx dedupe --output ~/reports/dedupe_plan.json --safe-folder ~/CommercialLibraries/Master
@@ -110,6 +113,9 @@ uv run sfx packs apply ~/reports/pack_consolidation_plan.json --safe-folder ~/Co
 uv run sfx packs apply ~/reports/pack_consolidation_plan.json --apply --require-reviewed --log pack_quarantine_log.json
 uv run sfx packs undo pack_quarantine_log.json --apply
 uv run sfx organize audit PATH --depth 1 --output ~/reports/organize_report.json
+uv run sfx organize audit PATH --pattern vendor-product-folders --output ~/reports/vendor_folders.json
+uv run sfx organize audit PATH --pattern common-prefix-folders --output ~/reports/common_prefix_folders.json
+uv run sfx organize audit PATH --pattern numeric-series-folders --output ~/reports/numeric_series_folders.json
 uv run sfx organize audit PATH --pattern redundant-nesting --depth 8 --output ~/reports/nesting_report.json
 uv run sfx organize nesting-plan ~/reports/nesting_report.json --output ~/reports/nesting_plan.json
 uv run sfx organize nesting-plan ~/reports/nesting_report.json --kind single_child_chain --output ~/reports/single_child_plan.json
@@ -128,6 +134,12 @@ uv run sfx rename PATH --pattern ucs --apply --log rename_log.json
 uv run sfx rename PATH --pattern safe --apply --allow-partial --log safe_rename_log.json
 uv run sfx rename PATH --pattern portable --apply --log portable_rename_log.json
 uv run sfx rename --undo rename_log.json --apply
+uv run sfx tag suggest PATH --db ~/.wavwarden/index.db --output ~/reports/tag_suggestions.json
+uv run sfx tag suggest PATH --db ~/.wavwarden/index.db --use-ucs-catalog --min-confidence 0.8 --json
+uv run sfx ucs import ~/Desktop/_categorylist.csv --release-version v8.2.1
+uv run sfx ucs info
+uv run sfx ucs categories --cat-short AMB
+uv run sfx ucs validate PATH --db ~/.wavwarden/index.db --json
 ```
 
 Core command families support `--json` for automation and future UI work.
@@ -351,8 +363,8 @@ diagnostic pass.
 Metadata writing follows after rename and pack review workflows stabilize:
 
 - `sfx metadata audit`
-- `sfx tag --from-filename`
-- `sfx tag --from-csv`
+- `sfx tag suggest`
+- future reviewed `sfx tag plan/review/apply`
 
 Both should use mature libraries/tools for BWAV/iXML writes rather than
 hand-rolled binary mutation.
@@ -381,8 +393,11 @@ JSON-first:
 
 ```bash
 uv run sfx similarity crawl PATH --db ~/.wavwarden/index.db --cache ~/.wavwarden/similarity
+uv run sfx similarity segments PATH --db ~/.wavwarden/index.db --limit 200 --json
 uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --limit 50 --json
+uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --scope segment --limit 50 --json
 uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --threshold 0.92 --output similarity_report.json
+uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --scope segment --threshold 0.95 --json
 ```
 
 First useful slice:
@@ -390,9 +405,12 @@ First useful slice:
 - cheap descriptors such as peak, RMS, crest factor, rough brightness,
   transient density, silence, clipping, duration, channels, sample rate, and
   bit depth. Initial deterministic crawler implemented.
-- segment/event detection for long ambience and designed files
+- segment/event detection for long ambience and designed files, with cached
+  segment descriptors and report-only segment listing implemented
 - optional per-file and per-segment embeddings behind an extra dependency
-- JSON nearest-neighbor results with explicit distance/confidence caveats
+- JSON nearest-neighbor results with explicit distance/confidence caveats,
+  implemented for whole-file and segment search
+- report-only whole-file and segment near-duplicate audits with coarse pruning
 - DB-only feedback states such as favorite, hidden, ignored, accepted, or
   rejected similarity matches
 
@@ -604,6 +622,17 @@ Command contracts:
 - `rename PATH --json`: includes a dry-run `plan`.
 - `rename PATH --apply --json`: includes `plan` and `result`.
 - `rename --undo LOG --apply --json`: includes undo `result`.
+- `similarity crawl PATH --json`: includes root/db/cache paths, run summary,
+  descriptor samples, and segment counts.
+- `similarity segments PATH --json`: includes cached segment-window summary and
+  segment rows.
+- `similarity search --file QUERY --json`: includes scope, query descriptor,
+  candidate count, and ranked whole-file or segment results.
+- `similarity audit PATH --json`: includes scope, threshold, comparison counts,
+  and whole-file or segment candidate groups.
+- `tag suggest PATH --json`: includes suggestion summary and per-file evidence.
+- `ucs import/info/categories/validate --json`: includes catalog provenance,
+  filtered UCS categories, or validation report data.
 
 Compatibility rules:
 

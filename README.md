@@ -162,6 +162,9 @@ uv run sfx metadata audit --output ~/reports/metadata_report.json
 uv run sfx groups audit PATH --output ~/reports/related_groups_report.json
 uv run sfx format audit PATH --output ~/reports/format_report.json
 uv run sfx packs audit PATH --output ~/reports/pack_overlap_report.json
+uv run sfx packs plan --report ~/reports/pack_overlap_report.json --output ~/reports/pack_consolidation_plan.json
+uv run sfx packs review ~/reports/pack_consolidation_plan.json --approve-all
+uv run sfx packs apply ~/reports/pack_consolidation_plan.json --require-reviewed
 uv run sfx tag suggest PATH --use-ucs-catalog --min-confidence 0.8 --output ~/reports/tag_suggestions.json
 ```
 
@@ -169,6 +172,8 @@ UCS catalog support:
 
 ```bash
 uv run sfx ucs import ~/Desktop/_categorylist.csv --release-version v8.2.1
+uv run sfx ucs info
+uv run sfx ucs categories --cat-short AMB
 uv run sfx ucs validate PATH --json
 ```
 

@@ -33,6 +33,16 @@ uv run sfx dedupe --db ~/.wavwarden/index.db --output ~/reports/dedupe_plan.json
 uv run sfx dedupe --review ~/reports/dedupe_plan.json --approve-all
 uv run sfx dedupe --apply ~/reports/dedupe_plan.json --db ~/.wavwarden/index.db --require-reviewed
 uv run sfx packs audit ~/CommercialLibraries --db ~/.wavwarden/index.db --output ~/reports/pack_overlap_report.json
+uv run sfx packs plan --report ~/reports/pack_overlap_report.json --output ~/reports/pack_consolidation_plan.json
+uv run sfx packs review ~/reports/pack_consolidation_plan.json --approve-all
+uv run sfx packs apply ~/reports/pack_consolidation_plan.json --db ~/.wavwarden/index.db --require-reviewed
+uv run sfx packs undo pack_quarantine_log.json --db ~/.wavwarden/index.db --apply
+uv run sfx similarity crawl ~/CommercialLibraries --db ~/.wavwarden/index.db --cache ~/.wavwarden/similarity
+uv run sfx similarity segments ~/CommercialLibraries --db ~/.wavwarden/index.db --limit 200 --json
+uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --limit 20 --json
+uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --scope segment --limit 20 --json
+uv run sfx similarity audit ~/CommercialLibraries --db ~/.wavwarden/index.db --threshold 0.92 --output ~/reports/similarity_audit.json
+uv run sfx similarity audit ~/CommercialLibraries --db ~/.wavwarden/index.db --scope segment --threshold 0.95 --json
 uv run sfx organize audit ~/CommercialLibraries --depth 1 --output ~/reports/organize_report.json
 uv run sfx organize audit ~/CommercialLibraries --pattern redundant-nesting --depth 8 --output ~/reports/nesting_report.json
 uv run sfx organize nesting-plan ~/reports/nesting_report.json --output ~/reports/nesting_plan.json
@@ -53,6 +63,7 @@ uv run sfx rename ~/CommercialLibraries --pattern portable              # dry-ru
 uv run sfx rename ~/CommercialLibraries --pattern ucs --apply --log rename_log.json
 uv run sfx rename ~/CommercialLibraries --pattern safe --apply --allow-partial --log safe_rename_log.json
 uv run sfx rename ~/CommercialLibraries --pattern portable --apply --log portable_rename_log.json
+uv run sfx rename --undo rename_log.json --apply
 uv run sfx tag suggest ~/CommercialLibraries --db ~/.wavwarden/index.db --output ~/reports/tag_suggestions.json
 uv run sfx tag suggest ~/CommercialLibraries --db ~/.wavwarden/index.db --min-confidence 0.6 --json
 uv run sfx tag suggest ~/CommercialLibraries --db ~/.wavwarden/index.db --use-ucs-catalog --min-confidence 0.8 --json
@@ -94,6 +105,11 @@ sfx dedupe     →  GROUP BY md5 WHERE count > 1  →  summary or reviewed plan 
 sfx dedupe --review PLAN → approve groups
 sfx dedupe --apply PLAN → validate size/hash → quarantine duplicates + update SQLite
 sfx packs audit PATH → folder hash signatures + overlap candidates → report JSON
+sfx packs plan/review/apply/undo → reviewed pack/folder quarantine workflow with undo log
+sfx similarity crawl PATH → optional audio descriptor + segment cache
+sfx similarity segments PATH → list cached event windows
+sfx similarity search --file QUERY → whole-file or segment nearest-neighbor search
+sfx similarity audit PATH → report-only whole-file or segment near-duplicate groups
 sfx organize audit/review/apply/undo PATH → folder-structure cleanup with undo log
 sfx organize audit --pattern common-prefix-folders PATH → reviewed sibling family re-foldering preview
 sfx organize audit --pattern numeric-series-folders PATH → reviewed numeric library-series re-foldering preview
@@ -128,10 +144,11 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 - **`ucs_catalog.py`** — UCS catalog import, cache, and lookup. Parses the official `Soundminer/_categorylist.csv` from `UCS Release.zip`, writes a normalized JSON cache at `~/.wavwarden/ucs_catalog.json` with provenance (source URL, release version, import timestamp, attribution). Discovery chain for `load_catalog()`: explicit path → `WAVWARDEN_UCS_DATA` env var → default cache → `None`. XLSX import is deferred.
 - **`ucs_validate.py`** — report-only validation of UCS-looking indexed filenames against a loaded UCS catalog.
 - **`ucs.py`** — shared UCS-looking filename heuristic/parser. This is not a full official UCS catalog validator yet.
+- **`similarity.py`** — optional deterministic audio descriptor crawler, cached event segment detection, whole-file/segment similarity search, and report-only similarity audit. It never mutates audio or makes cleanup decisions.
 
 ### Critical design constraints
 
-- **Every destructive command defaults to dry-run, quarantine, review-first, or undoable behavior.** Filesystem-changing commands include `clean --apply`, `dedupe --apply`, `scan-errors --apply`, `rename --apply`, `organize apply`, and `organize nesting-apply --apply`.
+- **Every destructive command defaults to dry-run, quarantine, review-first, or undoable behavior.** Filesystem-changing commands include `clean --apply`, `dedupe --apply`, `scan-errors --apply`, `packs apply --apply`, `packs undo --apply`, `rename --apply`, `rename --undo --apply`, `organize apply`, and `organize nesting-apply --apply`.
 - **`soundfile` over stdlib `wave`.** The stdlib `wave` module can't read 32-bit float WAV, which is the default format for modern field recorders (Sound Devices, Zoom F-series). Using stdlib wave produces ~30% false-positive "unreadable" counts on real libraries.
 - **Junk patterns live in one place:** `junk.py`. If you add a new junk pattern, add it there and cover it in tests.
 - **UCS naming heuristic**: `^[A-Z]{2,5}_[A-Z]{2,8}(_|$)` matched against the file stem. This is a heuristic, not a full UCS validator.
@@ -145,6 +162,9 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 | `files_fts` | FTS5 virtual table over `filename` + `stem`; kept in sync via triggers |
 | `fn_issues` | Filename health issues linked to `files.id`; replaced on each rescan |
 | `scan_meta` | Key-value store: `last_scan_root`, `last_scan_at` |
+| `analysis_runs` | Similarity/audio-analysis run metadata |
+| `audio_descriptors` | Cached deterministic per-file audio descriptors |
+| `audio_segments` | Cached event-like segment windows and per-segment descriptors |
 
 ### Tests
 
@@ -157,8 +177,8 @@ Fixtures in `tests/conftest.py`:
 Full phase spec: `docs/PHASES.md`. Current status:
 - **Phase 0** ✅ — `audit.py` standalone auditor
 - **Phase 1** ✅ — `sfx` CLI package (clean, scan, dedupe, audit, search, export, JSON output)
-- **Phase 2** 🔜 — metadata writing (`sfx tag`); `sfx rename` is now the first cleanup feature
-- **Pack/folder duplicate detection** 🔜 — `sfx packs audit` report is implemented; reviewed plan/apply workflow for duplicated or overlapping commercial packs remains next
+- **Phase 2** 🔜 — metadata writing (`sfx tag plan/review/apply`); cleanup, rename, organize, pack review, UCS import/validate, and tag suggestions are implemented
+- **Pack/folder duplicate detection** ✅ — `sfx packs audit/plan/review/apply/undo` is implemented for exact duplicate folders and fully-covered overlaps
 - **Phase 3** ⬜ — Textual TUI first, Tauri later
 
 Additional planning docs:

@@ -77,6 +77,58 @@ def test_packs_audit_json(tmp_library, tmp_db, tmp_path) -> None:
     assert out.exists()
 
 
+def test_similarity_cli_json_smoke(tmp_library, tmp_db, tmp_path) -> None:
+    scan = runner.invoke(app, ["scan", str(tmp_library), "--db", str(tmp_db), "--json"])
+    assert scan.exit_code == 0
+
+    cache = tmp_path / "similarity_cache"
+    crawl = runner.invoke(
+        app,
+        [
+            "similarity",
+            "crawl",
+            str(tmp_library),
+            "--db",
+            str(tmp_db),
+            "--cache",
+            str(cache),
+            "--limit",
+            "1",
+            "--json",
+        ],
+    )
+    assert crawl.exit_code == 0
+    assert json.loads(crawl.stdout)["command"] == "similarity_crawl"
+
+    segments = runner.invoke(
+        app, ["similarity", "segments", str(tmp_library), "--db", str(tmp_db), "--limit", "1", "--json"]
+    )
+    assert segments.exit_code == 0
+    assert json.loads(segments.stdout)["command"] == "similarity_segments"
+
+    query_file = tmp_library / "sounds" / "AMB_RAIN_01.wav"
+    search = runner.invoke(app, ["similarity", "search", "--file", str(query_file), "--db", str(tmp_db), "--json"])
+    assert search.exit_code == 0
+    assert json.loads(search.stdout)["report"]["scope"] == "file"
+
+    segment_search = runner.invoke(
+        app,
+        ["similarity", "search", "--file", str(query_file), "--db", str(tmp_db), "--scope", "segment", "--json"],
+    )
+    assert segment_search.exit_code == 0
+    assert json.loads(segment_search.stdout)["report"]["scope"] == "segment"
+
+    audit = runner.invoke(app, ["similarity", "audit", str(tmp_library), "--db", str(tmp_db), "--json"])
+    assert audit.exit_code == 0
+    assert json.loads(audit.stdout)["report"]["scope"] == "file"
+
+    segment_audit = runner.invoke(
+        app, ["similarity", "audit", str(tmp_library), "--db", str(tmp_db), "--scope", "segment", "--json"]
+    )
+    assert segment_audit.exit_code == 0
+    assert json.loads(segment_audit.stdout)["report"]["scope"] == "segment"
+
+
 def test_organize_audit_json(tmp_library, tmp_path) -> None:
     (tmp_library / "01 Pack").mkdir()
     out = tmp_path / "organize.json"
