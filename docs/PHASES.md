@@ -28,6 +28,7 @@ uv run sfx dedupe --output ~/reports/dedupe_plan.json
 uv run sfx dedupe --review dedupe_plan.json --approve-all
 uv run sfx dedupe --apply dedupe_plan.json --require-reviewed
 uv run sfx packs audit PATH --output ~/reports/pack_overlap_report.json
+uv run sfx organize audit PATH --depth 1 --output ~/reports/organize_report.json
 uv run sfx rename PATH --pattern ucs
 uv run sfx rename PATH --pattern safe
 uv run sfx rename PATH --pattern ucs --apply --log rename_log.json
@@ -58,6 +59,7 @@ python3 audit.py ~/CommercialLibraries --json
 - `dedupe --review PLAN.json`: stamps all or selected duplicate groups as approved.
 - `dedupe --apply`: validates size/hash and quarantines by default; use `--require-reviewed` to refuse unapproved plans.
 - `packs audit`: report-only exact duplicate folder and pack-overlap detection; no filesystem or SQLite mutation.
+- `organize audit`: report-only folder-structure cleanup preview; no filesystem or SQLite mutation.
 - `rename`: previews UCS-oriented or safe filename/path changes, refuses collisions, applies with undo log. `--allow-partial` can apply valid entries while keeping unresolved collisions visible in the result.
 
 ## Phase 2 — Cleanup Tooling
@@ -75,11 +77,12 @@ report/plan/apply workflow before broad folder organization features:
 Folder consolidation must not permanently delete by default. Merging unique
 files is a later explicit action and must never overwrite existing files.
 
-Folder organization should follow the same safety model. Planned first command:
+Folder organization follows the same safety model. First command:
 `sfx organize audit PATH --depth 1 --pattern strip-leading-numbers`, reporting
 top-level folder changes such as `01 Vendor Pack` -> `Vendor Pack` for
-alphabetized browsing and easier bulk edits. Apply must require a reviewed plan,
-refuse collisions, update SQLite paths, and write an undo log.
+alphabetized browsing and easier bulk edits. Apply remains planned and must
+require a reviewed plan, refuse collisions, update SQLite paths, and write an
+undo log.
 
 Metadata writing follows after rename and pack review workflows stabilize:
 
@@ -180,6 +183,7 @@ Command contracts:
 - `dedupe --review PLAN --json`: includes review counts and output path.
 - `dedupe --apply PLAN --json`: includes `result`; default apply quarantines files.
 - `packs audit PATH --json`: includes `root`, `db_path`, optional `report_path`, and a versioned report with summary counts, exact duplicate folder groups, and overlap candidates.
+- `organize audit PATH --json`: includes `root`, optional `report_path`, and a versioned report with proposed folder renames and collision errors.
 - `rename PATH --json`: includes a dry-run `plan`.
 - `rename PATH --apply --json`: includes `plan` and `result`.
 - `rename --undo LOG --apply --json`: includes undo `result`.

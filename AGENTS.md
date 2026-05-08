@@ -30,6 +30,7 @@ uv run sfx dedupe --db ~/.wavwarden/index.db --output ~/reports/dedupe_plan.json
 uv run sfx dedupe --review ~/reports/dedupe_plan.json --approve-all
 uv run sfx dedupe --apply ~/reports/dedupe_plan.json --db ~/.wavwarden/index.db --require-reviewed
 uv run sfx packs audit ~/CommercialLibraries --db ~/.wavwarden/index.db --output ~/reports/pack_overlap_report.json
+uv run sfx organize audit ~/CommercialLibraries --depth 1 --output ~/reports/organize_report.json
 uv run sfx search "gunshot exterior"
 uv run sfx rename ~/CommercialLibraries --pattern ucs                   # dry-run
 uv run sfx rename ~/CommercialLibraries --pattern safe                  # dry-run
@@ -64,6 +65,7 @@ sfx dedupe     →  GROUP BY md5 WHERE count > 1  →  summary or reviewed plan 
 sfx dedupe --review PLAN → approve groups
 sfx dedupe --apply PLAN → validate size/hash → quarantine duplicates + update SQLite
 sfx packs audit PATH → folder hash signatures + overlap candidates → report JSON
+sfx organize audit PATH → folder-structure cleanup preview → report JSON
 sfx rename PATH → preview/apply UCS-oriented or safe names → rename_log_TIMESTAMP.json
 sfx audit      →  SELECT queries against index
 sfx search Q   →  FTS5 MATCH query on files_fts
@@ -79,6 +81,7 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 - **`scan_errors.py`** — plans quarantine for unreadable indexed files. Only all-zero blobs and AppleDouble artifacts are auto-marked `quarantine`; broken RIFF files stay `review`.
 - **`dedupe.py`** — exact MD5 duplicate grouping. Writes versioned JSON plans and quarantines by default on apply.
 - **`packs.py`** — report-only pack/folder duplicate detection. Computes recursive folder signatures from indexed MD5 hashes and reports exact duplicate folders plus high-overlap pack candidates.
+- **`organize.py`** — report-only folder organization preview. Starts with conservative top-level numeric sort-prefix removal.
 - **`rename.py`** — UCS-oriented and safe filename/path rename preview/apply/undo. Refuses collisions and updates SQLite paths after apply.
 - **`ucs.py`** — shared UCS-looking filename heuristic/parser. This is not a full official UCS catalog validator yet.
 

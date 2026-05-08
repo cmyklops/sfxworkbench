@@ -184,6 +184,34 @@ class PackAuditReport(BaseModel):
     overlap_candidates: list[PackOverlapCandidate] = []
 
 
+class OrganizeEntry(BaseModel):
+    old_path: str
+    new_path: str
+    old_name: str
+    new_name: str
+    action: str = "rename"
+    reason: str = "strip_leading_number"
+
+
+class OrganizeAuditSummary(BaseModel):
+    directories_scanned: int = 0
+    planned: int = 0
+    errors: int = 0
+
+
+class OrganizeAuditReport(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    root: str
+    pattern: str
+    depth: int = 1
+    summary: OrganizeAuditSummary
+    entries: list[OrganizeEntry] = []
+    errors: list[dict] = []
+
+
 class DedupeReviewResult(BaseModel):
     plan_path: str
     output_path: str

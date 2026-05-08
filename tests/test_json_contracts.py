@@ -224,3 +224,52 @@ def test_packs_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
     assert payload["report"]["schema_version"] == 1
     assert payload["report"]["summary"]["exact_duplicate_groups"] == 1
     assert out.exists()
+
+
+def test_organize_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
+    folder = tmp_library / "01 Pack"
+    folder.mkdir()
+    out = tmp_path / "organize_report.json"
+    payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                ["organize", "audit", str(tmp_library), "--output", str(out), "--json"],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert payload == {
+        "schema_version": 1,
+        "command": "organize_audit",
+        "root": "<ROOT>",
+        "report_path": "<TMP>/organize_report.json",
+        "report": {
+            "schema_version": 1,
+            "tool": "wavwarden",
+            "tool_version": "0.1.0",
+            "root": "<ROOT>",
+            "pattern": "strip-leading-numbers",
+            "depth": 1,
+            "summary": {
+                "directories_scanned": 5,
+                "planned": 1,
+                "errors": 0,
+            },
+            "entries": [
+                {
+                    "old_path": "<ROOT>/01 Pack",
+                    "new_path": "<ROOT>/Pack",
+                    "old_name": "01 Pack",
+                    "new_name": "Pack",
+                    "action": "rename",
+                    "reason": "strip_leading_number",
+                }
+            ],
+            "errors": [],
+        },
+    }
+    assert out.exists()

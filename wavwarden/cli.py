@@ -25,6 +25,13 @@ packs_app = typer.Typer(
     rich_markup_mode="rich",
 )
 app.add_typer(packs_app, name="packs")
+organize_app = typer.Typer(
+    name="organize",
+    help="Preview safe folder-structure organization.",
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+)
+app.add_typer(organize_app, name="organize")
 
 console = Console()
 
@@ -47,6 +54,57 @@ def _main(
     ] = None,
 ) -> None:
     """sfx — sound library hygiene toolkit."""
+
+
+# ---------------------------------------------------------------------------
+# sfx organize
+# ---------------------------------------------------------------------------
+
+
+@organize_app.command("audit")
+def cmd_organize_audit(
+    path: Annotated[Path, typer.Argument(help="Root path of the library to analyze.")],
+    pattern: Annotated[
+        str, typer.Option("--pattern", help="Organization pattern. Supported: 'strip-leading-numbers'.")
+    ] = "strip-leading-numbers",
+    depth: Annotated[int, typer.Option("--depth", help="Folder depth under PATH to inspect.")] = 1,
+    output: Annotated[
+        Path | None, typer.Option("--output", help="Write organization preview JSON to this path.")
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Preview safe folder-structure organization without changing files."""
+    from wavwarden.organize import audit_organization, show_organize_audit_report, write_organize_audit_report
+
+    if not path.exists():
+        console.print(f"[red]Error: path not found: {path}[/red]")
+        raise typer.Exit(1)
+    if depth < 1:
+        console.print("[red]Error: --depth must be at least 1.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        report = audit_organization(path, pattern=pattern, depth=depth)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
+    if output is not None:
+        write_organize_audit_report(report, output, quiet=json_output)
+    elif not json_output:
+        show_organize_audit_report(report)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "organize_audit",
+                    "root": path,
+                    "report_path": output,
+                    "report": report,
+                }
+            )
+        )
 
 
 # ---------------------------------------------------------------------------

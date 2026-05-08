@@ -63,3 +63,16 @@ def test_packs_audit_json(tmp_library, tmp_db, tmp_path) -> None:
     assert payload["report_path"] == str(out)
     assert "summary" in payload["report"]
     assert out.exists()
+
+
+def test_organize_audit_json(tmp_library, tmp_path) -> None:
+    (tmp_library / "01 Pack").mkdir()
+    out = tmp_path / "organize.json"
+    organize = runner.invoke(app, ["organize", "audit", str(tmp_library), "--output", str(out), "--json"])
+
+    assert organize.exit_code == 0
+    payload = json.loads(organize.stdout)
+    assert payload["command"] == "organize_audit"
+    assert payload["report_path"] == str(out)
+    assert payload["report"]["summary"]["planned"] == 1
+    assert out.exists()

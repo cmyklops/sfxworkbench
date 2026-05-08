@@ -27,8 +27,8 @@ Current audit focus:
 
 ## Next
 
-1. Add folder organization to the roadmap and then build a report-only preview.
-2. Inspect top-level numbered folders before any organization apply.
+1. Inspect top-level numbered folders before any organization apply.
+2. Build reviewed `sfx organize plan/apply` only after the preview looks right.
 3. Review risky-character filename issues.
 
 ## Later
