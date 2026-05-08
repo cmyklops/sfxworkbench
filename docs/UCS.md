@@ -5,6 +5,7 @@ not ship official UCS category data.
 
 ## Current Behavior
 
+- `wavwarden/ucs.py` is the shared home for current UCS stem parsing.
 - `scan` stores `files.is_ucs` using the heuristic `^[A-Z]{2,5}_[A-Z]{2,8}(_|$)`.
 - `rename --pattern ucs` safely sanitizes filenames and falls back to `SFX_MISC_...`.
 - There is no category catalog, synonym list, or official UCS spreadsheet in the repo.
@@ -21,13 +22,16 @@ than vendoring the official catalog.
 
 ## Integration Plan
 
-Add a dedicated `wavwarden/ucs.py` module so UCS parsing does not live separately
-in `scan.py` and `rename.py`.
+Keep expanding the dedicated `wavwarden/ucs.py` module so UCS parsing does not
+live separately in feature modules.
 
-Suggested API:
+Implemented API:
 
 - `looks_ucs(stem: str) -> bool`
 - `parse_ucs_stem(stem: str) -> UcsParseResult`
+
+Suggested API:
+
 - `load_ucs_catalog(path: Path | None = None) -> UcsCatalog`
 - `suggest_category(filename: str, folders: list[str]) -> UcsSuggestion`
 

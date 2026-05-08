@@ -29,6 +29,15 @@ class FilenameIssue(BaseModel):
     detail: str
 
 
+class UcsParseResult(BaseModel):
+    stem: str
+    is_ucs: bool = False
+    category: str | None = None
+    subcategory: str | None = None
+    remainder: str | None = None
+    source: str = "heuristic"
+
+
 # ---------------------------------------------------------------------------
 # Result types — returned from command modules to the CLI
 # ---------------------------------------------------------------------------

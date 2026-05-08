@@ -68,6 +68,7 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 - **`scan.py`** — incremental: skips files where `mtime + size_bytes` match the existing DB row. Junk detection uses shared `junk.py`; junk files are never indexed.
 - **`dedupe.py`** — exact MD5 duplicate grouping. Writes versioned JSON plans and quarantines by default on apply.
 - **`rename.py`** — UCS-oriented rename preview/apply/undo. Refuses collisions and updates SQLite paths after apply.
+- **`ucs.py`** — shared UCS-looking filename heuristic/parser. This is not a full official UCS catalog validator yet.
 
 ### Critical design constraints
 

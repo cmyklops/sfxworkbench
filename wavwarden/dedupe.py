@@ -150,7 +150,7 @@ def write_dedupe_plan(
     plan_path.write_text(json.dumps(plan, indent=2))
     if not quiet:
         console.print(f"Dedupe plan written to [cyan]{plan_path}[/cyan]")
-        console.print("[yellow]Review the plan, then run with --apply to execute.[/yellow]")
+        console.print("[yellow]Review the plan, then run with --apply to quarantine duplicate removals.[/yellow]")
 
 
 def apply_dedupe_plan(

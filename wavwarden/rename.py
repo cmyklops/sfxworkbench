@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -14,10 +13,10 @@ from rich.table import Table
 from wavwarden import health, junk
 from wavwarden.db import get_connection
 from wavwarden.models import RenameEntry, RenamePlan, RenameResult
+from wavwarden.ucs import looks_ucs_casefold, normalize_stem
 
 console = Console()
 
-_UCS_RE = re.compile(r"^[A-Z]{2,5}_[A-Z]{2,8}(_|$)")
 _BAD_CHARS_RE = re.compile(r"[:*?\"<>|#&;'\\!]+")
 _SEPARATOR_RE = re.compile(r"[\s\-]+")
 _UNDERSCORE_RE = re.compile(r"_+")
@@ -33,7 +32,7 @@ def _default_log_path() -> Path:
 
 def _sanitize_stem(stem: str) -> tuple[str, list[str]]:
     fixes: list[str] = []
-    normalized = unicodedata.normalize("NFC", stem)
+    normalized = normalize_stem(stem)
     if normalized != stem:
         fixes.append("unicode_normalization")
     cleaned = _BAD_CHARS_RE.sub("_", normalized)
@@ -49,7 +48,7 @@ def _sanitize_stem(stem: str) -> tuple[str, list[str]]:
 
 
 def _ucs_filename(path: Path) -> tuple[str, list[str]]:
-    already_ucs = bool(_UCS_RE.match(unicodedata.normalize("NFC", path.stem).upper()))
+    already_ucs = looks_ucs_casefold(path.stem)
     stem, fixes = _sanitize_stem(path.stem)
     suffix = path.suffix.lower()
     if already_ucs:

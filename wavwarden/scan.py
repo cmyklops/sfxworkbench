@@ -1,7 +1,6 @@
 """sfx scan command — index a library path into SQLite."""
 
 import hashlib
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,17 +11,12 @@ from wavwarden import audio as audio_mod
 from wavwarden import health, junk
 from wavwarden.db import get_connection
 from wavwarden.models import ScanResult
+from wavwarden.ucs import looks_ucs
 
 console = Console()
 
-_UCS_RE = re.compile(r"^[A-Z]{2,5}_[A-Z]{2,8}(_|$)")
-
 # Commit every N files to balance throughput vs. crash-recovery granularity.
 _COMMIT_BATCH = 500
-
-
-def _looks_ucs(stem: str) -> bool:
-    return bool(_UCS_RE.match(stem))
 
 
 def _md5(path: Path, block: int = 65536) -> str | None:
@@ -106,7 +100,7 @@ def scan_library(
         fn_issues = health.check_path(f, root)
         md5 = _md5(f) if not skip_hash else None
         stem = f.stem
-        is_ucs = _looks_ucs(stem)
+        is_ucs = looks_ucs(stem)
         scan_error = audio_info.error if audio_info else None
 
         # Single upsert with RETURNING — avoids the second SELECT id query.
