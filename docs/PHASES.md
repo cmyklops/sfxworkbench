@@ -19,6 +19,8 @@ Implemented commands:
 uv run sfx clean PATH
 uv run sfx scan PATH
 uv run sfx audit
+uv run sfx scan-errors --output ~/reports/scan_error_plan.json
+uv run sfx scan-errors --apply ~/reports/scan_error_plan.json
 uv run sfx search QUERY
 uv run sfx export --output library.csv
 uv run sfx dedupe --summary-only
@@ -46,6 +48,8 @@ python3 audit.py ~/CommercialLibraries --json
 
 - `clean`: dry-run by default; `--apply` removes known junk only.
 - `scan`: indexes audio files into SQLite and skips junk.
+- `scan-errors`: writes a review plan for unreadable indexed files; quarantines
+  only obvious artifacts/all-zero blobs by default.
 - `dedupe --summary-only`: finds exact MD5 duplicate groups and prints counts without writing a plan.
 - `dedupe --output PLAN.json`: writes a reviewed duplicate plan to an explicit path.
 - `dedupe --review PLAN.json`: stamps all or selected duplicate groups as approved.
@@ -141,6 +145,8 @@ Command contracts:
 - `clean --json`: includes `result.dry_run`, `removed_files`, `removed_dirs`, and `bytes_freed`.
 - `scan --json`: includes `root`, `db_path`, and `result.total/scanned/skipped/errors`.
 - `audit --json`: includes `db_path` and aggregate `AuditResult` fields.
+- `scan-errors --json`: includes a scan-error `plan` with classifications and actions.
+- `scan-errors --apply PLAN --json`: includes quarantine `result`.
 - `search QUERY --json`: includes `query`, `db_path`, and `results`.
 - `export --json`: includes `db_path`, `output`, and exported row `count`.
 - `dedupe --summary-only --json`: includes duplicate `summary`, `groups`, and no `plan_path`.

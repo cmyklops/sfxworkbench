@@ -224,6 +224,54 @@ def cmd_audit(
 
 
 # ---------------------------------------------------------------------------
+# sfx scan-errors
+# ---------------------------------------------------------------------------
+
+
+@app.command("scan-errors")
+def cmd_scan_errors(
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    output: Annotated[Path | None, typer.Option("--output", help="Write scan-error plan to this path.")] = None,
+    apply: Annotated[Path | None, typer.Option("--apply", help="Apply a reviewed scan-error plan JSON file.")] = None,
+    quarantine_dir: Annotated[
+        Path | None, typer.Option("--quarantine-dir", help="Directory for quarantined scan-error files.")
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Review unreadable indexed files and quarantine obvious artifacts."""
+    from wavwarden.scan_errors import (
+        apply_scan_error_plan,
+        build_scan_error_plan,
+        show_scan_error_plan,
+        write_scan_error_plan,
+    )
+
+    if apply is not None:
+        if not apply.exists():
+            console.print(f"[red]Error: plan file not found: {apply}[/red]")
+            raise typer.Exit(1)
+        result = apply_scan_error_plan(
+            apply, db_path=db, quarantine_dir=quarantine_dir, dry_run=False, quiet=json_output
+        )
+        if json_output:
+            print(json_dumps({"schema_version": 1, "command": "scan_errors_apply", "result": result}))
+        return
+
+    plan = build_scan_error_plan(db)
+    plan_path = output
+    if plan_path is not None:
+        write_scan_error_plan(plan, plan_path, quiet=json_output)
+    elif not json_output:
+        show_scan_error_plan(plan)
+    if json_output:
+        print(
+            json_dumps(
+                {"schema_version": 1, "command": "scan_errors", "db_path": db, "plan_path": plan_path, "plan": plan}
+            )
+        )
+
+
+# ---------------------------------------------------------------------------
 # sfx search
 # ---------------------------------------------------------------------------
 

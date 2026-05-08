@@ -23,6 +23,8 @@ uv run sfx --help
 uv run sfx clean ~/CommercialLibraries           # dry-run
 uv run sfx clean ~/CommercialLibraries --apply   # actually remove junk
 uv run sfx scan ~/CommercialLibraries --db ~/.wavwarden/index.db
+uv run sfx scan-errors --db ~/.wavwarden/index.db --output ~/reports/scan_error_plan.json
+uv run sfx scan-errors --apply ~/reports/scan_error_plan.json --db ~/.wavwarden/index.db
 uv run sfx dedupe --db ~/.wavwarden/index.db --summary-only
 uv run sfx dedupe --db ~/.wavwarden/index.db --output ~/reports/dedupe_plan.json
 uv run sfx dedupe --review ~/reports/dedupe_plan.json --approve-all
@@ -54,6 +56,7 @@ sfx scan PATH  →  audio.read_audio_info()  →  SQLite (files + files_fts)
                   health.check_path()      →  SQLite (fn_issues)
                   MD5 hash                 →  SQLite (files.md5)
 
+sfx scan-errors → classify scan_error rows → review/quarantine obvious artifacts
 sfx dedupe     →  GROUP BY md5 WHERE count > 1  →  summary or reviewed plan JSON
 sfx dedupe --review PLAN → approve groups
 sfx dedupe --apply PLAN → validate size/hash → quarantine duplicates + update SQLite
@@ -69,6 +72,7 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 - **`health.py`** — extracted verbatim from `audit.py`. 8 filename checks; returns `list[FilenameIssue]`. Used by both `sfx scan` (written to `fn_issues` table) and `audit.py` (inline in report).
 - **`clean.py`** — `find_junk()` returns `(junk_files, junk_dirs)`. AppleDouble files (`._*`) bypass the audio-extension safety guard since they're always metadata blobs regardless of apparent extension.
 - **`scan.py`** — incremental: skips files where `mtime + size_bytes` match the existing DB row. Junk detection uses shared `junk.py`; junk files are never indexed.
+- **`scan_errors.py`** — plans quarantine for unreadable indexed files. Only all-zero blobs and AppleDouble artifacts are auto-marked `quarantine`; broken RIFF files stay `review`.
 - **`dedupe.py`** — exact MD5 duplicate grouping. Writes versioned JSON plans and quarantines by default on apply.
 - **`rename.py`** — UCS-oriented rename preview/apply/undo. Refuses collisions and updates SQLite paths after apply.
 - **`ucs.py`** — shared UCS-looking filename heuristic/parser. This is not a full official UCS catalog validator yet.

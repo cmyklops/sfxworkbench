@@ -32,6 +32,8 @@ uv run sfx clean PATH                 # dry-run junk cleanup
 uv run sfx clean PATH --apply         # remove junk after review
 uv run sfx scan PATH                  # index audio files into SQLite
 uv run sfx audit                      # report index health
+uv run sfx scan-errors --output ~/reports/scan_error_plan.json
+uv run sfx scan-errors --apply ~/reports/scan_error_plan.json
 uv run sfx search QUERY               # FTS filename search
 uv run sfx export --output library.csv
 uv run sfx dedupe --summary-only      # count duplicate groups without writing a plan
@@ -61,6 +63,8 @@ python3 audit.py ~/CommercialLibraries --json
 - `clean` is dry-run by default and can write a JSON log.
 - `dedupe --summary-only` reports counts without writing a plan.
 - `dedupe --output PLAN.json` writes a plan; `--review` stamps approvals and `--apply` quarantines by default.
+- `scan-errors` writes a plan for unreadable indexed files; only obvious
+  artifacts are marked for quarantine automatically.
 - `rename` previews first, refuses collisions, writes an undo log on apply, and
   can restore from that log.
 - `normalize` is intentionally not part of the beta safety promise yet because

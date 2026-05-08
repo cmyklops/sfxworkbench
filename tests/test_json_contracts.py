@@ -150,3 +150,32 @@ def test_dedupe_summary_and_output_contract(tmp_library: Path, tmp_db: Path, tmp
     assert review_payload["schema_version"] == 1
     assert review_payload["command"] == "dedupe_review"
     assert review_payload["result"]["approved_groups"] >= 1
+
+
+def test_scan_errors_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
+    bad = tmp_path / "bad.wav"
+    bad.write_bytes(b"\x00" * 128)
+    from wavwarden.db import get_connection
+
+    conn = get_connection(tmp_db)
+    conn.execute(
+        """INSERT INTO files (path, filename, stem, extension, size_bytes, mtime, scan_error, scanned_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (str(bad), bad.name, bad.stem, bad.suffix, bad.stat().st_size, 0.0, "Format not recognised.", "2026"),
+    )
+    conn.commit()
+    conn.close()
+
+    out = tmp_path / "scan_error_plan.json"
+    payload = _normalize(
+        _load(runner.invoke(app, ["scan-errors", "--db", str(tmp_db), "--output", str(out), "--json"]).stdout),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "scan_errors"
+    assert payload["plan_path"] == "<TMP>/scan_error_plan.json"
+    assert payload["plan"]["entries"][0]["action"] == "quarantine"
+    assert out.exists()
