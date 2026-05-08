@@ -635,8 +635,8 @@ Command contracts:
 - `metadata backends --json`: includes discovered external metadata writer
   backends, executable paths, version command output, and capability flags.
 - `metadata write-plan/review/preview --json`: includes backend capture,
-  accepted-tag-to-BWF mapping entries, review counts, and dry-run validation
-  counts.
+  accepted-tag-to-BWF mapping entries, review counts, dry-run validation
+  counts, and simulated BWF MetaEdit commands.
 - `groups audit PATH --json`: includes `root`, `db_path`, optional `report_path`, and a versioned report of inferred related sound groups.
 - `format audit PATH --json`: includes `root`, `db_path`, optional `report_path`, and a versioned report of format inconsistencies within related groups.
 - `scan-errors --json`: includes a scan-error `plan` with classifications and actions.

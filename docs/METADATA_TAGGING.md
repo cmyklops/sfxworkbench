@@ -188,7 +188,9 @@ The first supported mapping is deliberately narrow: accepted `description`,
 `originator`, and `originator_reference` tags can target BWF `bext` fields via
 BWF MetaEdit. Other accepted tags, such as UCS category/subcategory/take fields,
 remain visible in the plan as `unsupported_field` instead of being silently
-dropped.
+dropped. Preview renders simulated BWF MetaEdit commands with `--simulate`,
+`--reject-overwrite`, and `--specialchars`; these commands are for validation
+and review only, not for execution by wavwarden.
 
 ## Audio Listening Suggestions
 

@@ -13,6 +13,7 @@ from wavwarden import __version__
 from wavwarden.db import DEFAULT_DB_PATH, get_connection
 from wavwarden.metadata_backends import build_metadata_backends_report
 from wavwarden.models import (
+    MetadataWriteCommand,
     MetadataWritePlan,
     MetadataWritePlanEntry,
     MetadataWritePlanSummary,
@@ -33,6 +34,16 @@ BWF_METAEDIT_FIELD_MAP = {
     "description": ("bext", "Description"),
     "originator": ("bext", "Originator"),
     "originator_reference": ("bext", "OriginatorReference"),
+}
+BWF_METAEDIT_COMMAND_FIELDS = {
+    "Description": "description",
+    "Originator": "originator",
+    "OriginatorReference": "originatorreference",
+}
+BWF_METAEDIT_FIELD_LIMITS = {
+    "Description": 256,
+    "Originator": 32,
+    "OriginatorReference": 32,
 }
 
 
@@ -85,6 +96,56 @@ def _target_for_field(field: str, backend: str) -> tuple[str | None, str | None,
     if target is None:
         return None, None, "unsupported_field", False
     return target[0], target[1], "write_bext", True
+
+
+def _validate_bwf_value(entry: MetadataWritePlanEntry) -> str | None:
+    if entry.target_namespace != "bext" or entry.target_key is None:
+        return None
+    encoded = entry.value.encode("ascii", errors="ignore")
+    if encoded.decode("ascii") != entry.value:
+        return f"{entry.target_key} must be ASCII for BWF MetaEdit/BEXT"
+    max_bytes = BWF_METAEDIT_FIELD_LIMITS.get(entry.target_key)
+    if max_bytes is not None and len(encoded) > max_bytes:
+        return f"{entry.target_key} exceeds {max_bytes} ASCII bytes"
+    return None
+
+
+def _base_bwfmetaedit_command(plan: MetadataWritePlan) -> list[str]:
+    executable = plan.backend.executable or plan.backend.name
+    return [executable, "--simulate", "--reject-overwrite", "--specialchars"]
+
+
+def render_bwfmetaedit_commands(
+    entries: list[MetadataWritePlanEntry], plan: MetadataWritePlan
+) -> list[MetadataWriteCommand]:
+    """Render simulated BWF MetaEdit commands grouped per target file."""
+    grouped: dict[int, list[MetadataWritePlanEntry]] = {}
+    for entry in entries:
+        grouped.setdefault(entry.file_id, []).append(entry)
+
+    commands: list[MetadataWriteCommand] = []
+    for file_id in sorted(grouped):
+        file_entries = grouped[file_id]
+        fields: dict[str, str] = {}
+        command = _base_bwfmetaedit_command(plan)
+        for entry in sorted(file_entries, key=lambda item: (item.target_key or "", item.entry_id)):
+            if entry.target_key is None:
+                continue
+            command_field = BWF_METAEDIT_COMMAND_FIELDS.get(entry.target_key)
+            if command_field is None:
+                continue
+            fields[entry.target_key] = entry.value
+            command.append(f"--{command_field}={entry.value}")
+        command.append(file_entries[0].path)
+        commands.append(
+            MetadataWriteCommand(
+                file_id=file_id,
+                path=file_entries[0].path,
+                command=command,
+                fields=fields,
+            )
+        )
+    return commands
 
 
 def build_metadata_write_plan(
@@ -269,6 +330,7 @@ def preview_metadata_write_plan(
         return result
 
     conn = get_connection(effective_db)
+    renderable_entries: list[MetadataWritePlanEntry] = []
     for entry in plan.entries:
         if require_reviewed and entry.review_status != "approved":
             result.skipped += 1
@@ -282,11 +344,17 @@ def preview_metadata_write_plan(
         if not entry.supported:
             result.skipped += 1
             continue
+        value_error = _validate_bwf_value(entry)
+        if value_error is not None:
+            result.errors.append({"entry_id": entry.entry_id, "path": entry.path, "error": value_error})
+            continue
         validation_error = _validate_plan_entry(conn, entry)
         if validation_error is not None:
             result.errors.append({"entry_id": entry.entry_id, "path": entry.path, "error": validation_error})
             continue
         result.would_write += 1
+        renderable_entries.append(entry)
+    result.commands = render_bwfmetaedit_commands(renderable_entries, plan)
     conn.close()
     if not quiet:
         show_metadata_write_preview_result(result)

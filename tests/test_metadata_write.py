@@ -133,6 +133,19 @@ def test_metadata_write_review_and_preview_is_dry_run(tmp_path: Path, tmp_db: Pa
     assert preview.would_write == 1
     assert preview.skipped == 1
     assert preview.errors == []
+    assert len(preview.commands) == 1
+    command = preview.commands[0]
+    assert command.file_id == 1
+    assert command.path == str(audio)
+    assert command.fields == {"Description": "Metal Hit"}
+    assert command.command == [
+        str(tmp_path / "bwfmetaedit"),
+        "--simulate",
+        "--reject-overwrite",
+        "--specialchars",
+        "--description=Metal Hit",
+        str(audio),
+    ]
 
 
 def test_metadata_write_preview_requires_available_backend(tmp_path: Path, tmp_db: Path) -> None:
@@ -150,3 +163,33 @@ def test_metadata_write_preview_requires_available_backend(tmp_path: Path, tmp_d
 
     assert preview.would_write == 0
     assert preview.errors == [{"path": str(plan_path), "error": "backend unavailable: bwfmetaedit"}]
+    assert preview.commands == []
+
+
+def test_metadata_write_preview_rejects_non_ascii_bext_values(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    audio = root / "SFX_HIT_01.wav"
+    audio.write_bytes(b"not really audio")
+    _seed_file(tmp_db, audio)
+    conn = get_connection(tmp_db)
+    conn.execute("UPDATE accepted_tags SET value = ? WHERE field = 'description'", ("Café Hit",))
+    conn.commit()
+    conn.close()
+
+    plan = build_metadata_write_plan(tmp_db, root=root, bwfmetaedit=_fake_bwfmetaedit(tmp_path))
+    plan_path = tmp_path / "metadata_write_plan.json"
+    write_metadata_write_plan(plan, plan_path, quiet=True)
+    review_metadata_write_plan(plan_path, approve_all=True, quiet=True)
+
+    preview = preview_metadata_write_plan(plan_path, db_path=tmp_db, require_reviewed=True, quiet=True)
+
+    assert preview.would_write == 0
+    assert preview.commands == []
+    assert preview.errors == [
+        {
+            "entry_id": 2,
+            "path": str(audio),
+            "error": "Description must be ASCII for BWF MetaEdit/BEXT",
+        }
+    ]

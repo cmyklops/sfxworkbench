@@ -1036,6 +1036,11 @@ def test_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
     assert write_preview_payload["command"] == "metadata_write_preview"
     assert write_preview_payload["result"]["dry_run"] is True
     assert write_preview_payload["result"]["planned"] == 1
+    assert isinstance(write_preview_payload["result"]["commands"], list)
+    if write_preview_payload["result"]["commands"]:
+        rendered = write_preview_payload["result"]["commands"][0]
+        assert rendered["simulated"] is True
+        assert "--simulate" in rendered["command"]
 
 
 def test_ucs_validate_and_catalog_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:

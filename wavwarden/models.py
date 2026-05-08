@@ -488,6 +488,14 @@ class MetadataWriteReviewResult(BaseModel):
     invalid_entries: list[int] = []
 
 
+class MetadataWriteCommand(BaseModel):
+    file_id: int
+    path: str
+    command: list[str] = []
+    fields: dict[str, str] = {}
+    simulated: bool = True
+
+
 class MetadataWritePreviewResult(BaseModel):
     planned: int = 0
     would_write: int = 0
@@ -495,6 +503,7 @@ class MetadataWritePreviewResult(BaseModel):
     errors: list[dict] = []
     dry_run: bool = True
     target: str = "embedded_metadata"
+    commands: list[MetadataWriteCommand] = []
 
 
 class RelatedSoundFile(BaseModel):
