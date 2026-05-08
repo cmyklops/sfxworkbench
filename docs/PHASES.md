@@ -92,12 +92,18 @@ uv run sfx search QUERY
 uv run sfx export --output library.csv
 uv run sfx dedupe --summary-only
 uv run sfx dedupe --output ~/reports/dedupe_plan.json
+uv run sfx dedupe --output ~/reports/dedupe_plan.json --safe-folder ~/CommercialLibraries/Master
+uv run sfx dedupe --output ~/reports/dedupe_plan.json --prefer-folder ~/CommercialLibraries/Master --prefer-extension wav
 uv run sfx dedupe --review dedupe_plan.json --approve-all
 uv run sfx dedupe --apply dedupe_plan.json --require-reviewed
+uv run sfx dedupe --apply dedupe_plan.json --safe-folder ~/CommercialLibraries/Master --require-reviewed
 uv run sfx packs audit PATH --output ~/reports/pack_overlap_report.json
 uv run sfx packs plan --report ~/reports/pack_overlap_report.json --output ~/reports/pack_consolidation_plan.json
+uv run sfx packs plan --report ~/reports/pack_overlap_report.json --safe-folder ~/CommercialLibraries/Master --output ~/reports/pack_consolidation_plan.json
+uv run sfx packs plan --report ~/reports/pack_overlap_report.json --prefer-folder ~/CommercialLibraries/Master --output ~/reports/pack_consolidation_plan.json
 uv run sfx packs review ~/reports/pack_consolidation_plan.json --approve-all
 uv run sfx packs apply ~/reports/pack_consolidation_plan.json --require-reviewed
+uv run sfx packs apply ~/reports/pack_consolidation_plan.json --safe-folder ~/CommercialLibraries/Master --require-reviewed
 uv run sfx packs apply ~/reports/pack_consolidation_plan.json --apply --require-reviewed --log pack_quarantine_log.json
 uv run sfx packs undo pack_quarantine_log.json --apply
 uv run sfx organize audit PATH --depth 1 --output ~/reports/organize_report.json
@@ -145,9 +151,9 @@ python3 audit.py ~/CommercialLibraries --json
 - `scan-errors`: writes a review plan for unreadable indexed files; quarantines
   only obvious artifacts/all-zero blobs by default.
 - `dedupe --summary-only`: finds exact MD5 duplicate groups and prints counts without writing a plan.
-- `dedupe --output PLAN.json`: writes a reviewed duplicate plan to an explicit path.
+- `dedupe --output PLAN.json`: writes a reviewed duplicate plan to an explicit path. Repeated `--safe-folder PATH` options prefer protected duplicate files as keep copies and mark protected extra copies as ignored. Repeated `--prefer-folder PATH` and `--prefer-extension EXT` options store preservation-priority evidence and choose keep copies accordingly.
 - `dedupe --review PLAN.json`: stamps all or selected duplicate groups as approved.
-- `dedupe --apply`: validates size/hash and quarantines by default; use `--require-reviewed` to refuse unapproved plans.
+- `dedupe --apply`: validates size/hash and quarantines by default; use `--require-reviewed` to refuse unapproved plans. Plan-recorded and CLI safe folders are re-checked before quarantine or deletion.
 - `packs audit`: report-only exact duplicate folder and pack-overlap detection; no filesystem or SQLite mutation.
 - `organize audit/review/apply/undo`: safe folder-structure cleanup with review gate, SQLite path updates, and undo log.
 - `organize audit --pattern redundant-nesting`: report-only folder-structure review for repeated names, one-child chains, and low-value wrappers.
@@ -180,18 +186,22 @@ candidates:
   duplicate folder groups plan all but the deterministic keep folder for
   quarantine. Fully-covered overlap candidates plan the smaller folder for
   quarantine. Partial overlaps stay review-only so unique files are not moved by
-  default.
+  default. Repeated `--safe-folder PATH` options prefer protected exact
+  duplicates as keep folders and mark protected sources as ignored. Repeated
+  `--prefer-folder PATH` options store preservation-priority evidence and choose
+  pack keep folders accordingly.
 - `sfx packs review`: approve all or selected 1-based plan groups.
 - `sfx packs apply`: dry-run by default; with `--apply`, quarantine redundant
-  folders, validate files and hashes before moving, update SQLite paths, and
-  write an undo log.
+  folders, validate files and hashes before moving, re-check plan and CLI safe
+  folders, update SQLite paths, and write an undo log.
 - `sfx packs undo`: restore quarantined folders from the undo log and update
   SQLite paths.
 
 Folder consolidation must not permanently delete by default. Merging unique
 files is a later explicit action and must never overwrite existing files.
-The next pack/dedupe planning layer should add safe folders and preservation
-priority so keep/quarantine recommendations are tunable and explainable.
+The next duplicate-planning layer should extend safe folders and preservation
+priority beyond dedupe and packs, then add richer metadata/UCS scoring so
+keep/quarantine recommendations are tunable and explainable.
 
 Folder organization follows the same safety model. First workflow:
 `sfx organize audit PATH --depth 1 --pattern strip-leading-numbers`, reporting

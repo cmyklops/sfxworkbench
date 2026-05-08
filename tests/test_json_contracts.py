@@ -164,13 +164,35 @@ def test_dedupe_summary_and_output_contract(tmp_library: Path, tmp_db: Path, tmp
 
     out = tmp_path / "review" / "dedupe_plan.json"
     plan_payload = _normalize(
-        _load(runner.invoke(app, ["dedupe", "--db", str(tmp_db), "--output", str(out), "--json"]).stdout),
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "dedupe",
+                    "--db",
+                    str(tmp_db),
+                    "--safe-folder",
+                    str(tmp_library),
+                    "--prefer-extension",
+                    "wav",
+                    "--output",
+                    str(out),
+                    "--json",
+                ],
+            ).stdout
+        ),
         tmp_path,
         tmp_library,
         tmp_db,
     )
     assert plan_payload["plan_path"] == "<TMP>/review/dedupe_plan.json"
     assert out.exists()
+    plan_file = _normalize(json.loads(out.read_text()), tmp_path, tmp_library, tmp_db)
+    assert plan_file["safe_folders"] == ["<ROOT>"]
+    assert plan_file["preservation_priority"]["rules"] == [
+        {"rule": "prefer_safe_folder", "values": ["<ROOT>"]},
+        {"rule": "prefer_extension", "values": [".wav"]},
+    ]
 
     review_payload = _normalize(
         _load(runner.invoke(app, ["dedupe", "--review", str(out), "--approve-all", "--json"]).stdout),
@@ -262,7 +284,19 @@ def test_packs_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
         _load(
             runner.invoke(
                 app,
-                ["packs", "plan", "--report", str(out), "--output", str(plan_out), "--json"],
+                [
+                    "packs",
+                    "plan",
+                    "--report",
+                    str(out),
+                    "--safe-folder",
+                    str(pack_a),
+                    "--prefer-folder",
+                    str(pack_a),
+                    "--output",
+                    str(plan_out),
+                    "--json",
+                ],
             ).stdout
         ),
         tmp_path,
@@ -273,6 +307,11 @@ def test_packs_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
     assert plan_payload["command"] == "packs_plan"
     assert plan_payload["report_path"] == "<TMP>/pack_report.json"
     assert plan_payload["plan_path"] == "<TMP>/pack_plan.json"
+    assert plan_payload["plan"]["safe_folders"] == ["<ROOT>/Pack A"]
+    assert plan_payload["plan"]["preservation_priority"]["rules"] == [
+        {"rule": "prefer_safe_folder", "values": ["<ROOT>/Pack A"]},
+        {"rule": "prefer_folder", "values": ["<ROOT>/Pack A"]},
+    ]
     assert plan_payload["plan"]["summary"]["quarantine_entries"] == 1
 
     review_payload = _normalize(

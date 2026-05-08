@@ -760,6 +760,17 @@ def cmd_packs_audit(
 def cmd_packs_plan(
     report: Annotated[Path, typer.Option("--report", help="Pack audit report JSON to turn into a plan.")],
     output: Annotated[Path | None, typer.Option("--output", help="Write pack consolidation plan JSON here.")] = None,
+    safe_folder: Annotated[
+        list[Path] | None,
+        typer.Option("--safe-folder", help="Folder that pack plans must not quarantine. May be passed multiple times."),
+    ] = None,
+    prefer_folder: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--prefer-folder",
+            help="Prefer this folder when choosing pack keep folders. May be passed multiple times.",
+        ),
+    ] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
     """Create a reviewed pack consolidation/quarantine plan from an audit report."""
@@ -769,7 +780,13 @@ def cmd_packs_plan(
         console.print(f"[red]Error: report file not found: {report}[/red]")
         raise typer.Exit(1)
 
-    plan = build_pack_plan(report, output_path=output, quiet=json_output)
+    plan = build_pack_plan(
+        report,
+        output_path=output,
+        quiet=json_output,
+        safe_folders=safe_folder,
+        prefer_folders=prefer_folder,
+    )
     if not json_output:
         show_pack_plan(plan)
     if json_output:
@@ -819,6 +836,10 @@ def cmd_packs_apply(
     quarantine_dir: Annotated[
         Path | None, typer.Option("--quarantine-dir", help="Directory for quarantined pack folders.")
     ] = None,
+    safe_folder: Annotated[
+        list[Path] | None,
+        typer.Option("--safe-folder", help="Folder that pack apply must not quarantine. May be passed multiple times."),
+    ] = None,
     apply: Annotated[bool, typer.Option("--apply", help="Actually quarantine folders (default is dry-run).")] = False,
     require_reviewed: Annotated[
         bool, typer.Option("--require-reviewed", help="Apply only approved pack plan groups.")
@@ -840,6 +861,7 @@ def cmd_packs_apply(
         log_path=log,
         require_reviewed=require_reviewed,
         quiet=json_output,
+        safe_folders=safe_folder,
     )
     if json_output:
         print(json_dumps({"schema_version": 1, "command": "packs_apply", "result": result}))
@@ -940,6 +962,24 @@ def cmd_dedupe(
     quarantine_dir: Annotated[
         Path | None, typer.Option("--quarantine-dir", help="Directory for quarantined duplicates.")
     ] = None,
+    safe_folder: Annotated[
+        list[Path] | None,
+        typer.Option("--safe-folder", help="Folder that dedupe must not remove. May be passed multiple times."),
+    ] = None,
+    prefer_folder: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--prefer-folder",
+            help="Prefer this folder when choosing duplicate keep files. May be passed multiple times.",
+        ),
+    ] = None,
+    prefer_extension: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--prefer-extension",
+            help="Prefer this extension when choosing duplicate keep files, e.g. wav. May be passed multiple times.",
+        ),
+    ] = None,
     permanent_delete: Annotated[
         bool, typer.Option("--delete", help="Permanently delete instead of quarantining. Advanced/destructive.")
     ] = False,
@@ -984,6 +1024,7 @@ def cmd_dedupe(
             permanent_delete=permanent_delete,
             require_reviewed=require_reviewed,
             quiet=json_output,
+            safe_folders=safe_folder,
         )
         if json_output:
             print(json_dumps({"schema_version": 1, "command": "dedupe_apply", "result": result}))
@@ -1003,7 +1044,15 @@ def cmd_dedupe(
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             plan_path = Path(f"dedupe_plan_{ts}.json")
         plan_path.parent.mkdir(parents=True, exist_ok=True)
-        write_dedupe_plan(groups, plan_path, db_path=db, quiet=json_output)
+        write_dedupe_plan(
+            groups,
+            plan_path,
+            db_path=db,
+            quiet=json_output,
+            safe_folders=safe_folder,
+            prefer_folders=prefer_folder,
+            prefer_extensions=prefer_extension,
+        )
     elif summary_only and not json_output:
         console.print(
             f"Duplicate groups: [yellow]{summary.duplicate_groups:,}[/yellow]\n"

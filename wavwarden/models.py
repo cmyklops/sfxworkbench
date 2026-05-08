@@ -333,6 +333,10 @@ class PackPlanEntry(BaseModel):
     larger_folder_coverage: float | None = None
     files: list[PackPlanFile] = []
     quarantine_path: str | None = None
+    protected_by: str | None = None
+    keep_protected_by: str | None = None
+    preservation_evidence: list[dict] = []
+    keep_preservation_evidence: list[dict] = []
 
 
 class PackPlanSummary(BaseModel):
@@ -340,6 +344,7 @@ class PackPlanSummary(BaseModel):
     quarantine_entries: int = 0
     review_entries: int = 0
     ignored_entries: int = 0
+    protected_entries: int = 0
     planned_files: int = 0
     planned_bytes: int = 0
 
@@ -352,6 +357,8 @@ class PackPlan(BaseModel):
     root: str
     db_path: str
     source_report: str | None = None
+    safe_folders: list[str] = []
+    preservation_priority: dict = {}
     summary: PackPlanSummary
     entries: list[PackPlanEntry] = []
     errors: list[dict] = []

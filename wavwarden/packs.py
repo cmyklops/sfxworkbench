@@ -28,6 +28,8 @@ from wavwarden.models import (
     PackPlanSummary,
     PackReviewResult,
 )
+from wavwarden.preservation import build_preservation_rules, evidence, priority_key
+from wavwarden.preservation import protected_by as preservation_protected_by
 from wavwarden.rename import _update_directory_rows
 from wavwarden.scan_errors import _md5
 
@@ -388,6 +390,7 @@ def _summarize_plan(entries: list[PackPlanEntry]) -> PackPlanSummary:
         quarantine_entries=sum(1 for entry in entries if entry.action == "quarantine_folder"),
         review_entries=sum(1 for entry in entries if entry.action == "review"),
         ignored_entries=sum(1 for entry in entries if entry.action == "ignore"),
+        protected_entries=sum(1 for entry in entries if entry.protected_by is not None),
         planned_files=sum(entry.file_count for entry in entries if entry.action == "quarantine_folder"),
         planned_bytes=sum(entry.total_bytes for entry in entries if entry.action == "quarantine_folder"),
     )
@@ -404,43 +407,73 @@ def _choose_overlap_source(candidate: PackOverlapCandidate) -> tuple[PackFolderS
     return (a, b) if a.path > b.path else (b, a)
 
 
-def build_pack_plan(report_path: Path, output_path: Path | None = None, quiet: bool = False) -> PackPlan:
+def build_pack_plan(
+    report_path: Path,
+    output_path: Path | None = None,
+    quiet: bool = False,
+    safe_folders: list[Path] | None = None,
+    prefer_folders: list[Path] | None = None,
+) -> PackPlan:
     """Create a reviewed pack consolidation plan from a pack audit report."""
     report = PackAuditReport.model_validate(json.loads(report_path.read_text()))
     db_path = Path(report.db_path)
+    rules = build_preservation_rules(safe_folders=safe_folders, prefer_folders=prefer_folders)
     entries: list[PackPlanEntry] = []
     errors: list[dict] = []
     planned_sources: set[str] = set()
 
     for group in report.exact_groups:
-        folders = sorted(group.folders, key=lambda folder: folder.path)
+        folders = sorted(
+            group.folders,
+            key=lambda folder: priority_key(Path(folder.path), rules, include_extension=False),
+        )
         if len(folders) < 2:
             continue
         keep = folders[0]
+        keep_protected_by = preservation_protected_by(Path(keep.path), rules)
+        keep_evidence = evidence(Path(keep.path), rules, include_extension=False)
         for folder in folders[1:]:
+            protected_match = preservation_protected_by(Path(folder.path), rules)
+            action = "ignore" if protected_match is not None else "quarantine_folder"
+            reason = (
+                f"source folder is inside safe folder: {protected_match}"
+                if protected_match is not None
+                else "folder has the same indexed audio hashes as the keep folder"
+            )
             files = _folder_files(db_path, Path(folder.path))
             entry = PackPlanEntry(
                 source_type="exact_duplicate_folder",
                 source_group_id=group.group_id,
                 folder_path=folder.path,
                 keep_folder_path=keep.path,
-                action="quarantine_folder",
-                reason="folder has the same indexed audio hashes as the keep folder",
+                action=action,
+                reason=reason,
                 file_count=folder.file_count,
                 total_bytes=folder.total_bytes,
                 files=files,
+                protected_by=protected_match,
+                keep_protected_by=keep_protected_by,
+                preservation_evidence=evidence(Path(folder.path), rules, include_extension=False),
+                keep_preservation_evidence=keep_evidence,
             )
             entries.append(entry)
-            planned_sources.add(folder.path)
+            if action == "quarantine_folder":
+                planned_sources.add(folder.path)
 
     for candidate in report.overlap_candidates:
         source, keep = _choose_overlap_source(candidate)
+        protected_match = preservation_protected_by(Path(source.path), rules)
+        keep_protected_by = preservation_protected_by(Path(keep.path), rules)
+        keep_evidence = evidence(Path(keep.path), rules, include_extension=False)
         action = "quarantine_folder" if candidate.smaller_folder_coverage >= 1.0 else "review"
         reason = (
             "smaller folder is fully covered by the keep folder"
             if action == "quarantine_folder"
             else "folder overlap is not complete; review unique files before taking action"
         )
+        if protected_match is not None:
+            action = "ignore"
+            reason = f"source folder is inside safe folder: {protected_match}"
         if source.path in planned_sources:
             action = "ignore"
             reason = "folder is already planned by an exact duplicate group"
@@ -460,6 +493,10 @@ def build_pack_plan(report_path: Path, output_path: Path | None = None, quiet: b
                 smaller_folder_coverage=candidate.smaller_folder_coverage,
                 larger_folder_coverage=candidate.larger_folder_coverage,
                 files=files,
+                protected_by=protected_match,
+                keep_protected_by=keep_protected_by,
+                preservation_evidence=evidence(Path(source.path), rules, include_extension=False),
+                keep_preservation_evidence=keep_evidence,
             )
         )
         if action == "quarantine_folder":
@@ -471,6 +508,8 @@ def build_pack_plan(report_path: Path, output_path: Path | None = None, quiet: b
         root=report.root,
         db_path=report.db_path,
         source_report=str(report_path),
+        safe_folders=list(rules.safe_folders),
+        preservation_priority=rules.model(),
         summary=_summarize_plan(entries),
         entries=entries,
         errors=errors,
@@ -638,6 +677,7 @@ def apply_pack_plan(
     log_path: Path | None = None,
     require_reviewed: bool = False,
     quiet: bool = False,
+    safe_folders: list[Path] | None = None,
 ) -> PackApplyResult:
     """Apply a reviewed pack plan by quarantining redundant folders."""
     raw_plan = json.loads(plan_path.read_text())
@@ -646,6 +686,9 @@ def apply_pack_plan(
         db_path = Path(plan.db_path)
     if quarantine_dir is None and not dry_run:
         quarantine_dir = _default_quarantine_dir(plan_path)
+    effective_rules = build_preservation_rules(
+        safe_folders=[Path(folder) for folder in plan.safe_folders] + list(safe_folders or [])
+    )
 
     approved = set(raw_plan.get("review", {}).get("approved_groups", []))
     result = PackApplyResult(
@@ -667,6 +710,16 @@ def apply_pack_plan(
             continue
         if require_reviewed and index not in approved:
             result.errors.append({"path": entry.folder_path, "error": f"group {index + 1} is not approved"})
+            continue
+        protected_match = preservation_protected_by(Path(entry.folder_path), effective_rules)
+        if protected_match is not None:
+            result.errors.append(
+                {
+                    "path": entry.folder_path,
+                    "safe_folder": protected_match,
+                    "error": "source folder is protected by safe folder",
+                }
+            )
             continue
         validation_errors = _validate_pack_entry(entry, db_path=db_path)
         if validation_errors:

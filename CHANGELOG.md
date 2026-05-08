@@ -7,6 +7,20 @@ versioning once public releases begin.
 
 ## Unreleased
 
+- Added preservation-priority evidence for duplicate keep decisions. `sfx
+  dedupe --output PLAN --prefer-folder PATH --prefer-extension EXT` and `sfx
+  packs plan --prefer-folder PATH` store ordered rule evidence in generated
+  plans and use those rules when choosing keep copies.
+- Added exact dedupe safe-folder protection. `sfx dedupe --output PLAN
+  --safe-folder PATH` records protected folders, prefers protected duplicate
+  files as keep copies, and marks protected extra copies as ignored. `sfx
+  dedupe --apply PLAN --safe-folder PATH` re-checks protections before
+  quarantine or deletion.
+- Added pack safe-folder protection. `sfx packs plan --safe-folder PATH`
+  records protected folders, prefers protected exact-duplicate folders as keep
+  copies, and marks protected sources as ignored. `sfx packs apply
+  --safe-folder PATH` also re-checks protections before moving folders so older
+  plans cannot quarantine newly protected paths.
 - Added `sfx ucs` Typer app with `import`, `info`, and `categories`
   subcommands. Parses the official `Soundminer/_categorylist.csv` shipped in
   `UCS Release.zip`, normalizes 753 UCS v8.2.1 entries into a versioned JSON

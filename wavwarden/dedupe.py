@@ -12,6 +12,7 @@ from rich.table import Table
 from wavwarden import __version__
 from wavwarden.db import get_connection
 from wavwarden.models import DedupeApplyResult, DedupeGroup, DedupeReviewResult, DedupeSummary
+from wavwarden.preservation import build_preservation_rules, evidence, priority_key, protected_by
 from wavwarden.utils import fmt_bytes
 
 console = Console()
@@ -116,8 +117,16 @@ def write_dedupe_plan(
     plan_path: Path,
     db_path: Path | None = None,
     quiet: bool = False,
+    safe_folders: list[Path] | None = None,
+    prefer_folders: list[Path] | None = None,
+    prefer_extensions: list[str] | None = None,
 ) -> None:
     """Write JSON plan: for each group, mark all but the first as 'remove'."""
+    rules = build_preservation_rules(
+        safe_folders=safe_folders,
+        prefer_folders=prefer_folders,
+        prefer_extensions=prefer_extensions,
+    )
     root = None
     if db_path is not None:
         conn = get_connection(db_path)
@@ -132,17 +141,34 @@ def write_dedupe_plan(
         "tool_version": __version__,
         "db_path": str(db_path) if db_path is not None else None,
         "root": root,
+        "safe_folders": list(rules.safe_folders),
+        "preservation_priority": rules.model(),
         "groups": [],
     }
     for group in groups:
         entries = []
-        for i, f in enumerate(group.files):
+        ordered_files = sorted(group.files, key=lambda file_path: priority_key(Path(file_path), rules))
+        keep_path = ordered_files[0] if ordered_files else None
+        keep_protected_by = protected_by(Path(keep_path), rules) if keep_path is not None else None
+        keep_evidence = evidence(Path(keep_path), rules) if keep_path is not None else []
+        for i, f in enumerate(ordered_files):
+            file_path = Path(f)
+            protected_match = protected_by(file_path, rules)
+            action = "keep" if i == 0 else ("ignore" if protected_match is not None else "remove")
+            reason = None
+            if action == "ignore":
+                reason = f"file is inside safe folder: {protected_match}"
             entries.append(
                 {
                     "path": f,
-                    "action": "keep" if i == 0 else "remove",
+                    "action": action,
                     "hash": group.hash,
                     "size_bytes": group.size_bytes,
+                    **({"reason": reason} if reason is not None else {}),
+                    **({"protected_by": protected_match} if protected_match is not None else {}),
+                    **({"keep_protected_by": keep_protected_by} if keep_protected_by is not None else {}),
+                    **({"preservation_evidence": evidence(file_path, rules)} if evidence(file_path, rules) else {}),
+                    **({"keep_preservation_evidence": keep_evidence} if keep_evidence else {}),
                 }
             )
         plan["groups"].append(entries)
@@ -213,6 +239,7 @@ def apply_dedupe_plan(
     permanent_delete: bool = False,
     require_reviewed: bool = False,
     quiet: bool = False,
+    safe_folders: list[Path] | None = None,
 ) -> DedupeApplyResult:
     """Execute a reviewed dedupe plan.
 
@@ -223,6 +250,9 @@ def apply_dedupe_plan(
     plan = json.loads(plan_path.read_text())
     result = DedupeApplyResult(dry_run=dry_run)
     affected_paths: list[str] = []
+    rules = build_preservation_rules(
+        safe_folders=[Path(folder) for folder in plan.get("safe_folders", [])] + list(safe_folders or [])
+    )
     if quarantine_dir is None and not dry_run and not permanent_delete:
         quarantine_dir = _default_quarantine_dir(plan_path)
     if quarantine_dir is not None:
@@ -245,6 +275,18 @@ def apply_dedupe_plan(
             p = Path(entry["path"])
             sz = entry.get("size_bytes", 0)
             expected_hash = entry.get("hash")
+            protected_match = protected_by(p, rules)
+            if protected_match is not None:
+                result.errors.append(
+                    {
+                        "path": str(p),
+                        "safe_folder": protected_match,
+                        "error": "file is protected by safe folder",
+                    }
+                )
+                if not quiet:
+                    console.print(f"[red]Refusing protected file:[/red] {p}")
+                continue
             validation_error = _validate_remove_candidate(p, sz, expected_hash)
             if validation_error is not None:
                 result.errors.append({"path": str(p), "error": validation_error})

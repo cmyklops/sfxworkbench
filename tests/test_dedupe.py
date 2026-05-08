@@ -165,6 +165,66 @@ def test_write_dedupe_plan(tmp_db: Path, tmp_path: Path) -> None:
     assert actions.count("remove") == 2
 
 
+def test_write_dedupe_plan_prefers_safe_folder_keep_and_ignores_protected_copies(tmp_db: Path, tmp_path: Path) -> None:
+    safe = tmp_path / "Master"
+    protected_keep = safe / "a.wav"
+    protected_duplicate = safe / "b.wav"
+    duplicate = tmp_path / "Imports" / "c.wav"
+    _seed_files(
+        tmp_db,
+        [
+            {"path": str(duplicate), "md5": "AAA", "size": 100},
+            {"path": str(protected_duplicate), "md5": "AAA", "size": 100},
+            {"path": str(protected_keep), "md5": "AAA", "size": 100},
+        ],
+    )
+    groups = find_duplicates(tmp_db)
+    plan_path = tmp_path / "plan.json"
+
+    write_dedupe_plan(groups, plan_path, safe_folders=[safe], quiet=True)
+
+    plan = json.loads(plan_path.read_text())
+    entries = plan["groups"][0]
+    assert plan["safe_folders"] == [str(safe.resolve())]
+    assert entries[0]["path"] == str(protected_keep)
+    assert entries[0]["action"] == "keep"
+    assert entries[0]["protected_by"] == str(safe.resolve())
+    assert entries[1]["path"] == str(protected_duplicate)
+    assert entries[1]["action"] == "ignore"
+    assert entries[1]["reason"].startswith("file is inside safe folder")
+    assert entries[2]["path"] == str(duplicate)
+    assert entries[2]["action"] == "remove"
+    assert entries[2]["keep_protected_by"] == str(safe.resolve())
+
+
+def test_write_dedupe_plan_uses_preferred_folder_and_extension(tmp_db: Path, tmp_path: Path) -> None:
+    preferred = tmp_path / "Preferred"
+    wav = preferred / "sound.wav"
+    aif = tmp_path / "Imports" / "sound.aif"
+    flac = tmp_path / "Imports" / "sound.flac"
+    _seed_files(
+        tmp_db,
+        [
+            {"path": str(aif), "md5": "AAA", "size": 100},
+            {"path": str(flac), "md5": "AAA", "size": 100},
+            {"path": str(wav), "md5": "AAA", "size": 100},
+        ],
+    )
+    groups = find_duplicates(tmp_db)
+    plan_path = tmp_path / "plan.json"
+
+    write_dedupe_plan(groups, plan_path, prefer_folders=[preferred], prefer_extensions=["wav"], quiet=True)
+
+    entries = json.loads(plan_path.read_text())["groups"][0]
+    assert entries[0]["path"] == str(wav)
+    assert entries[0]["action"] == "keep"
+    assert entries[0]["preservation_evidence"] == [
+        {"rule": "prefer_folder", "value": str(preferred.resolve())},
+        {"rule": "prefer_extension", "value": ".wav"},
+    ]
+    assert entries[1]["keep_preservation_evidence"] == entries[0]["preservation_evidence"]
+
+
 def test_review_dedupe_plan_approves_all_groups(tmp_path: Path) -> None:
     plan_path = tmp_path / "plan.json"
     plan_path.write_text(
@@ -266,6 +326,48 @@ def test_apply_dedupe_can_require_reviewed_plan(tmp_path: Path) -> None:
     assert applied.errors == []
     assert applied.quarantined == 1
     assert not b.exists()
+
+
+def test_apply_dedupe_refuses_cli_safe_folder_even_for_old_plan(tmp_path: Path) -> None:
+    a = tmp_path / "keep.wav"
+    b = tmp_path / "Protected" / "drop.wav"
+    a.parent.mkdir(parents=True, exist_ok=True)
+    b.parent.mkdir(parents=True, exist_ok=True)
+    a.write_bytes(b"audio")
+    b.write_bytes(b"audio")
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "groups": [
+                    [
+                        {"path": str(a), "action": "keep", "size_bytes": 5},
+                        {"path": str(b), "action": "remove", "size_bytes": 5},
+                    ]
+                ]
+            }
+        )
+    )
+    review_dedupe_plan(plan_path, approve_all=True, quiet=True)
+
+    result = apply_dedupe_plan(
+        plan_path,
+        dry_run=False,
+        quarantine_dir=tmp_path / "q",
+        require_reviewed=True,
+        safe_folders=[b.parent],
+        quiet=True,
+    )
+
+    assert result.quarantined == 0
+    assert b.exists()
+    assert result.errors == [
+        {
+            "path": str(b),
+            "safe_folder": str(b.parent.resolve()),
+            "error": "file is protected by safe folder",
+        }
+    ]
 
 
 def test_apply_dedupe_removes_files_and_updates_db(tmp_db: Path, tmp_path: Path) -> None:

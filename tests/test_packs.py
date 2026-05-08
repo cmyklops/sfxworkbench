@@ -272,6 +272,115 @@ def test_pack_plan_marks_partial_overlap_review_only(tmp_path: Path, tmp_db: Pat
     assert plan.entries[0].reason.startswith("folder overlap is not complete")
 
 
+def test_pack_plan_prefers_safe_folder_keep_and_ignores_protected_sources(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    safe = root / "Protected"
+    protected_keep = safe / "A Pack"
+    protected_duplicate = safe / "B Pack"
+    duplicate = root / "Imports" / "C Pack"
+    files = [
+        {"path": protected_keep / "one.wav", "md5": "A", "size": 10},
+        {"path": protected_duplicate / "one.wav", "md5": "A", "size": 10},
+        {"path": duplicate / "one.wav", "md5": "A", "size": 10},
+    ]
+    _write_pack_files(files)
+    _seed_files(tmp_db, files)
+    report_path = tmp_path / "pack_report.json"
+    write_pack_audit_report(audit_packs(root, tmp_db, min_files=1), report_path, quiet=True)
+
+    plan = build_pack_plan(report_path, safe_folders=[safe], quiet=True)
+
+    assert plan.safe_folders == [str(safe.resolve())]
+    assert plan.summary.quarantine_entries == 1
+    assert plan.summary.ignored_entries >= 1
+    assert plan.summary.protected_entries == 1
+    quarantine_entry = next(entry for entry in plan.entries if entry.action == "quarantine_folder")
+    protected_entry = next(entry for entry in plan.entries if entry.protected_by is not None)
+    assert quarantine_entry.folder_path == str(duplicate)
+    assert quarantine_entry.keep_folder_path == str(protected_keep)
+    assert quarantine_entry.keep_protected_by == str(safe.resolve())
+    assert protected_entry.folder_path == str(protected_duplicate)
+    assert protected_entry.protected_by == str(safe.resolve())
+    assert protected_entry.reason.startswith("source folder is inside safe folder")
+
+
+def test_pack_plan_uses_preferred_folder_for_exact_duplicate_keep(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    preferred = root / "Preferred"
+    preferred_pack = preferred / "A Pack"
+    duplicate = root / "Imports" / "B Pack"
+    files = [
+        {"path": duplicate / "one.wav", "md5": "A", "size": 10},
+        {"path": preferred_pack / "one.wav", "md5": "A", "size": 10},
+    ]
+    _write_pack_files(files)
+    _seed_files(tmp_db, files)
+    report_path = tmp_path / "pack_report.json"
+    write_pack_audit_report(audit_packs(root, tmp_db, min_files=1), report_path, quiet=True)
+
+    plan = build_pack_plan(report_path, prefer_folders=[preferred], quiet=True)
+
+    assert plan.preservation_priority["rules"] == [{"rule": "prefer_folder", "values": [str(preferred.resolve())]}]
+    assert plan.entries[0].folder_path == str(duplicate)
+    assert plan.entries[0].keep_folder_path == str(preferred_pack)
+    assert plan.entries[0].keep_preservation_evidence == [{"rule": "prefer_folder", "value": str(preferred.resolve())}]
+
+
+def test_pack_plan_does_not_quarantine_larger_overlap_to_save_safe_smaller_folder(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    safe = root / "Master"
+    smaller = safe / "Pack v1"
+    larger = root / "Imports" / "Pack v2"
+    files = [
+        {"path": smaller / "one.wav", "md5": "A", "size": 10},
+        {"path": larger / "one.wav", "md5": "A", "size": 10},
+        {"path": larger / "two.wav", "md5": "B", "size": 10},
+    ]
+    _write_pack_files(files)
+    _seed_files(tmp_db, files)
+    report_path = tmp_path / "pack_report.json"
+    write_pack_audit_report(audit_packs(root, tmp_db, min_files=1, overlap_threshold=0.5), report_path, quiet=True)
+
+    plan = build_pack_plan(report_path, safe_folders=[safe], quiet=True)
+
+    overlap_entries = [entry for entry in plan.entries if entry.source_type == "pack_overlap"]
+    assert overlap_entries[0].folder_path == str(smaller)
+    assert overlap_entries[0].action == "ignore"
+    assert overlap_entries[0].protected_by == str(safe.resolve())
+    assert not any(entry.folder_path == str(larger) and entry.action == "quarantine_folder" for entry in plan.entries)
+
+
+def test_pack_apply_refuses_cli_safe_folder_even_for_old_plan(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    keep = root / "A Pack"
+    duplicate = root / "B Pack"
+    files = [
+        {"path": keep / "one.wav", "md5": "A", "size": 10},
+        {"path": duplicate / "one.wav", "md5": "A", "size": 10},
+    ]
+    plan_path = _pack_plan_for_files(tmp_path, tmp_db, root, files)
+    review_pack_plan(plan_path, approve_all=True, quiet=True)
+
+    result = apply_pack_plan(
+        plan_path,
+        db_path=tmp_db,
+        safe_folders=[duplicate],
+        require_reviewed=True,
+        dry_run=False,
+        quiet=True,
+    )
+
+    assert result.quarantined == 0
+    assert duplicate.exists()
+    assert result.errors == [
+        {
+            "path": str(duplicate),
+            "safe_folder": str(duplicate.resolve()),
+            "error": "source folder is protected by safe folder",
+        }
+    ]
+
+
 def test_pack_apply_rejects_changed_size_before_quarantine(tmp_path: Path, tmp_db: Path) -> None:
     root = tmp_path / "library"
     keep = root / "A Pack"

@@ -78,8 +78,11 @@ uv run sfx audit
 # 4. Find exact duplicates.
 uv run sfx dedupe --summary-only
 uv run sfx dedupe --output ~/reports/dedupe_plan.json
+uv run sfx dedupe --output ~/reports/dedupe_plan.json --safe-folder ~/CommercialLibraries/Master
+uv run sfx dedupe --output ~/reports/dedupe_plan.json --prefer-folder ~/CommercialLibraries/Master --prefer-extension wav
 uv run sfx dedupe --review ~/reports/dedupe_plan.json --approve-all
 uv run sfx dedupe --apply ~/reports/dedupe_plan.json --require-reviewed
+uv run sfx dedupe --apply ~/reports/dedupe_plan.json --safe-folder ~/CommercialLibraries/Master --require-reviewed
 
 # 5. Preview portable filename cleanup.
 uv run sfx rename PATH --pattern portable

@@ -68,15 +68,36 @@ Planned behavior:
   folder
 - tests proving safe folders block quarantine, deletion, rename, and conversion
 
+First implemented slice:
+
+- `sfx dedupe --output PLAN --safe-folder PATH` records protected folders in
+  the plan, prefers protected duplicate files as keep copies, and marks
+  protected extra copies as ignored rather than remove candidates.
+- `sfx dedupe --apply PLAN --safe-folder PATH` combines CLI overrides with
+  plan-recorded safe folders and refuses to quarantine or delete protected
+  files, including for older plans.
+- `sfx packs plan --safe-folder PATH` records protected folders in the plan,
+  prefers protected exact duplicates as keep folders, and marks protected
+  sources as ignored rather than quarantine candidates.
+- `sfx packs apply --safe-folder PATH` combines CLI overrides with plan-recorded
+  safe folders and refuses to move protected source folders, including for older
+  plans.
+
 ### Preservation Priority
 
 When duplicates exist, wavwarden should explain which copy it recommends keeping
 and why. The user should be able to tune these rules before plan generation.
 
-Potential keep rules:
+Implemented initial CLI rule inputs:
+
+- prefer safe folders
+- prefer folders, inspired by Sononym's duplicate review workflow
+- prefer file extensions for exact-file dedupe, inspired by Sononym's extension
+  preference action
+
+Potential later keep rules:
 
 - prefer paths outside import/download/staging folders
-- prefer safe folders
 - prefer higher sample rate or bit depth only as tie-breakers, not as a cleanup
   command
 - prefer files with BWF/iXML/RIFF INFO metadata

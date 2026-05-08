@@ -1,8 +1,12 @@
 # Pack And Folder Duplicate Detection
 
 wavwarden's exact `sfx dedupe` workflow catches byte-identical files across a
-library. Professional studio libraries also need a higher-level workflow for
-duplicated or overlapping packs, bundles, vendor folders, and import dumps.
+library. It supports repeated `--safe-folder PATH` options during plan and
+apply so protected duplicate files are kept or ignored rather than removed, and
+repeated `--prefer-folder PATH` / `--prefer-extension EXT` options during plan
+generation so keep decisions are explainable.
+Professional studio libraries also need a higher-level workflow for duplicated
+or overlapping packs, bundles, vendor folders, and import dumps.
 
 Pack duplicate detection is a review workflow, not an automatic delete
 workflow. The default action should be report or quarantine, with merge behavior
@@ -30,8 +34,11 @@ Implemented:
 ```bash
 uv run sfx packs audit PATH --db ~/.wavwarden/index.db --output ~/reports/pack_overlap_report.json
 uv run sfx packs plan --report ~/reports/pack_overlap_report.json --output ~/reports/pack_consolidation_plan.json
+uv run sfx packs plan --report ~/reports/pack_overlap_report.json --safe-folder ~/CommercialLibraries/Master --output ~/reports/pack_consolidation_plan.json
+uv run sfx packs plan --report ~/reports/pack_overlap_report.json --prefer-folder ~/CommercialLibraries/Master --output ~/reports/pack_consolidation_plan.json
 uv run sfx packs review ~/reports/pack_consolidation_plan.json --approve-group 1
 uv run sfx packs apply ~/reports/pack_consolidation_plan.json --require-reviewed
+uv run sfx packs apply ~/reports/pack_consolidation_plan.json --safe-folder ~/CommercialLibraries/Master --require-reviewed
 uv run sfx packs apply ~/reports/pack_consolidation_plan.json --apply --require-reviewed --log pack_quarantine_log.json
 uv run sfx packs undo pack_quarantine_log.json --apply
 ```
@@ -97,6 +104,7 @@ Pack consolidation plans are versioned JSON and include:
 - `root`
 - `db_path`
 - source report path
+- preservation-priority rules and per-entry evidence when preferences were used
 - candidate group id and source type
 - source folder path
 - recommended keep folder path
@@ -111,7 +119,14 @@ Pack consolidation plans are versioned JSON and include:
 Current apply behavior:
 
 - Refuse unreviewed groups when `--require-reviewed` is set.
-- Skip or mark candidates protected by safe folders.
+- Skip or mark candidates protected by safe folders. `packs plan` accepts
+  repeated `--safe-folder PATH` options, prefers protected exact-duplicate
+  folders as keep copies, records safe-folder evidence in the plan, and marks
+  protected sources as `ignore` instead of quarantine candidates.
+- Prefer folders when requested with repeated `--prefer-folder PATH` options and
+  record the matching evidence in the generated plan.
+- Re-check plan safe folders and any `packs apply --safe-folder PATH` overrides
+  before moving a folder, so older plans cannot quarantine a now-protected path.
 - Validate every planned path still exists.
 - Recheck planned file size and hashes before moving anything.
 - Refuse stale plans when the SQLite index now contains additional files under
