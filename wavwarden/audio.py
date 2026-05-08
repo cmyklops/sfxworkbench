@@ -51,6 +51,75 @@ def _walk_riff_chunks(path: Path) -> tuple[bool, bool]:
     return has_bext, has_ixml
 
 
+def _read_riff_pcm_fallback(path: Path) -> AudioInfo | None:
+    """Recover basic WAV properties when libsndfile rejects malformed side chunks."""
+    try:
+        with open(path, "rb") as f:
+            header = f.read(12)
+            if len(header) < 12:
+                return None
+            riff_id, _, wave_id = struct.unpack_from("<4sI4s", header)
+            if riff_id not in (b"RIFF", b"RF64") or wave_id != b"WAVE":
+                return None
+
+            fmt: bytes | None = None
+            data_size: int | None = None
+            while True:
+                hdr = f.read(8)
+                if len(hdr) < 8:
+                    break
+                chunk_id, chunk_size = struct.unpack_from("<4sI", hdr)
+                chunk_start = f.tell()
+                if chunk_id == b"fmt ":
+                    fmt = f.read(min(chunk_size, 64))
+                    f.seek(chunk_start + chunk_size + (chunk_size % 2))
+                elif chunk_id == b"data":
+                    data_size = chunk_size
+                    f.seek(chunk_size + (chunk_size % 2), 1)
+                else:
+                    f.seek(chunk_size + (chunk_size % 2), 1)
+                if fmt is not None and data_size is not None:
+                    break
+    except Exception:
+        return None
+
+    if fmt is None or data_size is None or len(fmt) < 16:
+        return None
+    try:
+        audio_format, channels, sample_rate, _, block_align, bits_per_sample = struct.unpack_from("<HHIIHH", fmt)
+    except struct.error:
+        return None
+    if channels <= 0 or sample_rate <= 0 or block_align <= 0:
+        return None
+
+    subtype = None
+    bit_depth = int(bits_per_sample) if bits_per_sample else None
+    if audio_format == 1:
+        subtype = f"PCM_{bits_per_sample}" if bits_per_sample else "PCM"
+    elif audio_format == 3:
+        subtype = "FLOAT"
+        bit_depth = bits_per_sample or 32
+    elif audio_format == 0xFFFE and len(fmt) >= 40:
+        valid_bits = struct.unpack_from("<H", fmt, 18)[0]
+        bit_depth = int(valid_bits or bits_per_sample)
+        subtype = f"PCM_{bit_depth}" if bit_depth else "WAVE_FORMAT_EXTENSIBLE"
+    else:
+        return None
+
+    frames = data_size // block_align
+    has_bext, has_ixml = _walk_riff_chunks(path)
+    return AudioInfo(
+        sample_rate=sample_rate,
+        bit_depth=bit_depth,
+        channels=channels,
+        duration_s=round(frames / sample_rate, 3),
+        subtype=subtype,
+        has_bext=has_bext,
+        has_ixml=has_ixml,
+        metadata_sources=["riff_fallback", "riff_walk"],
+    )
+
+
 def _scope_has_payload(scope: object) -> bool:
     if scope is None:
         return False
@@ -99,6 +168,10 @@ def read_audio_info(path: Path) -> AudioInfo:
     try:
         info = sf.info(str(path))
     except Exception as e:
+        if path.suffix.lower() in (".wav", ".rf64"):
+            fallback = _read_riff_pcm_fallback(path)
+            if fallback is not None:
+                return fallback
         return AudioInfo(error=str(e))
 
     subtype = info.subtype if hasattr(info, "subtype") else None

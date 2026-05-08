@@ -21,15 +21,15 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
 
 Current audit focus:
 
-- 9 scan errors remain.
+- Scan errors: cleared with RIFF fallback reader for malformed side chunks.
 - 1,910 risky-character filename issues remain.
 - 17 non-ASCII filename issues remain.
 
 ## Next
 
-1. Review the remaining 9 scan errors.
-2. Add folder organization to the roadmap and then build a report-only preview.
-3. Inspect top-level numbered folders before any organization apply.
+1. Add folder organization to the roadmap and then build a report-only preview.
+2. Inspect top-level numbered folders before any organization apply.
+3. Review risky-character filename issues.
 
 ## Later
 

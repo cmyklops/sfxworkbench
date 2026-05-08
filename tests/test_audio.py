@@ -43,6 +43,19 @@ def _make_wav_with_bext(path: Path) -> Path:
     return path
 
 
+def _make_wav_with_malformed_side_chunk(path: Path) -> Path:
+    """Create a WAV that Finder-like readers tolerate but libsndfile may reject."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    bext_data = b"bext" + struct.pack("<I", 602) + b"\x00" * 602
+    malformed = b"\x00mix" + struct.pack("<I", 4) + b"side"
+    fmt_data = b"fmt " + struct.pack("<I", 16) + struct.pack("<HHIIHH", 1, 2, 48000, 192000, 4, 16)
+    data_chunk = b"data" + struct.pack("<I", 48000 * 4) + (b"\x00" * (48000 * 4))
+    inner = bext_data + malformed + fmt_data + data_chunk
+    riff = b"RIFF" + struct.pack("<I", len(inner) + 4) + b"WAVE" + inner
+    path.write_bytes(riff)
+    return path
+
+
 def test_read_audio_info_basic(tmp_path: Path) -> None:
     """AudioInfo should return correct metadata for a simple 44100 Hz mono 16-bit WAV."""
     wav = _make_wav(tmp_path / "test.wav", sample_rate=44100, channels=1, sampwidth=2, nframes=44100)
@@ -60,6 +73,29 @@ def test_read_audio_info_basic(tmp_path: Path) -> None:
     assert info.channels == 1
     assert info.duration_s is not None
     assert abs(info.duration_s - 1.0) < 0.01, f"Expected ~1.0s, got {info.duration_s}"
+
+
+def test_read_audio_info_falls_back_for_malformed_side_chunk(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    wav = _make_wav_with_malformed_side_chunk(tmp_path / "malformed-side.wav")
+
+    class FakeSoundFile:
+        @staticmethod
+        def info(path: str):
+            raise RuntimeError("Error in WAV file. No 'data' chunk marker.")
+
+    monkeypatch.setitem(sys.modules, "soundfile", FakeSoundFile)
+
+    from wavwarden.audio import read_audio_info
+
+    info = read_audio_info(wav)
+
+    assert info.error is None
+    assert info.sample_rate == 48000
+    assert info.channels == 2
+    assert info.bit_depth == 16
+    assert info.duration_s == 1.0
+    assert info.has_bext is True
+    assert "riff_fallback" in info.metadata_sources
 
 
 def test_read_audio_info_stereo(tmp_path: Path) -> None:
