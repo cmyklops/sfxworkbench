@@ -196,7 +196,23 @@ class OrganizeEntry(BaseModel):
 class OrganizeAuditSummary(BaseModel):
     directories_scanned: int = 0
     planned: int = 0
+    candidates: int = 0
     errors: int = 0
+
+
+class NestingCandidate(BaseModel):
+    path: str
+    name: str
+    kind: str
+    suggested_action: str
+    reason: str
+    depth: int
+    parent_path: str | None = None
+    target_path: str | None = None
+    child_dirs: int = 0
+    direct_files: int = 0
+    audio_files: int = 0
+    confidence: str = "medium"
 
 
 class OrganizeAuditReport(BaseModel):
@@ -209,6 +225,7 @@ class OrganizeAuditReport(BaseModel):
     depth: int = 1
     summary: OrganizeAuditSummary
     entries: list[OrganizeEntry] = []
+    candidates: list[NestingCandidate] = []
     errors: list[dict] = []
 
 

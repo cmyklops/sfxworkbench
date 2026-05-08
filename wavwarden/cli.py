@@ -65,7 +65,11 @@ def _main(
 def cmd_organize_audit(
     path: Annotated[Path, typer.Argument(help="Root path of the library to analyze.")],
     pattern: Annotated[
-        str, typer.Option("--pattern", help="Organization pattern. Supported: 'strip-leading-numbers'.")
+        str,
+        typer.Option(
+            "--pattern",
+            help="Organization pattern. Supported: 'strip-leading-numbers', 'redundant-nesting'.",
+        ),
     ] = "strip-leading-numbers",
     depth: Annotated[int, typer.Option("--depth", help="Folder depth under PATH to inspect.")] = 1,
     output: Annotated[

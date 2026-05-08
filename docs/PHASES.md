@@ -32,6 +32,7 @@ uv run sfx dedupe --review dedupe_plan.json --approve-all
 uv run sfx dedupe --apply dedupe_plan.json --require-reviewed
 uv run sfx packs audit PATH --output ~/reports/pack_overlap_report.json
 uv run sfx organize audit PATH --depth 1 --output ~/reports/organize_report.json
+uv run sfx organize audit PATH --pattern redundant-nesting --depth 8 --output ~/reports/nesting_report.json
 uv run sfx organize review organize_report.json --approve-all
 uv run sfx organize apply organize_report.json --require-reviewed --log organize_log.json
 uv run sfx organize undo organize_log.json --apply
@@ -66,6 +67,7 @@ python3 audit.py ~/CommercialLibraries --json
 - `dedupe --apply`: validates size/hash and quarantines by default; use `--require-reviewed` to refuse unapproved plans.
 - `packs audit`: report-only exact duplicate folder and pack-overlap detection; no filesystem or SQLite mutation.
 - `organize audit/review/apply/undo`: safe folder-structure cleanup with review gate, SQLite path updates, and undo log.
+- `organize audit --pattern redundant-nesting`: report-only folder-structure review for repeated names, one-child chains, and low-value wrappers.
 - `rename`: previews UCS-oriented or safe filename/path changes, refuses collisions, applies with undo log. `--allow-partial` can apply valid entries while keeping unresolved collisions visible in the result.
 
 ## Phase 2 — Cleanup Tooling
@@ -89,12 +91,20 @@ top-level folder changes such as `01 Vendor Pack` -> `Vendor Pack` for
 alphabetized browsing and easier bulk edits. Apply requires a reviewed report,
 refuses collisions, updates SQLite paths, and writes an undo log.
 
-Next organization audits should stay report-first:
+The next organization audit is implemented as report-only:
+`sfx organize audit PATH --pattern redundant-nesting --depth 8`, flagging:
 
 - redundant one-child folder chains
 - repeated folder names such as `Vendor/Pack/Pack`
 - low-value wrapper folders such as `WAV`, `Audio`, or `Files` when they add no
   meaningful category
+
+It intentionally does not feed `sfx organize apply` yet because flattening may
+require merge choices. A future reviewed plan/apply step can promote selected
+candidates once those merge rules are explicit.
+
+Future organization audits should stay report-first:
+
 - related sound groups/collections inferred from path tokens, filename stems,
   numbered takes, channel pairs, UCS categories, metadata, and exact/perceptual
   similarity
@@ -214,7 +224,7 @@ Command contracts:
 - `dedupe --review PLAN --json`: includes review counts and output path.
 - `dedupe --apply PLAN --json`: includes `result`; default apply quarantines files.
 - `packs audit PATH --json`: includes `root`, `db_path`, optional `report_path`, and a versioned report with summary counts, exact duplicate folder groups, and overlap candidates.
-- `organize audit PATH --json`: includes `root`, optional `report_path`, and a versioned report with proposed folder renames and collision errors.
+- `organize audit PATH --json`: includes `root`, optional `report_path`, and a versioned report with proposed folder renames, report-only nesting candidates, and collision errors.
 - `organize review REPORT --json`: includes review counts and output path.
 - `organize apply REPORT --json`: includes apply result and undo log path.
 - `organize undo LOG --apply --json`: includes undo result.

@@ -20,6 +20,9 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
 - Unicode normalization duplicates: quarantined.
 - Pack overlap report: zero exact-hash pack candidates after dedupe.
 - Top-level numeric sort-prefix folder organization: applied.
+- Redundant nesting audit: report-only CLI pattern added and run.
+- Redundant nesting report: `/Users/mattwesdock/reports/redundant_nesting_report_20260508.json`
+  found 52 candidates: 30 one-child chains, 12 repeated folder names, 10 low-value wrappers.
 
 Current audit focus:
 
@@ -29,7 +32,7 @@ Current audit focus:
 
 ## Next
 
-1. Add report-only redundant nesting audit.
+1. Review redundant nesting report and decide which candidate types should get reviewed plan/apply.
 2. Add report-only related sound groups/collections audit.
 3. Review risky-character filename issues.
 

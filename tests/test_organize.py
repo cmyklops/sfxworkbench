@@ -74,6 +74,7 @@ def test_organize_audit_rejects_unknown_pattern(tmp_path: Path) -> None:
         audit_organization(root, pattern="unknown")
     except ValueError as e:
         assert "strip-leading-numbers" in str(e)
+        assert "redundant-nesting" in str(e)
     else:
         raise AssertionError("Expected ValueError")
 
@@ -120,6 +121,66 @@ def test_apply_organize_report_requires_review(tmp_path: Path) -> None:
     assert result.renamed == 0
     assert result.errors
     assert source.exists()
+
+
+def test_redundant_nesting_reports_repeated_folder_names(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    audio = root / "Vendor" / "Pack" / "Pack" / "hit.wav"
+    audio.parent.mkdir(parents=True)
+    audio.write_bytes(b"audio")
+
+    report = audit_organization(root, pattern="redundant-nesting", depth=4)
+
+    repeated = [candidate for candidate in report.candidates if candidate.kind == "repeated_folder_name"]
+    assert report.entries == []
+    assert report.summary.candidates >= 1
+    assert repeated[0].path == str(audio.parent)
+    assert repeated[0].target_path == str(audio.parent.parent)
+    assert repeated[0].confidence == "high"
+
+
+def test_redundant_nesting_reports_single_child_chains(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    audio = root / "Vendor" / "Wrapper" / "Only Child" / "hit.wav"
+    audio.parent.mkdir(parents=True)
+    audio.write_bytes(b"audio")
+
+    report = audit_organization(root, pattern="redundant-nesting", depth=4)
+
+    chains = [candidate for candidate in report.candidates if candidate.kind == "single_child_chain"]
+    assert any(candidate.path == str(root / "Vendor" / "Wrapper") for candidate in chains)
+    assert all(candidate.suggested_action == "review_collapse_wrapper" for candidate in chains)
+
+
+def test_redundant_nesting_reports_low_value_wrappers(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    audio = root / "Vendor" / "Pack" / "WAV" / "hit.wav"
+    audio.parent.mkdir(parents=True)
+    audio.write_bytes(b"audio")
+
+    report = audit_organization(root, pattern="redundant-nesting", depth=4)
+
+    wrappers = [candidate for candidate in report.candidates if candidate.kind == "low_value_wrapper"]
+    assert wrappers[0].path == str(audio.parent)
+    assert wrappers[0].target_path == str(audio.parent.parent)
+    assert wrappers[0].audio_files == 1
+
+
+def test_redundant_nesting_report_is_not_applyable(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    wrapper = root / "Vendor" / "Wrapper" / "Only Child"
+    wrapper.mkdir(parents=True)
+    (wrapper / "hit.wav").write_bytes(b"audio")
+    report = audit_organization(root, pattern="redundant-nesting", depth=4)
+    report_path = tmp_path / "nesting.json"
+    write_organize_audit_report(report, report_path, quiet=True)
+
+    result = apply_organize_report(report_path, require_reviewed=False, quiet=True)
+
+    assert result.renamed == 0
+    assert result.errors
+    assert "report-only" in result.errors[0]["error"]
+    assert wrapper.exists()
 
 
 def test_apply_and_undo_organize_report_updates_filesystem_and_db(tmp_path: Path, tmp_db: Path) -> None:

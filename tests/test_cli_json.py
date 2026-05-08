@@ -90,3 +90,34 @@ def test_organize_audit_json(tmp_library, tmp_path) -> None:
     undo = runner.invoke(app, ["organize", "undo", str(log), "--apply", "--json"])
     assert undo.exit_code == 0
     assert json.loads(undo.stdout)["command"] == "organize_undo"
+
+
+def test_organize_redundant_nesting_json(tmp_library, tmp_path) -> None:
+    audio = tmp_library / "Vendor" / "Pack" / "Pack" / "hit.wav"
+    audio.parent.mkdir(parents=True)
+    audio.write_bytes(b"audio")
+    out = tmp_path / "nesting.json"
+
+    organize = runner.invoke(
+        app,
+        [
+            "organize",
+            "audit",
+            str(tmp_library),
+            "--pattern",
+            "redundant-nesting",
+            "--depth",
+            "4",
+            "--output",
+            str(out),
+            "--json",
+        ],
+    )
+
+    assert organize.exit_code == 0
+    payload = json.loads(organize.stdout)
+    assert payload["command"] == "organize_audit"
+    assert payload["report"]["pattern"] == "redundant-nesting"
+    assert payload["report"]["summary"]["candidates"] >= 1
+    assert any(candidate["kind"] == "repeated_folder_name" for candidate in payload["report"]["candidates"])
+    assert out.exists()

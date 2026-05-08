@@ -257,6 +257,7 @@ def test_organize_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library:
             "summary": {
                 "directories_scanned": 5,
                 "planned": 1,
+                "candidates": 0,
                 "errors": 0,
             },
             "entries": [
@@ -269,6 +270,7 @@ def test_organize_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library:
                     "reason": "strip_leading_number",
                 }
             ],
+            "candidates": [],
             "errors": [],
         },
     }
