@@ -7,7 +7,7 @@ from pathlib import Path
 
 from wavwarden.db import get_connection
 from wavwarden.models import RelatedSoundFile, RelatedSoundGroup, UcsCatalog, UcsCatalogProvenance, UcsEntry
-from wavwarden.tag_plan import apply_tag_plan, build_tag_plan, review_tag_plan, write_tag_plan
+from wavwarden.tag_plan import apply_tag_plan, build_tag_plan, review_tag_plan, summarize_tag_plan, write_tag_plan
 from wavwarden.tag_sidecar import build_tag_sidecar_report, import_tag_sidecar, write_tag_sidecar_report
 from wavwarden.tag_suggest import (
     build_tag_suggestion_report,
@@ -47,10 +47,10 @@ def test_ucs_stem_emits_category_subcategory_description_take() -> None:
     suggestions = suggest_from_ucs_stem("SFX_GUNSHOT_PISTOL_01")
     by_field = {s.field: s for s in suggestions}
 
-    assert by_field["category"].value == "SFX"
-    assert by_field["category"].source == "ucs_stem"
-    assert by_field["subcategory"].value == "GUNSHOT"
-    # Description is the human-readable form: title-cased subcategory + remainder.
+    assert by_field["ucs_category"].value == "SFX"
+    assert by_field["ucs_category"].source == "ucs_stem"
+    assert by_field["ucs_subcategory"].value == "GUNSHOT"
+    # Description is the human-readable form: title-cased ucs_subcategory + remainder.
     assert by_field["description"].value == "Gunshot Pistol"
     assert by_field["take_number"].value == "01"
     assert all(s.confidence == 0.75 for s in suggestions)
@@ -60,12 +60,12 @@ def test_ucs_stem_uses_catalog_match_when_available() -> None:
     suggestions = suggest_from_ucs_stem("SFX_GUNSHOT_PISTOL_01", catalog=_sample_catalog())
     by_field = {s.field: s for s in suggestions}
 
-    assert by_field["category"].value == "SOUND EFFECT"
-    assert by_field["category"].source == "ucs_catalog"
-    assert by_field["category"].method == "ucs_catalog_match"
-    assert by_field["category"].confidence == 0.95
-    assert by_field["subcategory"].value == "GUNSHOT"
-    assert "cat_id:SFXGunshot" in by_field["category"].evidence
+    assert by_field["ucs_category"].value == "SOUND EFFECT"
+    assert by_field["ucs_category"].source == "ucs_catalog"
+    assert by_field["ucs_category"].method == "ucs_catalog_match"
+    assert by_field["ucs_category"].confidence == 0.95
+    assert by_field["ucs_subcategory"].value == "GUNSHOT"
+    assert "cat_id:SFXGunshot" in by_field["ucs_category"].evidence
     assert by_field["take_number"].source == "ucs_stem"
 
 
@@ -73,7 +73,7 @@ def test_ucs_stem_with_only_subcategory_and_take() -> None:
     suggestions = suggest_from_ucs_stem("AMB_RAIN_03")
     by_field = {s.field: s for s in suggestions}
 
-    assert by_field["subcategory"].value == "RAIN"
+    assert by_field["ucs_subcategory"].value == "RAIN"
     assert by_field["description"].value == "Rain"
     assert by_field["take_number"].value == "03"
 
@@ -266,13 +266,13 @@ def test_report_combines_ucs_path_group_evidence(tmp_path: Path, tmp_db: Path) -
 
     assert report.summary.files_considered == 3
     assert report.summary.files_with_suggestions == 3
-    # Each file gets: ucs(category, subcategory, description, take) +
+    # Each file gets: ucs(ucs_category, ucs_subcategory, description, take) +
     # group(description, take_number) + path(Impacts, Metal). No filename
     # description (UCS already covered it). 8 suggestions per file.
     sources_used = set(report.summary.by_source.keys())
     assert {"ucs_stem", "group", "path"}.issubset(sources_used)
     fields = set(report.summary.by_field.keys())
-    assert {"category", "subcategory", "description", "take_number"}.issubset(fields)
+    assert {"ucs_category", "ucs_subcategory", "description", "take_number"}.issubset(fields)
 
 
 def test_report_can_use_explicit_ucs_catalog(tmp_path: Path, tmp_db: Path) -> None:
@@ -289,9 +289,34 @@ def test_report_can_use_explicit_ucs_catalog(tmp_path: Path, tmp_db: Path) -> No
     assert report.ucs_catalog_path == str(catalog_path.resolve())
     assert report.ucs_catalog_release_version == "v8.2.1"
     assert report.summary.by_source["ucs_catalog"] == 3
-    suggestion = next(s for s in report.entries[0].suggestions if s.field == "category")
+    suggestion = next(s for s in report.entries[0].suggestions if s.field == "ucs_category")
     assert suggestion.value == "AMBIENCE"
     assert suggestion.confidence == 0.95
+
+
+def test_report_filters_by_source_and_field(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "Ambience"
+    folder.mkdir(parents=True)
+    _seed_files(tmp_db, [{"path": folder / "AMB_RAIN_01.wav", "md5": "A"}])
+
+    catalog_path = tmp_path / "ucs_catalog.json"
+    catalog_path.write_text(json.dumps(_sample_catalog().model_dump()), encoding="utf-8")
+
+    report = build_tag_suggestion_report(
+        root,
+        tmp_db,
+        ucs_catalog_path=catalog_path,
+        sources=["ucs_catalog"],
+        fields=["ucs_category,ucs_subcategory"],
+    )
+
+    assert report.sources == ["ucs_catalog"]
+    assert report.fields == ["ucs_category", "ucs_subcategory"]
+    assert report.summary.total_suggestions == 2
+    assert report.summary.by_source == {"ucs_catalog": 2}
+    assert report.summary.by_field == {"ucs_category": 1, "ucs_subcategory": 1}
+    assert {s.field for s in report.entries[0].suggestions} == {"ucs_category", "ucs_subcategory"}
 
 
 def test_report_min_confidence_filters_low_confidence(tmp_path: Path, tmp_db: Path) -> None:
@@ -394,7 +419,7 @@ def test_tag_plan_review_and_db_apply(tmp_path: Path, tmp_db: Path) -> None:
     assert plan.summary.candidate_entries > 0
     assert plan.summary.approved_entries == 0
     assert all(entry.review_status == "pending" for entry in plan.entries)
-    assert any(entry.field == "category" and entry.proposed_value == "SFX" for entry in plan.entries)
+    assert any(entry.field == "ucs_category" and entry.proposed_value == "SFX" for entry in plan.entries)
 
     plan_path = tmp_path / "tag_plan.json"
     write_tag_plan(plan, plan_path, quiet=True)
@@ -424,7 +449,7 @@ def test_tag_plan_review_and_db_apply(tmp_path: Path, tmp_db: Path) -> None:
     rows = conn.execute("SELECT field, value, source FROM accepted_tags ORDER BY field, value").fetchall()
     apply_logs = conn.execute("SELECT COUNT(*) FROM tag_apply_log").fetchone()[0]
     conn.close()
-    assert ("category", "SFX", "ucs_stem") in [(row["field"], row["value"], row["source"]) for row in rows]
+    assert ("ucs_category", "SFX", "ucs_stem") in [(row["field"], row["value"], row["source"]) for row in rows]
     assert apply_logs == 1
 
     second = apply_tag_plan(
@@ -437,6 +462,91 @@ def test_tag_plan_review_and_db_apply(tmp_path: Path, tmp_db: Path) -> None:
     )
     assert second.applied == 0
     assert second.skipped == plan.summary.candidate_entries
+
+
+def test_tag_plan_filters_source_report_by_source_and_field(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "Ambience"
+    folder.mkdir(parents=True)
+    _seed_files(tmp_db, [{"path": folder / "AMB_RAIN_01.wav", "md5": "A"}])
+
+    catalog_path = tmp_path / "ucs_catalog.json"
+    catalog_path.write_text(json.dumps(_sample_catalog().model_dump()), encoding="utf-8")
+    report = build_tag_suggestion_report(root, tmp_db, ucs_catalog_path=catalog_path, limit=0)
+    report_path = tmp_path / "tag_suggestions.json"
+    write_tag_suggestion_report(report, report_path, quiet=True)
+
+    plan = build_tag_plan(
+        root,
+        db_path=tmp_db,
+        source_report=report_path,
+        sources=["ucs_catalog"],
+        fields=["ucs_category", "ucs_subcategory"],
+    )
+
+    assert plan.sources == ["ucs_catalog"]
+    assert plan.fields == ["ucs_category", "ucs_subcategory"]
+    assert plan.summary.candidate_entries == 2
+    assert {entry.field for entry in plan.entries} == {"ucs_category", "ucs_subcategory"}
+    assert {entry.source for entry in plan.entries} == {"ucs_catalog"}
+
+
+def test_tag_plan_summarize_groups_values_for_review(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "Impacts"
+    folder.mkdir(parents=True)
+    _seed_files(
+        tmp_db,
+        [
+            {"path": folder / "SFX_HIT_01.wav", "md5": "A"},
+            {"path": folder / "SFX_HIT_02.wav", "md5": "B"},
+        ],
+    )
+    plan = build_tag_plan(root, db_path=tmp_db, min_confidence=0.7)
+    plan_path = tmp_path / "tag_plan.json"
+    write_tag_plan(plan, plan_path, quiet=True)
+
+    summary = summarize_tag_plan(plan_path, fields=["ucs_category"], value_limit=10)
+
+    assert summary.total_entries == 2
+    assert summary.by_field == {"ucs_category": 2}
+    assert summary.by_source == {"ucs_stem": 2}
+    assert summary.values[0].field == "ucs_category"
+    assert summary.values[0].value == "SFX"
+    assert summary.values[0].count == 2
+    assert summary.values[0].sample_files == ["SFX_HIT_01.wav", "SFX_HIT_02.wav"]
+
+
+def test_tag_review_selector_approves_and_rejects_batches(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "Ambience"
+    folder.mkdir(parents=True)
+    _seed_files(tmp_db, [{"path": folder / "AMB_RAIN_01.wav", "md5": "A"}])
+    catalog_path = tmp_path / "ucs_catalog.json"
+    catalog_path.write_text(json.dumps(_sample_catalog().model_dump()), encoding="utf-8")
+    plan = build_tag_plan(
+        root,
+        db_path=tmp_db,
+        ucs_catalog_path=catalog_path,
+        min_confidence=0.8,
+        sources=["ucs_catalog"],
+        fields=["ucs_category", "ucs_subcategory"],
+    )
+    plan_path = tmp_path / "tag_plan.json"
+    write_tag_plan(plan, plan_path, quiet=True)
+
+    review = review_tag_plan(
+        plan_path,
+        approve_fields=["ucs_category"],
+        reject_values=["RAIN"],
+        only_status=["pending"],
+        quiet=True,
+    )
+    reviewed = summarize_tag_plan(plan_path, value_limit=0)
+
+    assert review.approved_entries == 1
+    assert review.rejected_entries == 1
+    assert reviewed.by_review_status == {"approved": 1, "rejected": 1}
 
 
 def test_tag_sidecar_export_and_import_round_trip(tmp_path: Path, tmp_db: Path) -> None:
@@ -467,7 +577,7 @@ def test_tag_sidecar_export_and_import_round_trip(tmp_path: Path, tmp_db: Path) 
     assert sidecar.entry_count == 1
     assert sidecar.tag_count == plan.summary.add_entries
     assert sidecar.entries[0].path == str(audio)
-    assert any(tag.field == "category" and tag.value == "SFX" for tag in sidecar.entries[0].tags)
+    assert any(tag.field == "ucs_category" and tag.value == "SFX" for tag in sidecar.entries[0].tags)
 
     conn = get_connection(tmp_db)
     conn.execute("DELETE FROM accepted_tags")
@@ -484,7 +594,7 @@ def test_tag_sidecar_export_and_import_round_trip(tmp_path: Path, tmp_db: Path) 
     conn = get_connection(tmp_db)
     rows = conn.execute("SELECT field, value FROM accepted_tags ORDER BY field, value").fetchall()
     conn.close()
-    assert ("category", "SFX") in [(row["field"], row["value"]) for row in rows]
+    assert ("ucs_category", "SFX") in [(row["field"], row["value"]) for row in rows]
 
 
 def test_summary_confidence_buckets_are_sorted(tmp_path: Path, tmp_db: Path) -> None:

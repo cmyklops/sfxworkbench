@@ -25,6 +25,7 @@ uv run sfx clean ~/CommercialLibraries           # dry-run
 uv run sfx clean ~/CommercialLibraries --apply   # actually remove junk
 uv run sfx scan ~/CommercialLibraries --db ~/.wavwarden/index.db
 uv run sfx metadata audit --db ~/.wavwarden/index.db --output ~/reports/metadata_report.json
+uv run sfx metadata view "FIRE_BURST_SmallBurst_6109.wav" --db ~/.wavwarden/index.db
 uv run sfx metadata backends --json
 uv run sfx metadata backends --bwfmetaedit /path/to/bwfmetaedit --json
 uv run sfx groups audit ~/CommercialLibraries --db ~/.wavwarden/index.db --output ~/reports/related_groups_report.json
@@ -70,10 +71,12 @@ uv run sfx rename ~/CommercialLibraries --pattern ucs --apply --log rename_log.j
 uv run sfx rename ~/CommercialLibraries --pattern safe --apply --allow-partial --log safe_rename_log.json
 uv run sfx rename ~/CommercialLibraries --pattern portable --apply --log portable_rename_log.json
 uv run sfx rename --undo rename_log.json --apply
+uv run sfx tag propose ~/CommercialLibraries --db ~/.wavwarden/index.db --min-confidence 0.6 --output ~/reports/tag_proposals.json
 uv run sfx tag suggest ~/CommercialLibraries --db ~/.wavwarden/index.db --output ~/reports/tag_suggestions.json
-uv run sfx tag suggest ~/CommercialLibraries --db ~/.wavwarden/index.db --min-confidence 0.6 --json
-uv run sfx tag suggest ~/CommercialLibraries --db ~/.wavwarden/index.db --use-ucs-catalog --min-confidence 0.8 --json
-uv run sfx tag plan ~/CommercialLibraries --db ~/.wavwarden/index.db --from-suggestions ~/reports/tag_suggestions.json --output ~/reports/tag_plan.json
+uv run sfx tag suggest ~/CommercialLibraries --db ~/.wavwarden/index.db --use-ucs-catalog --min-confidence 0.8 --source ucs_catalog --field ucs_category --field ucs_subcategory --json
+uv run sfx tag plan ~/CommercialLibraries --db ~/.wavwarden/index.db --from-suggestions ~/reports/tag_suggestions.json --source ucs_catalog --field ucs_category --field ucs_subcategory --output ~/reports/tag_plan.json
+uv run sfx tag summarize ~/reports/tag_plan.json --value-limit 20
+uv run sfx tag review ~/reports/tag_plan.json --approve-field ucs_category --only-status pending
 uv run sfx tag review ~/reports/tag_plan.json --approve-all
 uv run sfx tag apply ~/reports/tag_plan.json --db ~/.wavwarden/index.db --require-reviewed
 uv run sfx tag apply ~/reports/tag_plan.json --db ~/.wavwarden/index.db --require-reviewed --apply --log ~/reports/tag_apply_log.json
@@ -117,6 +120,7 @@ sfx scan PATH  →  audio.read_audio_info()  →  SQLite (files + files_fts)
                   MD5 hash                 →  SQLite (files.md5)
 
 sfx metadata audit → list missing BWF/iXML metadata and unusual sample-rate files
+sfx metadata view QUERY → per-file indexed facts, UCS provenance, and accepted DB-only tags
 sfx metadata backends → report installed external metadata write backends, no audio mutation
 sfx metadata write-plan/review/preview/fixtures/readback → reviewed dry-run embedded metadata write plans, copied fixture bundles, and BEXT readback comparison; no original-audio mutation
 sfx groups audit PATH → infer numbered takes and channel sets → report JSON
@@ -139,8 +143,10 @@ sfx organize audit --pattern vendor-product-folders PATH → reviewed vendor/pro
 sfx organize audit --pattern redundant-nesting PATH → report-only nested-folder review
 sfx organize nesting-plan/apply/undo → reviewed repeated-folder, non-generic single-child, and strict leaf-wrapper flatten workflow
 sfx rename PATH → preview/apply UCS-oriented, safe, or portable names → rename_log_TIMESTAMP.json
-sfx tag suggest PATH → report-only tag suggestions from filename/path/group evidence (Phase B)
-sfx tag plan/review/apply → reviewed DB-only accepted tag writes with apply log
+sfx tag propose PATH → report-only UCS tag proposals from corroborated evidence; filename/UCS-looking stems are weak evidence, not semantic proof
+sfx tag suggest PATH → report-only raw suggestions from filename/path/group/UCS provenance evidence (Phase B debug/evidence feed)
+sfx tag summarize PLAN → report-only tag-plan rollup by field/source/status/value for batch review
+sfx tag plan/review/apply → reviewed DB-only accepted tag writes with selector review and apply log
 sfx tag sidecar-export/import → portable JSON sidecars for accepted DB-only tags
 sfx ucs import SOURCE → parse Soundminer/_categorylist.csv → ~/.wavwarden/ucs_catalog.json
 sfx ucs info → show provenance and entry count of the loaded UCS catalog
@@ -157,6 +163,7 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 - **`clean.py`** — `find_junk()` returns `(junk_files, junk_dirs)`. AppleDouble files (`._*`) bypass the audio-extension safety guard since they're always metadata blobs regardless of apparent extension.
 - **`scan.py`** — incremental: skips files where `mtime + size_bytes` match the existing DB row. Junk detection uses shared `junk.py`; junk files are never indexed.
 - **`metadata_audit.py`** — report-only metadata coverage and unusual sample-rate audit for planning future tagging work.
+- **`metadata_view.py`** — report-only per-file inspector for indexed audio facts, embedded metadata presence flags, UCS parse/catalog match, and accepted DB-only tags.
 - **`metadata_backends.py`** — report-only discovery for future embedded metadata writer backends. Probes BWF MetaEdit path/version and records capability shape without mutating audio.
 - **`metadata_write.py`** — reviewed dry-run embedded metadata write plans. Consumes DB-only `accepted_tags`, maps conservative BWF MetaEdit fields, stamps review status, previews anchor validation plus simulated BWF MetaEdit commands, copies fixture bundles, and compares copied-fixture BEXT readback without mutating original audio.
 - **`groups.py`** — report-only related sound group detection from indexed filename patterns.
@@ -166,8 +173,9 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 - **`packs.py`** — report-only pack/folder duplicate detection. Computes recursive folder signatures from indexed MD5 hashes and reports exact duplicate folders plus high-overlap pack candidates.
 - **`organize.py`** — folder organization preview/review/apply/undo. Conservative numeric sort-prefix removal reuses the rename engine for apply; repeated-folder nesting and non-generic one-child chains have reviewed plan/apply/undo; generic wrappers remain report-only.
 - **`rename.py`** — UCS-oriented, safe, and portable filename/path rename preview/apply/undo. Refuses collisions and updates SQLite paths after apply.
-- **`tag_suggest.py`** — Phase B report-only tag suggestions. Pure suggestor: composes UCS stem parsing, optional UCS catalog matches, filename heuristics (abbreviation expansion, take-number extraction), parent-folder evidence, and related-group membership into versioned JSON suggestion plans. No filesystem or DB writes.
-- **`tag_plan.py`** — reviewed metadata-writing workflow. Builds tag plans from suggestions, stamps review state, validates file anchors, and writes approved entries to SQLite `accepted_tags`; it does not mutate audio files.
+- **`tag_propose.py`** — Phase B report-only evidence-fusion UCS proposals. Treats exact UCS catalog pairs as provenance, uses primary subcategory terms to open candidates, uses category/path/accepted tags as corroboration, and classifies proposals as strong/review/weak/blocked. No filesystem or DB writes.
+- **`tag_suggest.py`** — Phase B report-only raw tag suggestions. Pure suggestor: composes UCS stem parsing, optional UCS catalog matches, filename heuristics (abbreviation expansion, take-number extraction), parent-folder evidence, and related-group membership into versioned JSON suggestion plans. UCS-derived category fields are provenance (`ucs_category`, `ucs_subcategory`), not final semantic tags. No filesystem or DB writes.
+- **`tag_plan.py`** — reviewed metadata-writing workflow. Builds tag plans from suggestions, summarizes batch review groups, stamps review state, validates file anchors, and writes approved entries to SQLite `accepted_tags`; it does not mutate audio files.
 - **`tag_sidecar.py`** — portable JSON sidecar export/import for DB-only accepted tags. Import validates indexed path, size, mtime, MD5, and file existence before writing.
 - **`ucs_catalog.py`** — UCS catalog import, cache, and lookup. Parses the official `Soundminer/_categorylist.csv` from `UCS Release.zip`, writes a normalized JSON cache at `~/.wavwarden/ucs_catalog.json` with provenance (source URL, release version, import timestamp, attribution). Discovery chain for `load_catalog()`: explicit path → `WAVWARDEN_UCS_DATA` env var → default cache → `None`. XLSX import is deferred.
 - **`ucs_validate.py`** — report-only validation of UCS-looking indexed filenames against a loaded UCS catalog.
@@ -179,7 +187,7 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 - **Every destructive command defaults to dry-run, quarantine, review-first, or undoable behavior.** Filesystem-changing commands include `clean --apply`, `dedupe --apply`, `scan-errors --apply`, `packs apply --apply`, `packs undo --apply`, `rename --apply`, `rename --undo --apply`, `organize apply`, and `organize nesting-apply --apply`.
 - **`soundfile` over stdlib `wave`.** The stdlib `wave` module can't read 32-bit float WAV, which is the default format for modern field recorders (Sound Devices, Zoom F-series). Using stdlib wave produces ~30% false-positive "unreadable" counts on real libraries.
 - **Junk patterns live in one place:** `junk.py`. If you add a new junk pattern, add it there and cover it in tests.
-- **UCS naming heuristic**: `^[A-Z]{2,5}_[A-Z]{2,8}(_|$)` matched against the file stem. This is a heuristic, not a full UCS validator.
+- **UCS naming heuristic**: `^[A-Z]{2,5}_[A-Z]{2,8}(_|$)` matched against the file stem. This is provenance only, not semantic truth; do not infer final UCS category/subcategory tags from filename shape alone.
 - **FTS5 sync is handled by three SQL triggers** in `db.py` (`files_ai`, `files_au`, `files_ad`). Don't do manual FTS inserts — let the triggers fire.
 
 ### SQLite schema (key tables)
@@ -208,7 +216,7 @@ Fixtures in `tests/conftest.py`:
 Full phase spec: `docs/PHASES.md`. Current status:
 - **Phase 0** ✅ — `audit.py` standalone auditor
 - **Phase 1** ✅ — `sfx` CLI package (clean, scan, dedupe, audit, search, export, JSON output)
-- **Phase 2** 🔜 — embedded metadata writing; DB-only `sfx tag plan/review/apply`, tag sidecars, embedded-write dry-run plans, cleanup, rename, organize, pack review, UCS import/validate, and tag suggestions are implemented
+- **Phase 2** 🔜 — embedded metadata writing; DB-only `sfx tag plan/review/apply`, tag sidecars, embedded-write dry-run plans, cleanup, rename, organize, pack review, UCS import/validate, metadata view, tag suggestions, tag summaries, and evidence-fusion tag proposals are implemented
 - **Pack/folder duplicate detection** ✅ — `sfx packs audit/plan/review/apply/undo` is implemented for exact duplicate folders and fully-covered overlaps
 - **Phase 3** ⬜ — Textual TUI first, Tauri later
 

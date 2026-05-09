@@ -21,6 +21,10 @@ def test_scan_audit_search_export_json(tmp_library, tmp_db, tmp_path) -> None:
     assert metadata.exit_code == 0
     assert json.loads(metadata.stdout)["command"] == "metadata_audit"
 
+    metadata_view = runner.invoke(app, ["metadata", "view", "AMB_RAIN", "--db", str(tmp_db), "--json"])
+    assert metadata_view.exit_code == 0
+    assert json.loads(metadata_view.stdout)["command"] == "metadata_view"
+
     metadata_backends = runner.invoke(app, ["metadata", "backends", "--json"])
     assert metadata_backends.exit_code == 0
     assert json.loads(metadata_backends.stdout)["command"] == "metadata_backends"

@@ -158,7 +158,8 @@ Useful rule candidates:
 - prefer paths outside imports/downloads/staging folders
 - prefer files with richer embedded metadata
 - prefer higher sample rate or bit depth only as a tie-breaker
-- prefer UCS-valid or catalog-verified filenames
+- prefer catalog-verified UCS provenance only as a tie-breaker, not as semantic
+  truth
 - prefer cleaner/shorter paths when technical evidence is otherwise equal
 
 Every keep recommendation should include the winning rule evidence so reviewers

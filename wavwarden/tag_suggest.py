@@ -131,6 +131,37 @@ def _confidence_bucket(confidence: float) -> str:
     return "hi"
 
 
+def normalize_filter_values(values: list[str] | None, *, option_name: str) -> list[str]:
+    """Normalize repeated CLI/API filter values into stable lowercase tokens."""
+    normalized: list[str] = []
+    for raw in values or []:
+        for value in raw.split(","):
+            token = value.strip().lower()
+            if not token:
+                continue
+            if token not in normalized:
+                normalized.append(token)
+    if any("*" in value for value in normalized):
+        raise ValueError(f"{option_name} does not support wildcards")
+    return normalized
+
+
+def filter_suggestions(
+    suggestions: list[TagSuggestion],
+    *,
+    sources: list[str] | None = None,
+    fields: list[str] | None = None,
+) -> list[TagSuggestion]:
+    source_filter = set(sources or [])
+    field_filter = set(fields or [])
+    return [
+        suggestion
+        for suggestion in suggestions
+        if (not source_filter or suggestion.source.lower() in source_filter)
+        and (not field_filter or suggestion.field.lower() in field_filter)
+    ]
+
+
 def _tokenize(text: str) -> list[str]:
     """Split a stem on common separators, drop empty tokens."""
     return [token for token in _SEPARATOR_RE.split(text) if token]
@@ -202,12 +233,12 @@ def _strip_leading_sort_prefix(name: str) -> str:
 
 
 def suggest_from_ucs_stem(stem: str, catalog: UcsCatalog | None = None) -> list[TagSuggestion]:
-    """Emit ``category``/``subcategory``/``description``/``take_number`` from a UCS-named stem.
+    """Emit UCS provenance fields plus description/take candidates from a UCS-named stem.
 
     When a UCS catalog is supplied and the filename's ``CatShort_SubCategory``
-    pair matches, category/subcategory/description suggestions are upgraded to
-    catalog-backed evidence. Non-matches still fall back to the existing
-    heuristic so older report flows keep working.
+    pair matches, ``ucs_category``/``ucs_subcategory``/description suggestions
+    are upgraded to catalog-backed evidence. UCS category fields are provenance:
+    they record what the filename claims, not a final semantic search tag.
     """
     parsed = parse_ucs_stem(stem)
     if not parsed.is_ucs:
@@ -228,7 +259,7 @@ def suggest_from_ucs_stem(stem: str, catalog: UcsCatalog | None = None) -> list[
     if parsed.category:
         suggestions.append(
             TagSuggestion(
-                field="category",
+                field="ucs_category",
                 value=catalog_entry.category if catalog_entry is not None else parsed.category,
                 source=source,
                 method=method,
@@ -239,7 +270,7 @@ def suggest_from_ucs_stem(stem: str, catalog: UcsCatalog | None = None) -> list[
     if parsed.subcategory:
         suggestions.append(
             TagSuggestion(
-                field="subcategory",
+                field="ucs_subcategory",
                 value=catalog_entry.subcategory if catalog_entry is not None else parsed.subcategory,
                 source=source,
                 method=method,
@@ -461,12 +492,16 @@ def build_tag_suggestion_report(
     limit: int = 200,
     ucs_catalog_path: Path | None = None,
     use_ucs_catalog: bool = False,
+    sources: list[str] | None = None,
+    fields: list[str] | None = None,
 ) -> TagSuggestionReport:
     """Walk the index for files under ``root`` and produce per-file suggestions."""
     if min_confidence < 0 or min_confidence > 1:
         raise ValueError("--min-confidence must be between 0 and 1")
     if limit < 0:
         raise ValueError("--limit must be 0 or greater")
+    source_filters = normalize_filter_values(sources, option_name="--source")
+    field_filters = normalize_filter_values(fields, option_name="--field")
 
     root = root.resolve()
     rows = _load_files(root, db_path)
@@ -511,6 +546,7 @@ def build_tag_suggestion_report(
         all_suggestions = ucs_suggestions + group_suggestions + filename_suggestions + path_suggestions
         if min_confidence > 0:
             all_suggestions = [s for s in all_suggestions if s.confidence >= min_confidence]
+        all_suggestions = filter_suggestions(all_suggestions, sources=source_filters, fields=field_filters)
         if not all_suggestions:
             continue
 
@@ -553,6 +589,8 @@ def build_tag_suggestion_report(
         ucs_catalog_path=str(resolved_catalog_path.resolve()) if resolved_catalog_path is not None else None,
         ucs_catalog_release_version=catalog.provenance.release_version if catalog is not None else None,
         min_confidence=min_confidence,
+        sources=source_filters,
+        fields=field_filters,
         limit=limit,
         summary=summary,
         entries=selected,

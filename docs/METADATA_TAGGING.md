@@ -2,9 +2,9 @@
 
 Tagging should follow wavwarden's existing safety model:
 
-`scan` observes files -> `audit` reports gaps -> `tag suggest` creates evidence
--> `tag plan/review/apply` validates and writes DB-only accepted tags -> export
-confirms results.
+`scan` observes files -> `audit` reports gaps -> `tag propose` fuses evidence
+into candidate UCS tags -> reviewed plans validate and write DB-only accepted
+tags -> export confirms results.
 
 Core product rule: respect existing filenames and embedded metadata. Many users
 have years of muscle memory around vendor names, custom descriptions, DAW search
@@ -20,10 +20,54 @@ same reviewed-plan model as tag suggestions.
 Sononym reinforces a complementary lesson: tags are stateful review data, not
 just strings. Future wavwarden tag tables should distinguish suggested tags,
 accepted DB-only tags, rejected or hidden suggestions, manual user tags,
-auto-tags from filename/path/metadata evidence, UCS category tags, aliases, and
+auto-tags from filename/path/metadata evidence, UCS provenance tags, aliases, and
 synonym matches. Search and audit views should also be able to show only the
 metadata fields that are actually present in a selected library, so sparse
 metadata does not create unusable empty tables.
+
+## Product Direction: Evidence Before Tags
+
+The end goal is complete, portable metadata for files that lack it, while
+respecting existing filenames and embedded/vendor metadata. UCS is the target
+vocabulary for portable tagging, but UCS-looking filenames are not enough to
+assign semantic UCS tags. A stem like `FIRE_BURST_SmallBurst` could describe
+literal fire, firearm bursts, a magical spell, or a designed whoosh depending on
+folder path, library/source context, embedded description, and the audio itself.
+
+wavwarden should therefore separate:
+
+- **Intrinsic file facts**: sample rate, bit depth, channels, duration, hashes,
+  and format flags. These remain indexed/displayed facts, not user-facing tags.
+- **Provenance**: filename/catalog claims such as `ucs_category` and
+  `ucs_subcategory`. These are useful audit/search evidence but are not semantic
+  truth.
+- **Candidate semantic tags**: proposed UCS category/subcategory assignments
+  based on corroborated evidence.
+- **Accepted tags**: reviewed DB-only metadata that can later be exported to
+  sidecars or safely embedded into WAVs.
+
+The product should be bold about surfacing source material across the whole
+library, not limited to folder-by-folder hunt-and-peck. Grouping files with
+overlapping candidate UCS tags across different vendors/libraries is a feature:
+the point is to make all useful source material findable by a meaningful search.
+But those tags should come from evidence fusion, not from one filename heuristic.
+
+First-class semantic evidence sources:
+
+- existing embedded metadata, when readable
+- folder/library/vendor/product path context
+- filename tokens, treated as weak evidence
+- UCS provenance fields, treated as weak evidence
+- related-file/group context, treated as structural evidence
+- deterministic audio descriptors and later audio-listening models
+- similarity to already-reviewed/accepted material
+
+Candidate proposals should be classified as:
+
+- `strong`: multiple corroborating sources, suitable for batch review
+- `review`: plausible but ambiguous
+- `weak`: observed evidence only, held by default
+- `blocked`: conflicts with existing human/vendor metadata
 
 Default metadata-write policy:
 
@@ -68,42 +112,73 @@ Potential additive tables:
 
 Keep `files.has_bext` and `files.has_ixml` as fast audit booleans.
 
-## Phase B: Filename and UCS Suggestions
+## Phase B: Evidence And Candidate Proposals
 
-Add a pure parser module, separate from `rename.py`, that suggests metadata from:
+Current legacy suggestor:
 
-- UCS-like filename stems
+- `sfx tag suggest` emits raw filename/path/group/UCS-provenance suggestions.
+- It remains useful as an evidence source and debugging view.
+- It is not the primary semantic tagging path.
+
+The forward path is `sfx tag propose`, a report-only evidence-fusion command
+that proposes candidate UCS tags from multiple sources. It should not mutate
+SQLite or audio files.
+
+Current proposal matching is intentionally conservative: exact UCS catalog pairs
+and primary subcategory terms can open candidates; category terms only
+corroborate. Synonyms and broader filename heuristics should be added back as
+lower-trust layers only after real-library review proves they help.
+
+Evidence can come from:
+
 - parent folders
-- common take/version suffixes
-- known abbreviations such as `AMB`, `SFX`, and `FOLEY`
+- existing embedded metadata
+- filename tokens
+- UCS provenance from catalog matches
+- related groups
+- deterministic audio descriptors
 - optional user dictionaries
-- user-defined aliases and synonyms, including simple singular/plural or
-  conjugation-style expansions
+- user-defined aliases and synonyms
 
-Suggestions should be data, not writes:
+Proposals should be data, not writes:
 
 ```json
 {
-  "field": "description",
-  "value": "Gunshot 01",
-  "source": "filename",
-  "method": "ucs_heuristic",
-  "confidence": 0.86,
-  "evidence": ["SFX_GUNSHOT_01.wav"]
+  "category": "FIRE",
+  "subcategory": "BURNING",
+  "cat_id": "FIREBurn",
+  "strength": "strong",
+  "confidence": 0.82,
+  "evidence": [
+    {"source": "path", "value": "fire", "detail": "folder context"},
+    {"source": "filename", "value": "burning", "detail": "filename token"}
+  ]
 }
 ```
+
+UCS-derived category fields are provenance, not final semantic labels. For
+example, a filename stem such as `FIRE_BURST` may indicate a UCS catalog match,
+but the sound could still be literal fire, a gun burst, or a magic spell
+depending on path, group, metadata, and audio context. The suggestor therefore
+emits `ucs_category` and `ucs_subcategory` for UCS filename/catalog evidence.
+Future semantic `category`/`subcategory` tags should require corroborating
+evidence from multiple sources or explicit review.
 
 ## Phase C: Reviewed Tag Plans
 
 Current first implementation:
 
 ```bash
-uv run sfx tag suggest PATH --db ~/.wavwarden/index.db --output tag_suggestions.json
-uv run sfx tag plan PATH --db ~/.wavwarden/index.db --from-suggestions tag_suggestions.json --output tag_plan.json
+uv run sfx tag propose PATH --db ~/.wavwarden/index.db --min-confidence 0.6 --output tag_proposals.json
+uv run sfx tag suggest PATH --db ~/.wavwarden/index.db --use-ucs-catalog --min-confidence 0.8 --source ucs_catalog --field ucs_category --field ucs_subcategory --output tag_suggestions.json
+uv run sfx tag plan PATH --db ~/.wavwarden/index.db --from-suggestions tag_suggestions.json --source ucs_catalog --field ucs_category --field ucs_subcategory --output tag_plan.json
+uv run sfx tag summarize tag_plan.json --value-limit 20
+uv run sfx tag review tag_plan.json --approve-field ucs_category --only-status pending
 uv run sfx tag review tag_plan.json --approve-all
 uv run sfx tag apply tag_plan.json --db ~/.wavwarden/index.db --require-reviewed --apply --log tag_apply_log.json
 uv run sfx tag sidecar-export accepted_tags.sidecar.json --db ~/.wavwarden/index.db --path PATH
 uv run sfx tag sidecar-import accepted_tags.sidecar.json --db ~/.wavwarden/index.db
+uv run sfx metadata view QUERY --db ~/.wavwarden/index.db
 uv run sfx metadata backends --json
 uv run sfx metadata write-plan metadata_write_plan.json --db ~/.wavwarden/index.db --path PATH --bwfmetaedit /path/to/bwfmetaedit
 uv run sfx metadata write-review metadata_write_plan.json --approve-all
@@ -138,6 +213,11 @@ The initial implementation is DB-only: approved entries are written to
 `accepted_tags`, and apply writes `tag_apply_log` rows plus an external JSON log.
 Accepted tags can also be exported and re-imported as JSON sidecars. Embedded
 metadata writes are currently plan/review/preview only and never mutate audio.
+
+Batch review should start with `sfx tag summarize`, then approve or reject
+narrow selectors such as `--approve-field ucs_category`, `--reject-value FIRE`,
+or `--approve-source group --only-status pending`. Selector review is meant to
+make large plans manageable without opening JSON by hand.
 
 ## Phase D: Metadata Writes
 
@@ -190,7 +270,7 @@ uv run sfx metadata write-readback metadata_fixtures --json
 
 The first supported mapping is deliberately narrow: accepted `description`,
 `originator`, and `originator_reference` tags can target BWF `bext` fields via
-BWF MetaEdit. Other accepted tags, such as UCS category/subcategory/take fields,
+BWF MetaEdit. Other accepted tags, such as UCS provenance/take fields,
 remain visible in the plan as `unsupported_field` instead of being silently
 dropped. Preview renders simulated BWF MetaEdit commands with `--simulate`,
 `--reject-overwrite`, and `--specialchars`; these commands are for validation
@@ -217,9 +297,8 @@ future UI layers consume cached evidence.
 Recommended design:
 
 ```bash
-uv run sfx suggest PATH --from-audio --output suggestions.json
-uv run sfx suggest PATH --from-filename --from-audio --merge --output tag_plan.json
 uv run sfx similarity crawl PATH --db ~/.wavwarden/index.db --cache ~/.wavwarden/similarity
+uv run sfx tag propose PATH --db ~/.wavwarden/index.db --min-confidence 0.6 --output tag_proposals.json
 ```
 
 Store model outputs in SQLite with:

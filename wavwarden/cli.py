@@ -55,7 +55,7 @@ organize_app = typer.Typer(
 app.add_typer(organize_app, name="organize")
 tag_app = typer.Typer(
     name="tag",
-    help="Suggest metadata tags from filename, path, and group evidence (report-only).",
+    help="Propose and review metadata tags from corroborated evidence.",
     no_args_is_help=True,
     rich_markup_mode="rich",
 )
@@ -595,6 +595,39 @@ def cmd_metadata_audit(
         )
 
 
+@metadata_app.command("view")
+def cmd_metadata_view(
+    query: Annotated[str, typer.Argument(help="Indexed path, filename, stem, or path fragment to inspect.")],
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Override the UCS catalog discovery chain.")] = None,
+    limit: Annotated[int, typer.Option("--limit", help="Maximum matching files to show.")] = 5,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Show indexed metadata, UCS provenance, and DB-only tags for matching files."""
+    from wavwarden.metadata_view import build_metadata_view_report, show_metadata_view_report
+
+    try:
+        report = build_metadata_view_report(query, db_path=db, catalog_path=catalog, limit=limit)
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
+    if not json_output:
+        show_metadata_view_report(report)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "metadata_view",
+                    "db_path": db,
+                    "query": query,
+                    "report": report,
+                }
+            )
+        )
+
+
 @metadata_app.command("backends")
 def cmd_metadata_backends(
     bwfmetaedit: Annotated[
@@ -1008,6 +1041,16 @@ def cmd_tag_suggest(
     min_confidence: Annotated[
         float, typer.Option("--min-confidence", help="Drop suggestions below this confidence (0.0–1.0).")
     ] = 0.0,
+    source: Annotated[
+        list[str] | None,
+        typer.Option("--source", help="Only include suggestions from this source. Repeat or comma-separate values."),
+    ] = None,
+    field: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--field", help="Only include suggestions for this metadata field. Repeat or comma-separate values."
+        ),
+    ] = None,
     limit: Annotated[int, typer.Option("--limit", help="Maximum file entries to include; 0 writes all entries.")] = 200,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
@@ -1030,6 +1073,8 @@ def cmd_tag_suggest(
             limit=limit,
             ucs_catalog_path=ucs_catalog,
             use_ucs_catalog=use_ucs_catalog,
+            sources=source,
+            fields=field,
         )
     except (FileNotFoundError, ValueError) as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -1048,6 +1093,61 @@ def cmd_tag_suggest(
                     "root": path,
                     "db_path": db,
                     "ucs_catalog_path": report.ucs_catalog_path,
+                    "report_path": output,
+                    "report": report,
+                }
+            )
+        )
+
+
+@tag_app.command("propose")
+def cmd_tag_propose(
+    path: Annotated[Path, typer.Argument(help="Root path of the indexed library to inspect.")],
+    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Override the UCS catalog discovery chain.")] = None,
+    output: Annotated[
+        Path | None, typer.Option("--output", help="Write evidence-fusion tag proposal report JSON.")
+    ] = None,
+    min_confidence: Annotated[
+        float, typer.Option("--min-confidence", help="Drop proposals below this confidence (0.0-1.0).")
+    ] = 0.0,
+    limit: Annotated[int, typer.Option("--limit", help="Maximum file entries to include; 0 writes all entries.")] = 200,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Propose UCS tags from combined evidence. No writes."""
+    from wavwarden.tag_propose import build_tag_proposal_report, show_tag_proposal_report
+
+    if not path.exists():
+        console.print(f"[red]Error: path not found: {path}[/red]")
+        raise typer.Exit(1)
+    try:
+        report = build_tag_proposal_report(
+            path,
+            db_path=db,
+            catalog_path=catalog,
+            min_confidence=min_confidence,
+            limit=limit,
+        )
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json_dumps(report), encoding="utf-8")
+        if not json_output:
+            console.print(f"Tag proposal report written to [cyan]{output}[/cyan]")
+    elif not json_output:
+        show_tag_proposal_report(report)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "tag_propose",
+                    "root": path,
+                    "db_path": db,
+                    "catalog_path": report.catalog_path,
                     "report_path": output,
                     "report": report,
                 }
@@ -1074,6 +1174,16 @@ def cmd_tag_plan(
     min_confidence: Annotated[
         float, typer.Option("--min-confidence", help="Drop suggestions below this confidence (0.0-1.0).")
     ] = 0.0,
+    source: Annotated[
+        list[str] | None,
+        typer.Option("--source", help="Only include suggestions from this source. Repeat or comma-separate values."),
+    ] = None,
+    field: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--field", help="Only include suggestions for this metadata field. Repeat or comma-separate values."
+        ),
+    ] = None,
     limit: Annotated[int, typer.Option("--limit", help="Maximum file entries to inspect; 0 writes all entries.")] = 200,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
@@ -1095,6 +1205,8 @@ def cmd_tag_plan(
             ucs_catalog_path=ucs_catalog,
             use_ucs_catalog=use_ucs_catalog,
             source_report=source_report,
+            sources=source,
+            fields=field,
         )
     except (FileNotFoundError, ValueError) as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -1118,6 +1230,56 @@ def cmd_tag_plan(
         )
 
 
+@tag_app.command("summarize")
+def cmd_tag_summarize(
+    plan: Annotated[Path, typer.Argument(help="Tag plan JSON to summarize.")],
+    field: Annotated[
+        list[str] | None,
+        typer.Option("--field", help="Only summarize entries for this field. Repeat or comma-separate values."),
+    ] = None,
+    source: Annotated[
+        list[str] | None,
+        typer.Option("--source", help="Only summarize entries from this source. Repeat or comma-separate values."),
+    ] = None,
+    value: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--value", help="Only summarize entries with this proposed value. Repeat or comma-separate values."
+        ),
+    ] = None,
+    status: Annotated[
+        list[str] | None,
+        typer.Option("--status", help="Only summarize entries with this review status."),
+    ] = None,
+    sample_limit: Annotated[int, typer.Option("--sample-limit", help="Sample filenames per value row.")] = 5,
+    value_limit: Annotated[int, typer.Option("--value-limit", help="Maximum value rows to show; 0 shows all.")] = 50,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Summarize a tag plan for batch review."""
+    from wavwarden.tag_plan import show_tag_plan_summary, summarize_tag_plan
+
+    if not plan.exists():
+        console.print(f"[red]Error: plan file not found: {plan}[/red]")
+        raise typer.Exit(1)
+    try:
+        report = summarize_tag_plan(
+            plan,
+            fields=field,
+            sources=source,
+            values=value,
+            statuses=status,
+            sample_limit=sample_limit,
+            value_limit=value_limit,
+        )
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+    if not json_output:
+        show_tag_plan_summary(report)
+    if json_output:
+        print(json_dumps({"schema_version": 1, "command": "tag_summarize", "plan_path": plan, "report": report}))
+
+
 @tag_app.command("review")
 def cmd_tag_review(
     plan: Annotated[Path, typer.Argument(help="Tag plan JSON to review.")],
@@ -1125,6 +1287,38 @@ def cmd_tag_review(
     approve_all: Annotated[bool, typer.Option("--approve-all", help="Approve every tag plan entry.")] = False,
     entry: Annotated[list[int] | None, typer.Option("--entry", help="Approve a 1-based entry id.")] = None,
     reject_entry: Annotated[list[int] | None, typer.Option("--reject-entry", help="Reject a 1-based entry id.")] = None,
+    approve_field: Annotated[
+        list[str] | None,
+        typer.Option("--approve-field", help="Approve entries for this field. Repeat or comma-separate values."),
+    ] = None,
+    reject_field: Annotated[
+        list[str] | None,
+        typer.Option("--reject-field", help="Reject entries for this field. Repeat or comma-separate values."),
+    ] = None,
+    approve_source: Annotated[
+        list[str] | None,
+        typer.Option("--approve-source", help="Approve entries from this source. Repeat or comma-separate values."),
+    ] = None,
+    reject_source: Annotated[
+        list[str] | None,
+        typer.Option("--reject-source", help="Reject entries from this source. Repeat or comma-separate values."),
+    ] = None,
+    approve_value: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--approve-value", help="Approve entries with this proposed value. Repeat or comma-separate values."
+        ),
+    ] = None,
+    reject_value: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--reject-value", help="Reject entries with this proposed value. Repeat or comma-separate values."
+        ),
+    ] = None,
+    only_status: Annotated[
+        list[str] | None,
+        typer.Option("--only-status", help="Only selector-review entries currently in this review status."),
+    ] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
     """Mark tag plan entries as approved or rejected."""
@@ -1133,17 +1327,29 @@ def cmd_tag_review(
     if not plan.exists():
         console.print(f"[red]Error: plan file not found: {plan}[/red]")
         raise typer.Exit(1)
-    if not approve_all and not entry and not reject_entry:
-        console.print("[red]Error: pass --approve-all, --entry, or --reject-entry.[/red]")
+    has_selector = any([approve_field, reject_field, approve_source, reject_source, approve_value, reject_value])
+    if not approve_all and not entry and not reject_entry and not has_selector:
+        console.print("[red]Error: pass --approve-all, --entry, --reject-entry, or a selector review option.[/red]")
         raise typer.Exit(1)
-    result = review_tag_plan(
-        plan,
-        output_path=output,
-        approve_all=approve_all,
-        entries=entry,
-        reject_entries=reject_entry,
-        quiet=json_output,
-    )
+    try:
+        result = review_tag_plan(
+            plan,
+            output_path=output,
+            approve_all=approve_all,
+            entries=entry,
+            reject_entries=reject_entry,
+            approve_fields=approve_field,
+            reject_fields=reject_field,
+            approve_sources=approve_source,
+            reject_sources=reject_source,
+            approve_values=approve_value,
+            reject_values=reject_value,
+            only_status=only_status,
+            quiet=json_output,
+        )
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
     if result.invalid_entries:
         raise typer.Exit(1)
     if json_output:

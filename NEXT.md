@@ -65,8 +65,8 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
 - Tag suggestion (Phase B) report-only command: `sfx tag suggest` implemented.
 - First tag suggestion run on full library: 502,735 suggestions across 120,716
   files. Sources: 207,850 path, 157,470 group, 108,091 filename, 29,324
-  ucs_stem. Fields: 334,565 description, 149,124 take_number, 9,355 category,
-  9,355 subcategory, 336 channel_position. 31% of suggestions in the high
+  ucs_stem. Fields: 334,565 description, 149,124 take_number, 9,355
+  legacy `category`, 9,355 legacy `subcategory`, 336 channel_position. 31% of suggestions in the high
   confidence bucket (>= 0.8), 69% mid (0.5–0.8). Sample report at
   `/Users/mattwesdock/reports/tag_suggestions_20260508.json` (limit=50 entries).
 - UCS catalog import implemented (`sfx ucs import/info/categories`). Imported
@@ -76,8 +76,64 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
 - UCS catalog-aware tag suggestions implemented. `sfx tag suggest --use-ucs-catalog`
   or `--ucs-catalog PATH` boosts verified `(CatShort, SubCategory)` matches
   from 0.75 heuristic confidence to 0.95 catalog-backed confidence.
+- UCS-derived category fields are now provenance fields: `ucs_category` and
+  `ucs_subcategory`. They record the filename/catalog claim, not a final
+  semantic tag, because terms such as `FIRE/BURST` can mean real fire, guns, or
+  magic depending on context.
 - UCS validation implemented: `sfx ucs validate [PATH] --db ~/.wavwarden/index.db`
   counts indexed files whose UCS-looking stem matches or misses the catalog.
+- UCS validation run on the copied library:
+  `/Users/mattwesdock/reports/ucs_validation_20260508.json`. It considered
+  120,716 indexed files; 9,355 look UCS-shaped; 197 match the official UCS
+  v8.2.1 catalog and 9,158 miss. Misses are dominated by legacy/vendor prefixes
+  under Sound Librarian, Sound Ideas, and Black Octopus, not safe catalog matches.
+- High-confidence UCS-backed tag suggestion run:
+  `/Users/mattwesdock/reports/tag_suggestions_ucs.json`. With
+  `--min-confidence 0.8`, it produced 158,061 suggestions across 78,798 files:
+  157,470 from related groups and 591 from true UCS catalog matches.
+- Tag suggestion and tag plan filters added: `--source` and `--field` can be
+  repeated or comma-separated, so review can start with trusted slices such as
+  catalog-backed UCS provenance tags before broader group-derived tags.
+- Superseded catalog-only semantic review slice generated:
+  `/Users/mattwesdock/reports/tag_suggestions_ucs_catalog_fields_20260508.json`
+  and `/Users/mattwesdock/reports/tag_plan_ucs_catalog_fields_20260508.json`.
+  Do not apply this slice; it used semantic `category`/`subcategory` fields.
+- Catalog-only provenance review slice generated:
+  `/Users/mattwesdock/reports/tag_suggestions_ucs_provenance_fields_20260509.json`
+  and `/Users/mattwesdock/reports/tag_plan_ucs_provenance_fields_20260509.json`.
+  Reviewed and applied DB-only: 394 accepted tags covering 197 files, split
+  between 197 `ucs_category` and 197 `ucs_subcategory` provenance tags.
+  Apply log: `/Users/mattwesdock/reports/tag_apply_ucs_provenance_fields_20260509.json`.
+  Sidecar backup:
+  `/Users/mattwesdock/reports/accepted_tags_ucs_provenance_20260509.sidecar.json`.
+- Lightweight per-file metadata view added: `sfx metadata view QUERY --db ...`.
+  It shows indexed audio facts, embedded metadata presence flags, UCS
+  parse/catalog match, and accepted DB-only tags for matching indexed files.
+- Batch tag-plan review helpers added: `sfx tag summarize PLAN` rolls up a plan
+  by field/source/status/value with sample filenames, and `sfx tag review PLAN`
+  now supports field/source/value selectors such as `--approve-field`,
+  `--reject-value`, and `--only-status pending`.
+- Selector smoke check: reviewing
+  `/Users/mattwesdock/reports/tag_plan_ucs_provenance_fields_20260509.json`
+  with `--approve-field ucs_category --only-status pending --output
+  /private/tmp/tag_plan_selector_smoke.json` approved 197 entries in the temp
+  plan.
+- Product direction shift: semantic UCS tagging should come from corroborated
+  evidence, not from filename/UCS-shape heuristics alone. Intrinsic facts such
+  as sample rate, bit depth, channels, take number, and channel position remain
+  indexed/review facts unless they prove useful as search tags. UCS-looking
+  filename claims are provenance (`ucs_*`), while final `category` and
+  `subcategory` tags require review or stronger evidence.
+- Evidence-fusion tag proposals started: `sfx tag propose PATH` is report-only
+  and classifies candidate UCS tags as `strong`, `review`, `weak`, or `blocked`
+  from filename, path, accepted UCS provenance, and accepted semantic metadata.
+- First whole-library proposal report:
+  `/Users/mattwesdock/reports/tag_proposals_evidence_20260509.json`. It
+  considered 120,716 indexed files and emitted 38,025 proposals across 15,754
+  files with `--min-confidence 0.6 --limit 500`: 5,501 strong and 32,524 review
+  in the full summary. Early real-library checks forced a higher-precision
+  candidate rule: exact UCS pairs and primary subcategory terms can open
+  candidates; category terms only corroborate.
 
 Current audit focus:
 
@@ -105,24 +161,24 @@ Current audit focus:
 ## Next
 
 1. Move on from folder nesting unless you want a manual review flow for semantic wrappers.
-2. Continue with metadata/tag suggestion review.
-3. Run `sfx ucs validate ~/CommercialLibraries --db ~/.wavwarden/index.db --json`
-   against the copied library and inspect any catalog misses.
-4. Re-run `sfx tag suggest ~/CommercialLibraries --db ~/.wavwarden/index.db
-   --use-ucs-catalog --min-confidence 0.8 --output ~/reports/tag_suggestions_ucs.json`
-   for a cleaner high-confidence suggestion report.
-5. Decide review flow for tag suggestions (`sfx tag review` + `sfx tag apply`,
-   Phase C of `docs/METADATA_TAGGING.md`). Start DB-only and add sidecar
-   exports before any binary BWF/iXML write.
+2. Use `sfx metadata view QUERY` to spot-check accepted provenance tags,
+   especially ambiguous stems such as `FIRE_BURST`.
+3. Inspect the first `sfx tag propose` report, especially the 5,501 strong
+   proposals and noisy repeated subcategory terms such as `AIR` or `WILD`.
+4. Decide whether to build a dry-run embedded metadata write plan now. Current
+   BWF mapping supports `description`, `originator`, and `originator_reference`;
+   the accepted `ucs_*` provenance tags should remain DB-only/sidecar-only.
+5. Treat group-derived `take_number` and `channel_position` as structural review
+   facts for now, not priority metadata tags.
 6. Keep audio conversion and loudness normalization out of scope.
 
 ## Later
 
 - `sfx packs plan/apply` for reviewed folder consolidation.
 - `sfx organize` for safe folder-structure cleanup.
-- `sfx tag --from-filename` after rename/organize workflows stabilize.
+- richer embedded metadata reads feeding `sfx tag propose`
 - `sfx similarity crawl` as an optional Phase 2.5 audio-analysis cache after
-  cleanup and tag-plan foundations settle.
+  cleanup and tag-plan foundations settle, then similarity-assisted proposals.
 - Textual TUI after CLI JSON contracts feel boring.
 
 ## Solo Workflow

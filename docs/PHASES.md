@@ -84,6 +84,7 @@ uv run sfx clean PATH
 uv run sfx scan PATH
 uv run sfx audit
 uv run sfx metadata audit --output ~/reports/metadata_report.json
+uv run sfx metadata view QUERY --db ~/.wavwarden/index.db
 uv run sfx metadata backends --json
 uv run sfx metadata write-plan ~/reports/metadata_write_plan.json --path PATH --bwfmetaedit /path/to/bwfmetaedit
 uv run sfx metadata write-review ~/reports/metadata_write_plan.json --approve-all
@@ -143,9 +144,12 @@ uv run sfx rename PATH --pattern ucs --apply --log rename_log.json
 uv run sfx rename PATH --pattern safe --apply --allow-partial --log safe_rename_log.json
 uv run sfx rename PATH --pattern portable --apply --log portable_rename_log.json
 uv run sfx rename --undo rename_log.json --apply
+uv run sfx tag propose PATH --db ~/.wavwarden/index.db --min-confidence 0.6 --output ~/reports/tag_proposals.json
 uv run sfx tag suggest PATH --db ~/.wavwarden/index.db --output ~/reports/tag_suggestions.json
-uv run sfx tag suggest PATH --db ~/.wavwarden/index.db --use-ucs-catalog --min-confidence 0.8 --json
-uv run sfx tag plan PATH --db ~/.wavwarden/index.db --from-suggestions ~/reports/tag_suggestions.json --output ~/reports/tag_plan.json
+uv run sfx tag suggest PATH --db ~/.wavwarden/index.db --use-ucs-catalog --min-confidence 0.8 --source ucs_catalog --field ucs_category --field ucs_subcategory --json
+uv run sfx tag plan PATH --db ~/.wavwarden/index.db --from-suggestions ~/reports/tag_suggestions.json --source ucs_catalog --field ucs_category --field ucs_subcategory --output ~/reports/tag_plan.json
+uv run sfx tag summarize ~/reports/tag_plan.json --value-limit 20
+uv run sfx tag review ~/reports/tag_plan.json --approve-field ucs_category --only-status pending
 uv run sfx tag review ~/reports/tag_plan.json --approve-all
 uv run sfx tag apply ~/reports/tag_plan.json --db ~/.wavwarden/index.db --require-reviewed
 uv run sfx tag apply ~/reports/tag_plan.json --db ~/.wavwarden/index.db --require-reviewed --apply --log ~/reports/tag_apply_log.json
@@ -174,6 +178,9 @@ python3 audit.py ~/CommercialLibraries --json
 - `clean`: dry-run by default; `--apply` removes known junk only.
 - `scan`: indexes audio files into SQLite and skips junk.
 - `metadata audit`: report-only metadata coverage and unusual sample-rate review.
+- `metadata view`: report-only per-file inspector for indexed audio facts,
+  embedded metadata presence flags, UCS parse/catalog match, and accepted
+  DB-only tags.
 - `metadata backends`: report-only external metadata writer discovery. It
   captures BWF MetaEdit availability/version without modifying audio.
 - `metadata write-plan/review/preview/fixtures/readback`: reviewed dry-run
@@ -202,10 +209,16 @@ python3 audit.py ~/CommercialLibraries --json
   comparisons.
 - `similarity feedback`: DB-only review states for similarity relationships
   such as favorite, hidden, ignored, accepted, and rejected.
-- `tag suggest`: report-only metadata suggestions from filename, path, UCS, and
-  related-group evidence.
+- `tag propose`: report-only UCS tag proposals from corroborated evidence.
+  Filename/UCS-looking stems are weak evidence, not semantic proof.
+- `tag suggest`: report-only raw metadata suggestions from filename, path, UCS
+  provenance, and related-group evidence. It is useful as a debugging/evidence
+  feed, not the primary semantic tagging path.
+- `tag summarize`: report-only tag plan rollup by field, source, review status,
+  and proposed value with sample filenames for batch review.
 - `tag plan/review/apply`: reviewed DB-only metadata writes to `accepted_tags`.
-  Apply validates file anchors, writes `tag_apply_log`, and never mutates audio.
+  Review supports entry IDs plus field/source/value selectors. Apply validates
+  file anchors, writes `tag_apply_log`, and never mutates audio.
 - `tag sidecar-export/import`: portable JSON sidecars for accepted DB-only tags.
 - `dedupe --summary-only`: finds exact MD5 duplicate groups and prints counts without writing a plan.
 - `dedupe --output PLAN.json`: writes a reviewed duplicate plan to an explicit path. Repeated `--safe-folder PATH` options prefer protected duplicate files as keep copies and mark protected extra copies as ignored. Repeated `--prefer-folder PATH` and `--prefer-extension EXT` options store preservation-priority evidence and choose keep copies accordingly.
@@ -346,8 +359,10 @@ remains report-only because it can require subjective merge choices.
 
 Related group detection is implemented first as report-only:
 `sfx groups audit PATH`, inferring numbered takes and channel sets from indexed
-filenames. Future versions can layer in path tokens, UCS categories, metadata,
-and exact/perceptual similarity.
+filenames. Future versions can layer in path tokens, accepted/proposed tags,
+metadata, and exact/perceptual similarity. Take numbers and channel positions
+are structural facts for grouping/review, not high-value library search tags by
+default.
 
 Format consistency is an advanced, report-only diagnostic:
 `sfx format audit PATH`, flagging related groups where files differ in sample
@@ -393,7 +408,8 @@ Metadata writing follows the reviewed-plan model:
 - `sfx metadata audit`
 - `sfx metadata backends`, implemented as BWF MetaEdit availability/version preflight
 - `sfx metadata write-plan/review/preview/fixtures/readback`, implemented as dry-run-only embedded write planning, copied fixture bundles, and BEXT readback comparison
-- `sfx tag suggest`
+- `sfx tag propose`, implemented as report-only evidence-fusion UCS candidates
+- `sfx tag suggest`, implemented as a raw filename/path/group/UCS provenance evidence feed
 - `sfx tag plan/review/apply`, implemented for DB-only accepted tags
 - `sfx tag sidecar-export/import`, implemented for portable JSON accepted tags
 - future embedded BWF/iXML writes
@@ -676,6 +692,8 @@ Command contracts:
   and whole-file or segment candidate groups.
 - `similarity feedback set/list/clear --json`: includes DB-only review-state
   changes or filtered feedback entries.
+- `tag propose PATH --json`: includes candidate UCS proposals, confidence,
+  strength/action classification, and per-source evidence.
 - `tag suggest PATH --json`: includes suggestion summary and per-file evidence.
 - `tag plan/review/apply --json`: includes reviewed plan entries, approval
   counts, DB-only apply result, and apply log path.

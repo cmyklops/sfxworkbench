@@ -101,7 +101,7 @@ Potential later keep rules:
 - prefer higher sample rate or bit depth only as tie-breakers, not as a cleanup
   command
 - prefer files with BWF/iXML/RIFF INFO metadata
-- prefer UCS-valid or catalog-verified filenames
+- prefer catalog-verified UCS provenance only as evidence, not as semantic truth
 - prefer shorter/cleaner paths when all technical evidence is equal
 - prefer newest or oldest mtime when a studio explicitly chooses that rule
 
@@ -116,7 +116,8 @@ hidden all-in-one cleanup. Good initial presets:
 - `internal-beta`: safe report bundle, no mutation
 - `duplicate-review`: exact dedupe plus pack overlap evidence
 - `import-review`: compare a new folder against an existing index
-- `metadata-prep`: metadata coverage, UCS validation, tag suggestions
+- `metadata-prep`: metadata coverage, UCS validation, per-file metadata view,
+  evidence-fusion tag proposals, and raw tag suggestions
 - `advanced-forensics`: optional format audit, audio similarity, dual-mono
   candidates
 

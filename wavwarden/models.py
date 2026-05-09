@@ -407,6 +407,70 @@ class MetadataAuditReport(BaseModel):
     unusual_sample_rates: list[MetadataAuditEntry] = []
 
 
+class MetadataViewTag(BaseModel):
+    field: str
+    value: str
+    source: str
+    method: str | None = None
+    confidence: float | None = None
+    evidence: list[str] = []
+
+
+class MetadataViewUcs(BaseModel):
+    stem: str
+    is_ucs: bool = False
+    category: str | None = None
+    subcategory: str | None = None
+    remainder: str | None = None
+    source: str = "heuristic"
+    catalog_match: bool = False
+    catalog_category: str | None = None
+    catalog_subcategory: str | None = None
+    catalog_cat_short: str | None = None
+    catalog_cat_id: str | None = None
+    catalog_release_version: str | None = None
+
+
+class MetadataViewFile(BaseModel):
+    file_id: int
+    path: str
+    filename: str
+    stem: str | None = None
+    extension: str | None = None
+    size_bytes: int | None = None
+    mtime: float | None = None
+    md5: str | None = None
+    sample_rate: int | None = None
+    bit_depth: int | None = None
+    channels: int | None = None
+    duration_s: float | None = None
+    subtype: str | None = None
+    has_bext: bool = False
+    has_ixml: bool = False
+    has_riff_info: bool = False
+    has_adm: bool = False
+    has_cue_markers: bool = False
+    has_sampler: bool = False
+    metadata_sources: list[str] = []
+    is_ucs: bool = False
+    scan_error: str | None = None
+    ucs: MetadataViewUcs | None = None
+    accepted_tags: list[MetadataViewTag] = []
+
+
+class MetadataViewReport(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    db_path: str
+    query: str
+    catalog_path: str | None = None
+    limit: int = 5
+    match_count: int = 0
+    files: list[MetadataViewFile] = []
+
+
 class MetadataWriteBackend(BaseModel):
     name: str
     display_name: str
@@ -1038,9 +1102,63 @@ class TagSuggestionReport(BaseModel):
     ucs_catalog_path: str | None = None
     ucs_catalog_release_version: str | None = None
     min_confidence: float = 0.0
+    sources: list[str] = []
+    fields: list[str] = []
     limit: int = 200
     summary: TagSuggestionSummary
     entries: list[TagSuggestionEntry] = []
+
+
+class TagProposalEvidence(BaseModel):
+    source: str
+    value: str
+    detail: str
+
+
+class TagProposal(BaseModel):
+    category: str
+    subcategory: str
+    cat_short: str
+    cat_id: str
+    confidence: float
+    strength: str
+    action: str = "review"
+    evidence: list[TagProposalEvidence] = []
+    notes: list[str] = []
+
+
+class TagProposalEntry(BaseModel):
+    file_id: int
+    path: str
+    filename: str
+    size_bytes: int | None = None
+    mtime: float | None = None
+    md5: str | None = None
+    proposals: list[TagProposal] = []
+
+
+class TagProposalSummary(BaseModel):
+    files_considered: int = 0
+    files_with_proposals: int = 0
+    total_proposals: int = 0
+    by_strength: dict[str, int] = {}
+    by_action: dict[str, int] = {}
+    by_category: dict[str, int] = {}
+
+
+class TagProposalReport(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    root: str
+    db_path: str
+    catalog_path: str | None = None
+    catalog_release_version: str | None = None
+    limit: int = 200
+    min_confidence: float = 0.0
+    summary: TagProposalSummary
+    entries: list[TagProposalEntry] = []
 
 
 class TagPlanEntry(BaseModel):
@@ -1071,6 +1189,32 @@ class TagPlanSummary(BaseModel):
     rejected_entries: int = 0
 
 
+class TagPlanValueSummary(BaseModel):
+    field: str
+    value: str
+    source: str
+    count: int = 0
+    approved: int = 0
+    rejected: int = 0
+    pending: int = 0
+    confidence_min: float | None = None
+    confidence_max: float | None = None
+    sample_files: list[str] = []
+
+
+class TagPlanSummaryReport(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    plan_path: str
+    total_entries: int = 0
+    by_field: dict[str, int] = {}
+    by_source: dict[str, int] = {}
+    by_review_status: dict[str, int] = {}
+    values: list[TagPlanValueSummary] = []
+
+
 class TagPlan(BaseModel):
     schema_version: int = 1
     generated_at: str
@@ -1081,6 +1225,8 @@ class TagPlan(BaseModel):
     source_report: str | None = None
     target: str = "db"
     min_confidence: float = 0.0
+    sources: list[str] = []
+    fields: list[str] = []
     limit: int = 200
     summary: TagPlanSummary
     entries: list[TagPlanEntry] = []

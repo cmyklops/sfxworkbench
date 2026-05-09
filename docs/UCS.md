@@ -1,14 +1,21 @@
 # UCS Data Plan
 
-wavwarden currently detects UCS-looking names with a heuristic regex and does
-not yet ship official UCS category data.
+wavwarden can detect UCS-looking names with a heuristic regex and can import the
+official UCS category list into a local cache. That data is useful evidence, but
+it is not semantic proof. A filename stem like `FIRE_BURST` may be real fire, a
+firearm burst, or a magic spell depending on folder context, embedded metadata,
+and the audio.
 
 ## Current Behavior
 
 - `wavwarden/ucs.py` is the shared home for current UCS stem parsing.
 - `scan` stores `files.is_ucs` using the heuristic `^[A-Z]{2,5}_[A-Z]{2,8}(_|$)`.
 - `rename --pattern ucs` safely sanitizes filenames and falls back to `SFX_MISC_...`.
-- There is no category catalog, synonym list, or official UCS spreadsheet in the repo yet.
+- `sfx ucs import` can cache a user-supplied official UCS category CSV under
+  `~/.wavwarden/ucs_catalog.json`.
+- UCS-derived `ucs_category` and `ucs_subcategory` values are provenance fields.
+  They record a filename/catalog claim and should not be treated as final
+  `category` or `subcategory` tags without corroborating evidence.
 
 ## License Posture
 
@@ -69,7 +76,10 @@ Implemented API (catalog-aware suggestions/validation):
 
 - `tag_suggest.suggest_from_ucs_stem(stem, catalog=None)` — when a catalog is
   supplied, verified `(CatShort, SubCategory)` matches emit `ucs_catalog`
-  suggestions at 0.95 confidence.
+  provenance suggestions for `ucs_category` and `ucs_subcategory`.
+- `tag_propose.build_tag_proposal_report(...)` — fuses UCS catalog terms with
+  filename, path, accepted provenance, and accepted semantic metadata into
+  report-only candidate UCS proposals.
 - `ucs_validate.build_ucs_validation_report(db_path, root=None, catalog_path=None)`
   counts indexed filenames whose parsed `(CatShort, SubCategory)` matches the
   loaded catalog.
@@ -82,16 +92,16 @@ uv run sfx ucs info
 uv run sfx ucs categories --cat-short AMB
 uv run sfx ucs categories --category AMBIENCE --json
 uv run sfx ucs validate --db ~/.wavwarden/index.db --json
+uv run sfx tag propose PATH --db ~/.wavwarden/index.db --min-confidence 0.6 --output ~/reports/tag_proposals.json
 uv run sfx tag suggest PATH --use-ucs-catalog --min-confidence 0.8 --json
 uv run sfx tag suggest PATH --ucs-catalog ~/.wavwarden/ucs_catalog.json --output ~/reports/tag_suggestions_ucs.json
 ```
 
-Suggested data behavior:
+Future data behavior:
 
 - Support user-supplied UCS CSV/JSON via `--ucs-data` or `WAVWARDEN_UCS_DATA`.
 - Cache imported catalogs under `~/.wavwarden/` or in SQLite.
-- Add an importer for the official `Soundminer/_categorylist.csv` and
-  `UCS v8.2.1 Full List.xlsx` layouts.
+- Add an importer for the official `UCS v8.2.1 Full List.xlsx` layout.
 - Add a normalized `wavwarden/data/ucs_categories.json` generated from a pinned
   UCS release, with source URL, release version, import timestamp, and
   attribution.
@@ -109,8 +119,10 @@ Suggested DB additions:
 
 Data-backed rename should remain preview-first:
 
-- use catalog category when confidence is high
-- show confidence and evidence in the rename plan
+- preserve existing filenames unless the user asks for cleanup
+- keep UCS catalog/category data as metadata evidence, not a reason to force
+  UCS-looking filenames
+- show confidence and evidence in any future metadata/rename plan
 - fall back to `SFX_MISC_...` when uncertain
 - never overwrite and always write undo logs
 

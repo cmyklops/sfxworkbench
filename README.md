@@ -24,7 +24,8 @@ reviewable library cleanup for real studio copies before public v1.0 polish.
   vendor/product folders, and sibling bundle groups.
 - Report metadata, sample-rate, channel-layout, and related-take issues without
   changing the audio.
-- Suggest tags from filenames, folders, UCS names, and related file groups.
+- Propose useful UCS tags from corroborated evidence while preserving filenames
+  and existing metadata.
 
 wavwarden does **not** change audio content. Loudness normalization and sample
 rate conversion are out of scope for the beta safety promise.
@@ -160,6 +161,7 @@ These commands are report-only today:
 
 ```bash
 uv run sfx metadata audit --output ~/reports/metadata_report.json
+uv run sfx metadata view "FIRE_BURST_SmallBurst_6109.wav" --db ~/.wavwarden/index.db
 uv run sfx metadata backends --json
 uv run sfx groups audit PATH --output ~/reports/related_groups_report.json
 uv run sfx format audit PATH --output ~/reports/format_report.json
@@ -167,8 +169,11 @@ uv run sfx packs audit PATH --output ~/reports/pack_overlap_report.json
 uv run sfx packs plan --report ~/reports/pack_overlap_report.json --output ~/reports/pack_consolidation_plan.json
 uv run sfx packs review ~/reports/pack_consolidation_plan.json --approve-all
 uv run sfx packs apply ~/reports/pack_consolidation_plan.json --require-reviewed
-uv run sfx tag suggest PATH --use-ucs-catalog --min-confidence 0.8 --output ~/reports/tag_suggestions.json
-uv run sfx tag plan PATH --from-suggestions ~/reports/tag_suggestions.json --output ~/reports/tag_plan.json
+uv run sfx tag propose PATH --db ~/.wavwarden/index.db --min-confidence 0.6 --output ~/reports/tag_proposals.json
+uv run sfx tag suggest PATH --use-ucs-catalog --min-confidence 0.8 --source ucs_catalog --field ucs_category --field ucs_subcategory --output ~/reports/tag_suggestions.json
+uv run sfx tag plan PATH --from-suggestions ~/reports/tag_suggestions.json --source ucs_catalog --field ucs_category --field ucs_subcategory --output ~/reports/tag_plan.json
+uv run sfx tag summarize ~/reports/tag_plan.json --value-limit 20
+uv run sfx tag review ~/reports/tag_plan.json --approve-field ucs_category --only-status pending
 uv run sfx tag review ~/reports/tag_plan.json --approve-all
 uv run sfx tag apply ~/reports/tag_plan.json --require-reviewed --apply --log ~/reports/tag_apply_log.json
 uv run sfx tag sidecar-export ~/reports/accepted_tags.sidecar.json --path PATH

@@ -839,7 +839,7 @@ def test_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
     assert ucs_entries, "expected at least one UCS-derived suggestion entry"
     sample = ucs_entries[0]
     fields = {s["field"] for s in sample["suggestions"]}
-    assert {"category", "subcategory", "description"} <= fields
+    assert {"ucs_category", "ucs_subcategory", "description"} <= fields
     assert out.exists()
 
     plan_out = tmp_path / "tag_plan.json"
