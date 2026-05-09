@@ -735,6 +735,43 @@ def cmd_metadata_write_preview(
         )
 
 
+@metadata_app.command("write-fixtures")
+def cmd_metadata_write_fixtures(
+    plan: Annotated[Path, typer.Argument(help="Reviewed embedded metadata write plan JSON to fixture.")],
+    output_dir: Annotated[Path, typer.Argument(help="Directory for copied audio fixtures and manifest.")],
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index. Defaults to plan db_path.")] = None,
+    require_reviewed: Annotated[
+        bool, typer.Option("--require-reviewed", help="Only include approved write plan entries.")
+    ] = True,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Copy reviewed write targets to a fixture bundle. Original audio files are not modified."""
+    from wavwarden.metadata_write import build_metadata_write_fixture_bundle
+
+    if not plan.exists():
+        console.print(f"[red]Error: plan file not found: {plan}[/red]")
+        raise typer.Exit(1)
+    bundle = build_metadata_write_fixture_bundle(
+        plan,
+        output_dir,
+        db_path=db,
+        require_reviewed=require_reviewed,
+        quiet=json_output,
+    )
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "metadata_write_fixtures",
+                    "plan_path": plan,
+                    "output_dir": output_dir,
+                    "bundle": bundle,
+                }
+            )
+        )
+
+
 # ---------------------------------------------------------------------------
 # sfx ucs
 # ---------------------------------------------------------------------------

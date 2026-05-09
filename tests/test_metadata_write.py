@@ -7,6 +7,8 @@ from pathlib import Path
 
 from wavwarden.db import get_connection
 from wavwarden.metadata_write import (
+    FIXTURE_MANIFEST_NAME,
+    build_metadata_write_fixture_bundle,
     build_metadata_write_plan,
     preview_metadata_write_plan,
     review_metadata_write_plan,
@@ -193,3 +195,41 @@ def test_metadata_write_preview_rejects_non_ascii_bext_values(tmp_path: Path, tm
             "error": "Description must be ASCII for BWF MetaEdit/BEXT",
         }
     ]
+
+
+def test_metadata_write_fixture_bundle_copies_audio_and_rewrites_commands(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    audio = root / "SFX_HIT_01.wav"
+    audio.write_bytes(b"not really audio")
+    _seed_file(tmp_db, audio)
+
+    plan = build_metadata_write_plan(tmp_db, root=root, bwfmetaedit=_fake_bwfmetaedit(tmp_path))
+    plan_path = tmp_path / "metadata_write_plan.json"
+    write_metadata_write_plan(plan, plan_path, quiet=True)
+    review_metadata_write_plan(plan_path, approve_all=True, quiet=True)
+
+    bundle_dir = tmp_path / "metadata_fixtures"
+    bundle = build_metadata_write_fixture_bundle(plan_path, bundle_dir, db_path=tmp_db, quiet=True)
+
+    manifest = bundle_dir / FIXTURE_MANIFEST_NAME
+    assert manifest.exists()
+    assert len(bundle.files) == 1
+    fixture = bundle.files[0]
+    assert fixture.source_path == str(audio)
+    assert fixture.fixture_path == str(bundle_dir / "audio" / "000001_SFX_HIT_01.wav")
+    assert Path(fixture.fixture_path).read_bytes() == b"not really audio"
+    assert audio.read_bytes() == b"not really audio"
+    assert fixture.expected_fields == {"Description": "Metal Hit"}
+    assert fixture.command[-1] == fixture.fixture_path
+    assert fixture.command[:-1] == [
+        str(tmp_path / "bwfmetaedit"),
+        "--simulate",
+        "--reject-overwrite",
+        "--specialchars",
+        "--description=Metal Hit",
+    ]
+
+    payload = json.loads(manifest.read_text())
+    assert payload["files"][0]["expected_fields"] == {"Description": "Metal Hit"}
+    assert payload["files"][0]["command"][-1].endswith("000001_SFX_HIT_01.wav")

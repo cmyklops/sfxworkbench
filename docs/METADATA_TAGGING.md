@@ -108,6 +108,7 @@ uv run sfx metadata backends --json
 uv run sfx metadata write-plan metadata_write_plan.json --db ~/.wavwarden/index.db --path PATH --bwfmetaedit /path/to/bwfmetaedit
 uv run sfx metadata write-review metadata_write_plan.json --approve-all
 uv run sfx metadata write-preview metadata_write_plan.json --db ~/.wavwarden/index.db --require-reviewed
+uv run sfx metadata write-fixtures metadata_write_plan.json metadata_fixtures --db ~/.wavwarden/index.db
 ```
 
 Each plan entry should include validation anchors:
@@ -182,6 +183,7 @@ Current embedded-write preview:
 uv run sfx metadata write-plan metadata_write_plan.json --db ~/.wavwarden/index.db --path PATH --bwfmetaedit /path/to/bwfmetaedit
 uv run sfx metadata write-review metadata_write_plan.json --approve-all
 uv run sfx metadata write-preview metadata_write_plan.json --db ~/.wavwarden/index.db --require-reviewed
+uv run sfx metadata write-fixtures metadata_write_plan.json metadata_fixtures --db ~/.wavwarden/index.db
 ```
 
 The first supported mapping is deliberately narrow: accepted `description`,
@@ -191,6 +193,12 @@ remain visible in the plan as `unsupported_field` instead of being silently
 dropped. Preview renders simulated BWF MetaEdit commands with `--simulate`,
 `--reject-overwrite`, and `--specialchars`; these commands are for validation
 and review only, not for execution by wavwarden.
+
+`write-fixtures` copies only the files that survived preview validation into an
+output bundle, rewrites the simulated commands to those copied files, and writes
+`metadata_write_fixture_manifest.json` with expected BEXT fields. That bundle is
+the place to test real BWF MetaEdit readback later; original library audio is
+not modified.
 
 ## Audio Listening Suggestions
 

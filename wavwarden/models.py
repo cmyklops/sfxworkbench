@@ -506,6 +506,26 @@ class MetadataWritePreviewResult(BaseModel):
     commands: list[MetadataWriteCommand] = []
 
 
+class MetadataWriteFixtureFile(BaseModel):
+    file_id: int
+    source_path: str
+    fixture_path: str
+    command: list[str] = []
+    expected_fields: dict[str, str] = {}
+
+
+class MetadataWriteFixtureBundle(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    plan_path: str
+    output_dir: str
+    dry_run: bool = True
+    files: list[MetadataWriteFixtureFile] = []
+    errors: list[dict] = []
+
+
 class RelatedSoundFile(BaseModel):
     path: str
     filename: str

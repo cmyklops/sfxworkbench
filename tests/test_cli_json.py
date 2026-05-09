@@ -184,6 +184,23 @@ def test_tag_plan_review_apply_json(tmp_library, tmp_db, tmp_path) -> None:
     assert write_preview.exit_code == 0
     assert json.loads(write_preview.stdout)["command"] == "metadata_write_preview"
 
+    fixture_dir = tmp_path / "metadata_fixtures"
+    write_fixtures = runner.invoke(
+        app,
+        [
+            "metadata",
+            "write-fixtures",
+            str(metadata_write_plan),
+            str(fixture_dir),
+            "--db",
+            str(tmp_db),
+            "--json",
+        ],
+    )
+    assert write_fixtures.exit_code == 0
+    assert json.loads(write_fixtures.stdout)["command"] == "metadata_write_fixtures"
+    assert (fixture_dir / "metadata_write_fixture_manifest.json").exists()
+
 
 def test_similarity_cli_json_smoke(tmp_library, tmp_db, tmp_path) -> None:
     scan = runner.invoke(app, ["scan", str(tmp_library), "--db", str(tmp_db), "--json"])

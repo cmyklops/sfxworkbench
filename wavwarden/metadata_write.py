@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -14,6 +15,8 @@ from wavwarden.db import DEFAULT_DB_PATH, get_connection
 from wavwarden.metadata_backends import build_metadata_backends_report
 from wavwarden.models import (
     MetadataWriteCommand,
+    MetadataWriteFixtureBundle,
+    MetadataWriteFixtureFile,
     MetadataWritePlan,
     MetadataWritePlanEntry,
     MetadataWritePlanSummary,
@@ -45,6 +48,7 @@ BWF_METAEDIT_FIELD_LIMITS = {
     "Originator": 32,
     "OriginatorReference": 32,
 }
+FIXTURE_MANIFEST_NAME = "metadata_write_fixture_manifest.json"
 
 
 def _now_iso() -> str:
@@ -359,6 +363,59 @@ def preview_metadata_write_plan(
     if not quiet:
         show_metadata_write_preview_result(result)
     return result
+
+
+def _fixture_filename(command: MetadataWriteCommand) -> str:
+    source = Path(command.path)
+    return f"{command.file_id:06d}_{source.name}"
+
+
+def build_metadata_write_fixture_bundle(
+    plan_path: Path,
+    output_dir: Path,
+    db_path: Path | None = None,
+    require_reviewed: bool = True,
+    quiet: bool = False,
+) -> MetadataWriteFixtureBundle:
+    """Copy target files to a fixture bundle and render commands against the copies."""
+    preview = preview_metadata_write_plan(plan_path, db_path=db_path, require_reviewed=require_reviewed, quiet=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    audio_dir = output_dir / "audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+
+    bundle = MetadataWriteFixtureBundle(
+        generated_at=_now_iso(),
+        tool_version=__version__,
+        plan_path=str(plan_path),
+        output_dir=str(output_dir),
+        errors=list(preview.errors),
+    )
+
+    for command in preview.commands:
+        source = Path(command.path)
+        fixture_path = audio_dir / _fixture_filename(command)
+        copied_command = list(command.command)
+        if copied_command:
+            copied_command[-1] = str(fixture_path)
+        if not source.exists():
+            bundle.errors.append({"path": str(source), "error": "source file missing during fixture copy"})
+            continue
+        shutil.copy2(source, fixture_path)
+        bundle.files.append(
+            MetadataWriteFixtureFile(
+                file_id=command.file_id,
+                source_path=str(source),
+                fixture_path=str(fixture_path),
+                command=copied_command,
+                expected_fields=command.fields,
+            )
+        )
+
+    manifest_path = output_dir / FIXTURE_MANIFEST_NAME
+    manifest_path.write_text(json_dumps(bundle), encoding="utf-8")
+    if not quiet:
+        console.print(f"Metadata write fixture bundle written to [cyan]{manifest_path}[/cyan]")
+    return bundle
 
 
 def show_metadata_write_plan(plan: MetadataWritePlan) -> None:

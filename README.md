@@ -176,6 +176,7 @@ uv run sfx tag sidecar-import ~/reports/accepted_tags.sidecar.json --db ~/.wavwa
 uv run sfx metadata write-plan ~/reports/metadata_write_plan.json --path PATH --bwfmetaedit /path/to/bwfmetaedit
 uv run sfx metadata write-review ~/reports/metadata_write_plan.json --approve-all
 uv run sfx metadata write-preview ~/reports/metadata_write_plan.json --require-reviewed
+uv run sfx metadata write-fixtures ~/reports/metadata_write_plan.json ~/reports/metadata_fixtures
 ```
 
 UCS catalog support:
