@@ -201,6 +201,10 @@ def test_tag_plan_review_apply_json(tmp_library, tmp_db, tmp_path) -> None:
     assert json.loads(write_fixtures.stdout)["command"] == "metadata_write_fixtures"
     assert (fixture_dir / "metadata_write_fixture_manifest.json").exists()
 
+    write_readback = runner.invoke(app, ["metadata", "write-readback", str(fixture_dir), "--json"])
+    assert write_readback.exit_code == 0
+    assert json.loads(write_readback.stdout)["command"] == "metadata_write_readback"
+
 
 def test_similarity_cli_json_smoke(tmp_library, tmp_db, tmp_path) -> None:
     scan = runner.invoke(app, ["scan", str(tmp_library), "--db", str(tmp_db), "--json"])

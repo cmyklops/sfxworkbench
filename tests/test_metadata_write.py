@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import struct
 from pathlib import Path
 
 from wavwarden.db import get_connection
@@ -10,7 +11,9 @@ from wavwarden.metadata_write import (
     FIXTURE_MANIFEST_NAME,
     build_metadata_write_fixture_bundle,
     build_metadata_write_plan,
+    compare_metadata_write_fixture_readback,
     preview_metadata_write_plan,
+    read_bext_core_fields,
     review_metadata_write_plan,
     write_metadata_write_plan,
 )
@@ -21,6 +24,27 @@ def _fake_bwfmetaedit(tmp_path: Path) -> Path:
     executable.write_text("#!/bin/sh\necho 'BWF MetaEdit 24.04'\n", encoding="utf-8")
     executable.chmod(0o755)
     return executable
+
+
+def _padded_ascii(value: str, size: int) -> bytes:
+    encoded = value.encode("ascii")
+    if len(encoded) > size:
+        raise ValueError(value)
+    return encoded + b"\x00" * (size - len(encoded))
+
+
+def _write_wav_with_bext(path: Path, *, description: str, originator: str = "", originator_reference: str = "") -> None:
+    fmt_chunk = b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, 48000, 96000, 2, 16)
+    bext_payload = (
+        _padded_ascii(description, 256)
+        + _padded_ascii(originator, 32)
+        + _padded_ascii(originator_reference, 32)
+        + b"\x00" * (602 - 320)
+    )
+    bext_chunk = b"bext" + struct.pack("<I", len(bext_payload)) + bext_payload
+    data_chunk = b"data" + struct.pack("<I", 2) + b"\x00\x00"
+    body = fmt_chunk + bext_chunk + data_chunk
+    path.write_bytes(b"RIFF" + struct.pack("<I", len(body) + 4) + b"WAVE" + body)
 
 
 def _seed_file(tmp_db: Path, path: Path) -> None:
@@ -233,3 +257,66 @@ def test_metadata_write_fixture_bundle_copies_audio_and_rewrites_commands(tmp_pa
     payload = json.loads(manifest.read_text())
     assert payload["files"][0]["expected_fields"] == {"Description": "Metal Hit"}
     assert payload["files"][0]["command"][-1].endswith("000001_SFX_HIT_01.wav")
+
+
+def test_read_bext_core_fields_reads_supported_fields(tmp_path: Path) -> None:
+    wav = tmp_path / "tagged.wav"
+    _write_wav_with_bext(
+        wav,
+        description="Metal Hit",
+        originator="wavwarden",
+        originator_reference="WW-001",
+    )
+
+    fields = read_bext_core_fields(wav)
+
+    assert fields["Description"] == "Metal Hit"
+    assert fields["Originator"] == "wavwarden"
+    assert fields["OriginatorReference"] == "WW-001"
+
+
+def test_metadata_write_readback_matches_fixture_manifest(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    audio = root / "SFX_HIT_01.wav"
+    audio.write_bytes(b"not really audio")
+    _seed_file(tmp_db, audio)
+
+    plan = build_metadata_write_plan(tmp_db, root=root, bwfmetaedit=_fake_bwfmetaedit(tmp_path))
+    plan_path = tmp_path / "metadata_write_plan.json"
+    write_metadata_write_plan(plan, plan_path, quiet=True)
+    review_metadata_write_plan(plan_path, approve_all=True, quiet=True)
+    bundle_dir = tmp_path / "metadata_fixtures"
+    bundle = build_metadata_write_fixture_bundle(plan_path, bundle_dir, db_path=tmp_db, quiet=True)
+    _write_wav_with_bext(Path(bundle.files[0].fixture_path), description="Metal Hit")
+
+    report = compare_metadata_write_fixture_readback(bundle_dir, quiet=True)
+
+    assert report.summary.files_checked == 1
+    assert report.summary.matched_files == 1
+    assert report.summary.mismatched_files == 0
+    assert report.files[0].matched_fields == ["Description"]
+    assert report.files[0].mismatched_fields == {}
+
+
+def test_metadata_write_readback_reports_mismatched_fixture_fields(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    audio = root / "SFX_HIT_01.wav"
+    audio.write_bytes(b"not really audio")
+    _seed_file(tmp_db, audio)
+
+    plan = build_metadata_write_plan(tmp_db, root=root, bwfmetaedit=_fake_bwfmetaedit(tmp_path))
+    plan_path = tmp_path / "metadata_write_plan.json"
+    write_metadata_write_plan(plan, plan_path, quiet=True)
+    review_metadata_write_plan(plan_path, approve_all=True, quiet=True)
+    bundle_dir = tmp_path / "metadata_fixtures"
+    bundle = build_metadata_write_fixture_bundle(plan_path, bundle_dir, db_path=tmp_db, quiet=True)
+    _write_wav_with_bext(Path(bundle.files[0].fixture_path), description="Wrong")
+
+    report = compare_metadata_write_fixture_readback(bundle_dir / FIXTURE_MANIFEST_NAME, quiet=True)
+
+    assert report.summary.files_checked == 1
+    assert report.summary.matched_files == 0
+    assert report.summary.mismatched_files == 1
+    assert report.files[0].mismatched_fields == {"Description": {"expected": "Metal Hit", "actual": "Wrong"}}

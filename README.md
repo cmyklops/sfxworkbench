@@ -177,6 +177,7 @@ uv run sfx metadata write-plan ~/reports/metadata_write_plan.json --path PATH --
 uv run sfx metadata write-review ~/reports/metadata_write_plan.json --approve-all
 uv run sfx metadata write-preview ~/reports/metadata_write_plan.json --require-reviewed
 uv run sfx metadata write-fixtures ~/reports/metadata_write_plan.json ~/reports/metadata_fixtures
+uv run sfx metadata write-readback ~/reports/metadata_fixtures
 ```
 
 UCS catalog support:

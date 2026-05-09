@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import struct
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,6 +22,9 @@ from wavwarden.models import (
     MetadataWritePlanEntry,
     MetadataWritePlanSummary,
     MetadataWritePreviewResult,
+    MetadataWriteReadbackFile,
+    MetadataWriteReadbackReport,
+    MetadataWriteReadbackSummary,
     MetadataWriteReviewResult,
 )
 from wavwarden.utils import json_dumps
@@ -418,6 +422,107 @@ def build_metadata_write_fixture_bundle(
     return bundle
 
 
+def _resolve_fixture_manifest(path: Path) -> Path:
+    if path.is_dir():
+        return path / FIXTURE_MANIFEST_NAME
+    return path
+
+
+def load_metadata_write_fixture_bundle(path: Path) -> MetadataWriteFixtureBundle:
+    manifest_path = _resolve_fixture_manifest(path)
+    return MetadataWriteFixtureBundle.model_validate(json.loads(manifest_path.read_text()))
+
+
+def _decode_bext_text(raw: bytes) -> str:
+    return raw.split(b"\x00", 1)[0].decode("ascii", errors="ignore").rstrip()
+
+
+def read_bext_core_fields(path: Path) -> dict[str, str]:
+    """Read the small BEXT core field subset used by metadata write previews."""
+    fields: dict[str, str] = {}
+    with open(path, "rb") as f:
+        header = f.read(12)
+        if len(header) < 12:
+            raise ValueError("file is too small to be RIFF/WAVE")
+        riff_id, _, wave_id = struct.unpack_from("<4sI4s", header)
+        if riff_id not in (b"RIFF", b"RF64") or wave_id != b"WAVE":
+            raise ValueError("file is not RIFF/RF64 WAVE")
+        while True:
+            chunk_header = f.read(8)
+            if len(chunk_header) < 8:
+                break
+            chunk_id, chunk_size = struct.unpack_from("<4sI", chunk_header)
+            chunk_data = f.read(chunk_size)
+            if chunk_size % 2:
+                f.seek(1, 1)
+            if chunk_id != b"bext":
+                continue
+            if len(chunk_data) < 320:
+                raise ValueError("bext chunk is too small for core fields")
+            fields["Description"] = _decode_bext_text(chunk_data[0:256])
+            fields["Originator"] = _decode_bext_text(chunk_data[256:288])
+            fields["OriginatorReference"] = _decode_bext_text(chunk_data[288:320])
+            return fields
+    return fields
+
+
+def compare_metadata_write_fixture_readback(manifest_path: Path, quiet: bool = False) -> MetadataWriteReadbackReport:
+    """Compare copied fixture WAV BEXT fields against a fixture manifest."""
+    resolved_manifest = _resolve_fixture_manifest(manifest_path)
+    bundle = load_metadata_write_fixture_bundle(resolved_manifest)
+    files: list[MetadataWriteReadbackFile] = []
+    report_errors = list(bundle.errors)
+
+    for fixture in bundle.files:
+        errors: list[str] = []
+        actual_fields: dict[str, str] = {}
+        fixture_path = Path(fixture.fixture_path)
+        if not fixture_path.exists():
+            errors.append("fixture file missing")
+        else:
+            try:
+                actual_fields = read_bext_core_fields(fixture_path)
+            except ValueError as e:
+                errors.append(str(e))
+        matched_fields: list[str] = []
+        mismatched_fields: dict[str, dict[str, str | None]] = {}
+        for field, expected in fixture.expected_fields.items():
+            actual = actual_fields.get(field)
+            if actual == expected:
+                matched_fields.append(field)
+            else:
+                mismatched_fields[field] = {"expected": expected, "actual": actual}
+        files.append(
+            MetadataWriteReadbackFile(
+                file_id=fixture.file_id,
+                source_path=fixture.source_path,
+                fixture_path=fixture.fixture_path,
+                expected_fields=fixture.expected_fields,
+                actual_fields=actual_fields,
+                matched_fields=sorted(matched_fields),
+                mismatched_fields=mismatched_fields,
+                errors=errors,
+            )
+        )
+
+    report = MetadataWriteReadbackReport(
+        generated_at=_now_iso(),
+        tool_version=__version__,
+        manifest_path=str(resolved_manifest),
+        summary=MetadataWriteReadbackSummary(
+            files_checked=len(files),
+            matched_files=sum(1 for item in files if not item.errors and not item.mismatched_fields),
+            mismatched_files=sum(1 for item in files if item.mismatched_fields),
+            error_files=sum(1 for item in files if item.errors),
+        ),
+        files=files,
+        errors=report_errors,
+    )
+    if not quiet:
+        show_metadata_write_readback_report(report)
+    return report
+
+
 def show_metadata_write_plan(plan: MetadataWritePlan) -> None:
     table = Table(title="Embedded metadata write plan", show_lines=False)
     table.add_column("Metric")
@@ -440,4 +545,15 @@ def show_metadata_write_preview_result(result: MetadataWritePreviewResult) -> No
     table.add_row("Would write", f"{result.would_write:,}")
     table.add_row("Skipped", f"{result.skipped:,}")
     table.add_row("Errors", f"{len(result.errors):,}")
+    console.print(table)
+
+
+def show_metadata_write_readback_report(report: MetadataWriteReadbackReport) -> None:
+    table = Table(title="Embedded metadata fixture readback", show_lines=False)
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_row("Files checked", f"{report.summary.files_checked:,}")
+    table.add_row("Matched files", f"{report.summary.matched_files:,}")
+    table.add_row("Mismatched files", f"{report.summary.mismatched_files:,}")
+    table.add_row("Error files", f"{report.summary.error_files:,}")
     console.print(table)

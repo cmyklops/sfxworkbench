@@ -772,6 +772,38 @@ def cmd_metadata_write_fixtures(
         )
 
 
+@metadata_app.command("write-readback")
+def cmd_metadata_write_readback(
+    manifest: Annotated[
+        Path,
+        typer.Argument(help="Metadata write fixture manifest path, or a fixture bundle directory."),
+    ],
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Compare copied fixture BEXT metadata against the fixture manifest. No files are modified."""
+    from wavwarden.metadata_write import compare_metadata_write_fixture_readback
+
+    if not manifest.exists():
+        console.print(f"[red]Error: fixture manifest or directory not found: {manifest}[/red]")
+        raise typer.Exit(1)
+    try:
+        report = compare_metadata_write_fixture_readback(manifest, quiet=json_output)
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "metadata_write_readback",
+                    "manifest_path": manifest,
+                    "report": report,
+                }
+            )
+        )
+
+
 # ---------------------------------------------------------------------------
 # sfx ucs
 # ---------------------------------------------------------------------------

@@ -109,6 +109,7 @@ uv run sfx metadata write-plan metadata_write_plan.json --db ~/.wavwarden/index.
 uv run sfx metadata write-review metadata_write_plan.json --approve-all
 uv run sfx metadata write-preview metadata_write_plan.json --db ~/.wavwarden/index.db --require-reviewed
 uv run sfx metadata write-fixtures metadata_write_plan.json metadata_fixtures --db ~/.wavwarden/index.db
+uv run sfx metadata write-readback metadata_fixtures --json
 ```
 
 Each plan entry should include validation anchors:
@@ -184,6 +185,7 @@ uv run sfx metadata write-plan metadata_write_plan.json --db ~/.wavwarden/index.
 uv run sfx metadata write-review metadata_write_plan.json --approve-all
 uv run sfx metadata write-preview metadata_write_plan.json --db ~/.wavwarden/index.db --require-reviewed
 uv run sfx metadata write-fixtures metadata_write_plan.json metadata_fixtures --db ~/.wavwarden/index.db
+uv run sfx metadata write-readback metadata_fixtures --json
 ```
 
 The first supported mapping is deliberately narrow: accepted `description`,
@@ -198,7 +200,8 @@ and review only, not for execution by wavwarden.
 output bundle, rewrites the simulated commands to those copied files, and writes
 `metadata_write_fixture_manifest.json` with expected BEXT fields. That bundle is
 the place to test real BWF MetaEdit readback later; original library audio is
-not modified.
+not modified. `write-readback` compares copied fixture WAV BEXT fields against
+the manifest and reports matched/mismatched/error files.
 
 ## Audio Listening Suggestions
 

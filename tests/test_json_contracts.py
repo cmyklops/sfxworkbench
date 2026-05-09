@@ -1069,6 +1069,21 @@ def test_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
     assert write_fixtures_payload["bundle"]["dry_run"] is True
     assert isinstance(write_fixtures_payload["bundle"]["files"], list)
 
+    write_readback_payload = _normalize(
+        _load(runner.invoke(app, ["metadata", "write-readback", str(fixture_dir), "--json"]).stdout),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert write_readback_payload["schema_version"] == 1
+    assert write_readback_payload["command"] == "metadata_write_readback"
+    assert write_readback_payload["manifest_path"] == "<TMP>/metadata_fixtures"
+    assert (
+        write_readback_payload["report"]["manifest_path"]
+        == "<TMP>/metadata_fixtures/metadata_write_fixture_manifest.json"
+    )
+    assert "files_checked" in write_readback_payload["report"]["summary"]
+
 
 def test_ucs_validate_and_catalog_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
     src = tmp_path / "_categorylist.csv"

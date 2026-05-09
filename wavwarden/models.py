@@ -526,6 +526,35 @@ class MetadataWriteFixtureBundle(BaseModel):
     errors: list[dict] = []
 
 
+class MetadataWriteReadbackFile(BaseModel):
+    file_id: int
+    source_path: str
+    fixture_path: str
+    expected_fields: dict[str, str] = {}
+    actual_fields: dict[str, str] = {}
+    matched_fields: list[str] = []
+    mismatched_fields: dict[str, dict[str, str | None]] = {}
+    errors: list[str] = []
+
+
+class MetadataWriteReadbackSummary(BaseModel):
+    files_checked: int = 0
+    matched_files: int = 0
+    mismatched_files: int = 0
+    error_files: int = 0
+
+
+class MetadataWriteReadbackReport(BaseModel):
+    schema_version: int = 1
+    generated_at: str
+    tool: str = "wavwarden"
+    tool_version: str
+    manifest_path: str
+    summary: MetadataWriteReadbackSummary
+    files: list[MetadataWriteReadbackFile] = []
+    errors: list[dict] = []
+
+
 class RelatedSoundFile(BaseModel):
     path: str
     filename: str
