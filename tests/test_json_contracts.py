@@ -1,5 +1,6 @@
 """Contract-grade checks for normalized CLI JSON output."""
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -43,6 +44,8 @@ def _normalize(value, tmp_path: Path, tmp_library: Path, tmp_db: Path):
 
 
 def _seed_metadata_write_file(tmp_db: Path, path: Path) -> None:
+    h = hashlib.md5()
+    h.update(path.read_bytes())
     conn = get_connection(tmp_db)
     cursor = conn.execute(
         """
@@ -59,7 +62,7 @@ def _seed_metadata_write_file(tmp_db: Path, path: Path) -> None:
             path.suffix.lower(),
             path.stat().st_size,
             path.stat().st_mtime,
-            "abc123",
+            h.hexdigest(),
             48000,
             24,
             2,

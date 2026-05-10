@@ -183,19 +183,52 @@ Current audit focus:
 
 ## Next
 
-Progress: 6/6 complete for this sprint.
+Progress: 6/6 complete for the Internal Beta Baseline sprint.
 
-1. Done: stabilize the metadata writing work before more feature work.
-2. Done: keep README, `docs/PHASES.md`, and `docs/METADATA_TAGGING.md` aligned with
-   the current Mutagen apply/undo behavior.
-3. Done: add JSON contract coverage for `metadata write-apply --json` and
-   `metadata write-undo --json`.
-4. Done: run `uv run --extra dev poe check` and `uv run --extra dev poe json-smoke`
-   before committing this slice.
-5. Done: broaden BWF metadata only through copied real-library slices that
-   pass the same write/readback/apply/undo loop.
-6. Done: run one real-library `sfx tag propose` calibration pass with embedded
-   metadata evidence, then record the result here.
+1. Done: remove ignored root-level generated apply logs and keep
+   `metadata_write_apply_log_*.json` / `tag_apply_log_*.json` ignored.
+2. Done: add CI coverage for Python 3.10 and 3.11.
+3. Done: tighten metadata write safety so apply validates current on-disk file
+   anchors, not only stale SQLite rows.
+4. Done: tighten metadata write undo so logs record pre/post anchors and undo
+   refuses targets changed after apply.
+5. Done: refresh README/PHASES drift around RIFF INFO `IKEY` metadata writes
+   and embedded metadata apply/undo audit coverage.
+6. Done: run clean install checks, full local validation, JSON smoke, and one
+   real-library beta audit bundle.
+
+Internal Beta Baseline validation:
+
+- Clean install checks:
+  - `uv sync --extra dev`
+  - `uv sync --extra metadata --extra dev`
+  - `uv run sfx --help`
+- Local validation:
+  - `uv run pytest tests/test_metadata_write.py tests/test_json_contracts.py -v`
+    passed: 42 tests.
+  - `uv run --extra dev poe check` passed: 317 tests plus lint/format.
+  - `uv run --extra dev poe json-smoke` passed: 26 tests.
+- Real-library beta audit:
+  - Output dir:
+    `/private/tmp/wavwarden_beta_audit_sprint_20260510`.
+  - Command:
+    `uv run --extra dev poe beta-audit /Users/mattwesdock/CommercialLibraries --output-dir /private/tmp/wavwarden_beta_audit_sprint_20260510`
+  - Summary: 120,716 files scanned; 0 scan errors; 0 filename issues; 22,412
+    missing metadata rows; 2,854 unusual sample-rate files; 15,331 related
+    groups; 0 pack overlap candidates; pack apply dry-run planned 0 moves.
+
+Next sprint: 0/5 complete.
+
+1. Tighten `tag propose` candidate-opening rules for noisy embedded metadata
+   terms such as `metal` and `tonal`.
+2. Add a BWF-focused CLI JSON contract slice for `metadata write-apply --json`
+   covering `write_results`, BWF readback, and RIFF INFO `IKEY`.
+3. Add or document shared safe-folder config design across dedupe, packs,
+   organize, rename, and metadata workflows.
+4. Add clean CI validation for optional metadata extras if runtime remains
+   acceptable.
+5. Decide whether the next beta audit should include similarity, or keep
+   similarity validation as a separate overnight run.
 
 Terminal-test calibration:
 

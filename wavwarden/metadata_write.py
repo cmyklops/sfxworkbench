@@ -750,6 +750,7 @@ def review_metadata_write_plan(
 
 
 def _validate_plan_entry(conn, entry: MetadataWritePlanEntry) -> str | None:
+    path = Path(entry.path)
     row = conn.execute(
         "SELECT path, size_bytes, mtime, md5 FROM files WHERE id = ?",
         (entry.file_id,),
@@ -764,8 +765,17 @@ def _validate_plan_entry(conn, entry: MetadataWritePlanEntry) -> str | None:
         return "mtime changed"
     if entry.md5 is not None and row["md5"] != entry.md5:
         return "md5 changed"
-    if not Path(entry.path).exists():
+    if not path.exists():
         return "file does not exist"
+    stat = path.stat()
+    if entry.size_bytes is not None and stat.st_size != entry.size_bytes:
+        return f"file size changed: expected {entry.size_bytes}, got {stat.st_size}"
+    if entry.mtime is not None and stat.st_mtime != entry.mtime:
+        return "file mtime changed"
+    if entry.md5 is not None:
+        current_md5 = _md5(path)
+        if current_md5 != entry.md5:
+            return "file md5 changed"
     return None
 
 
@@ -1092,9 +1102,17 @@ def apply_metadata_write_plan(
             try:
                 target = _backup_target(source, backup_dir)
                 target.parent.mkdir(parents=True, exist_ok=True)
+                source_stat = source.stat()
+                backup_entry = {
+                    "path": str(source),
+                    "backup_path": str(target),
+                    "pre_apply_size": source_stat.st_size,
+                    "pre_apply_mtime": source_stat.st_mtime,
+                    "pre_apply_md5": _md5(source),
+                }
                 shutil.copy2(source, target)
                 result.files_backed_up += 1
-                result.backups.append({"path": str(source), "backup_path": str(target)})
+                result.backups.append(backup_entry)
                 if backend == "mutagen":
                     write_mutagen_fields(source, command.fields)
                     actual_fields = read_mutagen_fields(source, list(command.fields))
@@ -1102,6 +1120,14 @@ def apply_metadata_write_plan(
                     write_result = run_bwfmetaedit_command(command.command, source)
                     result.write_results.append({"path": str(source), **write_result})
                     actual_fields = read_bwfmetaedit_fields(source, list(command.fields))
+                post_stat = source.stat()
+                backup_entry.update(
+                    {
+                        "post_apply_size": post_stat.st_size,
+                        "post_apply_mtime": post_stat.st_mtime,
+                        "post_apply_md5": _md5(source),
+                    }
+                )
                 matched_fields, mismatched_fields = _compare_expected_fields(command.fields, actual_fields)
                 result.readback.append(
                     {
@@ -1196,6 +1222,12 @@ def undo_metadata_write_apply_log(
             if not target.exists():
                 result.errors.append({"path": str(target), "error": "target file missing"})
                 continue
+            expected_md5 = backup.get("post_apply_md5")
+            if expected_md5:
+                current_md5 = _md5(target)
+                if current_md5 != expected_md5:
+                    result.errors.append({"path": str(target), "error": "target changed since apply log was written"})
+                    continue
             size = source.stat().st_size
             if dry_run:
                 result.restored += 1

@@ -565,7 +565,7 @@ Target workflows:
 - `organize apply`, `organize undo`, `organize nesting-apply`, and
   `organize nesting-undo`
 - `packs apply` and `packs undo`
-- future embedded metadata/tag apply workflows
+- embedded metadata/tag apply and undo workflows
 - future dual-mono conversion workflows
 - future permanent-delete workflows
 
@@ -587,6 +587,7 @@ scan -> audit -> dedupe -> review -> apply -> undo
 scan -> rename preview -> apply -> undo
 scan -> organize audit -> review -> apply -> undo
 scan -> packs audit -> plan -> review -> apply -> undo
+scan -> metadata write-plan -> review -> apply -> undo
 ```
 
 These tests should cover collisions, missing files, changed hashes, stale plans,

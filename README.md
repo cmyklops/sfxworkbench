@@ -200,9 +200,10 @@ uv run sfx metadata write-undo ~/reports/metadata_write_apply_log.json --apply
 
 `metadata write-apply` is deliberately narrow in the beta: it writes reviewed
 Mutagen-backed tags for AIFF, MP3, FLAC, Ogg/Vorbis, Opus, and M4A, plus
-reviewed BWF `bext` fields for WAV/RF64 through BWF MetaEdit. It creates
-backups first, verifies readback, and refreshes the SQLite index. W64 remains
-sidecar/DB-only until a reliable embedded-write backend is proven.
+reviewed BWF `bext` fields and RIFF INFO `IKEY` keywords for WAV/RF64 through
+BWF MetaEdit. It creates backups first, verifies readback, and refreshes the
+SQLite index. W64 remains sidecar/DB-only until a reliable embedded-write
+backend is proven.
 
 UCS catalog support:
 

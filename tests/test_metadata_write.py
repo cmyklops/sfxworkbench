@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import struct
@@ -30,6 +31,12 @@ def _fake_bwfmetaedit(tmp_path: Path) -> Path:
     executable.write_text("#!/bin/sh\necho 'BWF MetaEdit 24.04'\n", encoding="utf-8")
     executable.chmod(0o755)
     return executable
+
+
+def _md5(path: Path) -> str:
+    h = hashlib.md5()
+    h.update(path.read_bytes())
+    return h.hexdigest()
 
 
 def _padded_ascii(value: str, size: int) -> bytes:
@@ -95,7 +102,7 @@ def _seed_file(tmp_db: Path, path: Path) -> None:
             path.suffix.lower(),
             path.stat().st_size,
             path.stat().st_mtime,
-            "abc123",
+            _md5(path),
             48000,
             24,
             2,
@@ -935,6 +942,93 @@ def test_metadata_write_apply_reports_mutagen_readback_mismatch(tmp_path: Path, 
             "fields": result.readback[0]["mismatched_fields"],
         }
     ]
+
+
+def test_metadata_write_apply_rejects_file_changed_after_plan(tmp_path: Path, tmp_db: Path, monkeypatch) -> None:
+    monkeypatch.setattr(metadata_backends.importlib_util, "find_spec", lambda _name: object())
+    monkeypatch.setattr(metadata_backends.importlib_metadata, "version", lambda _name: "1.47.0")
+    writes: list[Path] = []
+    monkeypatch.setattr(metadata_write, "write_mutagen_fields", lambda path, _fields: writes.append(path))
+    root = tmp_path / "library"
+    root.mkdir()
+    audio = root / "SFX_HIT_01.flac"
+    original = b"not really audio"
+    audio.write_bytes(original)
+    _seed_file(tmp_db, audio)
+
+    plan = build_metadata_write_plan(tmp_db, root=root, bwfmetaedit=_fake_bwfmetaedit(tmp_path))
+    plan_path = tmp_path / "metadata_write_plan.json"
+    write_metadata_write_plan(plan, plan_path, quiet=True)
+    review_metadata_write_plan(plan_path, approve_all=True, quiet=True)
+    changed = original + b"\nexternal edit"
+    audio.write_bytes(changed)
+
+    result = apply_metadata_write_plan(
+        plan_path,
+        db_path=tmp_db,
+        dry_run=False,
+        backup_dir=tmp_path / "backups",
+        quiet=True,
+    )
+
+    assert result.applied == 0
+    assert result.files_written == 0
+    assert result.files_backed_up == 0
+    assert result.backups == []
+    assert writes == []
+    assert result.errors == [
+        {
+            "entry_id": 1,
+            "path": str(audio),
+            "error": f"file size changed: expected {len(original)}, got {len(changed)}",
+        },
+        {
+            "entry_id": 2,
+            "path": str(audio),
+            "error": f"file size changed: expected {len(original)}, got {len(changed)}",
+        },
+    ]
+
+
+def test_metadata_write_undo_refuses_target_changed_after_apply(tmp_path: Path, tmp_db: Path, monkeypatch) -> None:
+    monkeypatch.setattr(metadata_backends.importlib_util, "find_spec", lambda _name: object())
+    monkeypatch.setattr(metadata_backends.importlib_metadata, "version", lambda _name: "1.47.0")
+    readbacks: dict[Path, dict[str, str]] = {}
+
+    def fake_write_mutagen_fields(path: Path, fields: dict[str, str]) -> None:
+        path.write_bytes(path.read_bytes() + b"\nTAGS")
+        readbacks[path] = dict(fields)
+
+    monkeypatch.setattr(metadata_write, "write_mutagen_fields", fake_write_mutagen_fields)
+    monkeypatch.setattr(metadata_write, "read_mutagen_fields", lambda path, _fields: readbacks.get(path, {}))
+    root = tmp_path / "library"
+    root.mkdir()
+    audio = root / "SFX_HIT_01.flac"
+    original = b"not really audio"
+    audio.write_bytes(original)
+    _seed_file(tmp_db, audio)
+
+    plan = build_metadata_write_plan(tmp_db, root=root, bwfmetaedit=_fake_bwfmetaedit(tmp_path))
+    plan_path = tmp_path / "metadata_write_plan.json"
+    write_metadata_write_plan(plan, plan_path, quiet=True)
+    review_metadata_write_plan(plan_path, approve_all=True, quiet=True)
+    log_path = tmp_path / "metadata_apply_log.json"
+    applied = apply_metadata_write_plan(
+        plan_path,
+        db_path=tmp_db,
+        dry_run=False,
+        backup_dir=tmp_path / "backups",
+        log_path=log_path,
+        quiet=True,
+    )
+    assert applied.errors == []
+    audio.write_bytes(audio.read_bytes() + b"\npost apply edit")
+
+    undone = undo_metadata_write_apply_log(log_path, db_path=tmp_db, dry_run=False, quiet=True)
+
+    assert undone.restored == 0
+    assert undone.errors == [{"path": str(audio), "error": "target changed since apply log was written"}]
+    assert audio.read_bytes() == original + b"\nTAGS\npost apply edit"
 
 
 def test_metadata_write_preview_requires_available_backend(tmp_path: Path, tmp_db: Path) -> None:
