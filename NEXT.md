@@ -179,16 +179,19 @@ Current audit focus:
 
 ## Next
 
-1. Stabilize the metadata writing branch before more feature work.
-2. Keep README, `docs/PHASES.md`, and `docs/METADATA_TAGGING.md` aligned with
+Progress: 5/6 complete for this sprint.
+
+1. Done: stabilize the metadata writing work before more feature work.
+2. Done: keep README, `docs/PHASES.md`, and `docs/METADATA_TAGGING.md` aligned with
    the current Mutagen apply/undo behavior.
-3. Add JSON contract coverage for `metadata write-apply --json` and
+3. Done: add JSON contract coverage for `metadata write-apply --json` and
    `metadata write-undo --json`.
-4. Run `uv run --extra dev poe check` and `uv run --extra dev poe json-smoke`
+4. Done: run `uv run --extra dev poe check` and `uv run --extra dev poe json-smoke`
    before committing this slice.
-5. Continue broadening BWF metadata only through copied real-library slices that
+5. Done: broaden BWF metadata only through copied real-library slices that
    pass the same write/readback/apply/undo loop.
-6. Keep audio conversion and loudness normalization out of scope.
+6. Remaining: run one real-library `sfx tag propose` calibration pass with
+   embedded metadata evidence, then record the result here.
 
 ## Later
 
@@ -200,6 +203,10 @@ Current audit focus:
 ## Solo Workflow
 
 - One active feature at a time.
+- Work directly on `main` for solo-dev slices; skip feature branches unless
+  explicitly useful.
+- Use simple sprint progress updates such as `3/6 complete`, especially at
+  closeout or before switching context.
 - Prefer report-only first, then reviewed plan/apply.
 - Commit small green slices.
 - Use parallel agents for bounded codebase reads or external research, not for
