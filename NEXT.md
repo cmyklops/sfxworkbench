@@ -217,18 +217,61 @@ Internal Beta Baseline validation:
     missing metadata rows; 2,854 unusual sample-rate files; 15,331 related
     groups; 0 pack overlap candidates; pack apply dry-run planned 0 moves.
 
+Tag Proposal Precision sprint: 5/5 complete.
+
+1. Done: tighten `tag propose` candidate-opening rules for noisy embedded/path
+   subcategory terms such as `metal` and `tonal`.
+2. Done: add regression coverage for embedded metadata that has category +
+   subcategory context, embedded-only noisy terms, and ambiguous path fan-out
+   such as `Cinematic Metal Impacts`.
+3. Done: add BWF-focused CLI JSON contract coverage for
+   `metadata write-apply --json`, including BWF MetaEdit `write_results`, BEXT
+   readback, and RIFF INFO `IKEY` keyword readback.
+4. Done: add a dedicated Python 3.11 CI job for optional `metadata` extras
+   without expanding the full Python matrix.
+5. Done: run real-library `tag propose` calibration and record before/after
+   totals.
+
+Tag proposal calibration:
+
+- Baseline report:
+  `/Users/mattwesdock/reports/tag_proposals_embedded_20260509_232710.json`.
+- New report:
+  `/private/tmp/tag_proposals_precision_20260510.json`.
+- Command:
+  `uv run sfx tag propose /Users/mattwesdock/CommercialLibraries --db /Users/mattwesdock/.wavwarden/index.db --catalog /Users/mattwesdock/.wavwarden/ucs_catalog.json --min-confidence 0.6 --limit 500 --output /private/tmp/tag_proposals_precision_20260510.json --json`
+- Before: 178,400 proposals across 46,756 files; 16,791 strong and 161,609
+  review.
+- After: 79,674 proposals across 41,699 files; 13,201 strong and 66,473 review.
+- Delta: -98,726 total proposals, -95,136 review proposals, -3,590 strong
+  proposals, and -5,057 files with proposals.
+- Spot-check finding: the obvious `metal` fan-out into unrelated
+  DOORS/DRAWERS/RAIN/WINDOWS candidates is removed from the early sample, while
+  useful METAL/TONAL, UI/CLICK, AMBIENCE/ROOM TONE, and similar corroborated
+  candidates remain. Remaining noisy examples include generic `tone`, `walla`,
+  `sea`, and `loop` cases that should be calibrated separately.
+
+Validation:
+
+- `uv run pytest tests/test_tag_propose.py tests/test_json_contracts.py -v`
+  passed: 21 tests.
+- `uv run --extra dev poe check` passed: 321 tests plus lint/format.
+- `uv run --extra dev poe json-smoke` passed: 27 tests.
+- `uv sync --extra metadata --extra dev` passed.
+- `uv run pytest tests/test_audio.py tests/test_metadata_backends.py tests/test_metadata_write.py -v`
+  passed: 38 tests.
+
 Next sprint: 0/5 complete.
 
-1. Tighten `tag propose` candidate-opening rules for noisy embedded metadata
-   terms such as `metal` and `tonal`.
-2. Add a BWF-focused CLI JSON contract slice for `metadata write-apply --json`
-   covering `write_results`, BWF readback, and RIFF INFO `IKEY`.
-3. Add or document shared safe-folder config design across dedupe, packs,
-   organize, rename, and metadata workflows.
-4. Add clean CI validation for optional metadata extras if runtime remains
-   acceptable.
-5. Decide whether the next beta audit should include similarity, or keep
-   similarity validation as a separate overnight run.
+1. Calibrate remaining broad proposal terms: `tone`, `room`, `walla`, `sea`,
+   `loop`, and high-volume material terms.
+2. Add proposal summary diagnostics for top opening tokens and fan-out counts,
+   so noisy terms are visible without manual JSON spelunking.
+3. Design shared safe-folder config across dedupe, packs, organize, rename, and
+   metadata workflows.
+4. Decide whether similarity validation should run as an overnight automation
+   or a manual beta-audit option.
+5. Review CI runtime after the metadata-extras job lands on GitHub.
 
 Terminal-test calibration:
 

@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import struct
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -43,7 +44,9 @@ def _normalize(value, tmp_path: Path, tmp_library: Path, tmp_db: Path):
     return value
 
 
-def _seed_metadata_write_file(tmp_db: Path, path: Path) -> None:
+def _seed_metadata_write_file(
+    tmp_db: Path, path: Path, tags: tuple[tuple[str, str], ...] = (("description", "Metal Hit"), ("category", "SFX"))
+) -> None:
     h = hashlib.md5()
     h.update(path.read_bytes())
     conn = get_connection(tmp_db)
@@ -71,7 +74,7 @@ def _seed_metadata_write_file(tmp_db: Path, path: Path) -> None:
         ),
     )
     file_id = cursor.lastrowid
-    for field, value in (("description", "Metal Hit"), ("category", "SFX")):
+    for field, value in tags:
         conn.execute(
             """
             INSERT INTO accepted_tags (
@@ -84,6 +87,42 @@ def _seed_metadata_write_file(tmp_db: Path, path: Path) -> None:
         )
     conn.commit()
     conn.close()
+
+
+def _fake_bwfmetaedit(tmp_path: Path) -> Path:
+    executable = tmp_path / "bwfmetaedit"
+    executable.write_text("#!/bin/sh\necho 'BWF MetaEdit 24.04'\n", encoding="utf-8")
+    executable.chmod(0o755)
+    return executable
+
+
+def _padded_ascii(value: str, size: int) -> bytes:
+    encoded = value.encode("ascii")
+    return encoded + b"\x00" * (size - len(encoded))
+
+
+def _write_wav_without_bext(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fmt_chunk = b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, 48000, 96000, 2, 16)
+    data_chunk = b"data" + struct.pack("<I", 2) + b"\x00\x00"
+    body = fmt_chunk + data_chunk
+    path.write_bytes(b"RIFF" + struct.pack("<I", len(body) + 4) + b"WAVE" + body)
+
+
+def _write_wav_with_info(path: Path, *, description: str, info: dict[str, str]) -> None:
+    fmt_chunk = b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, 48000, 96000, 2, 16)
+    bext_payload = _padded_ascii(description, 256) + b"\x00" * (602 - 256)
+    chunks = [fmt_chunk, b"bext" + struct.pack("<I", len(bext_payload)) + bext_payload]
+    info_payload = b"INFO"
+    for key, value in info.items():
+        encoded = value.encode("utf-8") + b"\x00"
+        info_payload += key.encode("ascii") + struct.pack("<I", len(encoded)) + encoded
+        if len(encoded) % 2:
+            info_payload += b"\x00"
+    chunks.append(b"LIST" + struct.pack("<I", len(info_payload)) + info_payload)
+    data_chunk = b"data" + struct.pack("<I", 2) + b"\x00\x00"
+    body = b"".join(chunks) + data_chunk
+    path.write_bytes(b"RIFF" + struct.pack("<I", len(body) + 4) + b"WAVE" + body)
 
 
 def test_scan_json_contract(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
@@ -1296,6 +1335,121 @@ def test_metadata_write_apply_and_undo_json_contract(
     assert undo_payload["result"]["restored"] == 1
     assert undo_payload["result"]["errors"] == []
     assert audio.read_bytes() == original
+
+
+def test_metadata_write_apply_bwf_and_riff_info_json_contract(
+    tmp_db: Path, tmp_path: Path, tmp_library: Path, monkeypatch
+) -> None:
+    audio = tmp_library / "sounds" / "Car Crash 01.wav"
+    _write_wav_without_bext(audio)
+    _seed_metadata_write_file(
+        tmp_db,
+        audio,
+        tags=(
+            ("description", "Metal Hit"),
+            ("keyword", "vehicle impact"),
+            ("keyword", "auto collision"),
+            ("keyword", "wreck"),
+        ),
+    )
+
+    def fake_run_bwfmetaedit_command(command: list[str], target_path: Path, timeout: int = 30) -> dict:
+        executable_command = metadata_write._bwfmetaedit_write_command(command, target_path)
+        _write_wav_with_info(
+            target_path,
+            description="Metal Hit",
+            info={"IKEY": "auto collision; vehicle impact; wreck"},
+        )
+        return {"command": executable_command, "returncode": 0, "stdout": "updated\n", "stderr": ""}
+
+    monkeypatch.setattr(metadata_write, "run_bwfmetaedit_command", fake_run_bwfmetaedit_command)
+    bwfmetaedit = _fake_bwfmetaedit(tmp_path)
+    plan_out = tmp_path / "metadata_write_bwf_plan.json"
+    plan_result = runner.invoke(
+        app,
+        [
+            "metadata",
+            "write-plan",
+            str(plan_out),
+            "--db",
+            str(tmp_db),
+            "--path",
+            str(tmp_library),
+            "--backend",
+            "bwfmetaedit",
+            "--bwfmetaedit",
+            str(bwfmetaedit),
+            "--json",
+        ],
+    )
+    assert plan_result.exit_code == 0
+    review_result = runner.invoke(app, ["metadata", "write-review", str(plan_out), "--approve-all", "--json"])
+    assert review_result.exit_code == 0
+
+    backup_dir = tmp_path / "metadata_write_bwf_backups"
+    log_path = tmp_path / "metadata_write_bwf_apply_log.json"
+    apply_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "metadata",
+                    "write-apply",
+                    str(plan_out),
+                    "--db",
+                    str(tmp_db),
+                    "--require-reviewed",
+                    "--backup-dir",
+                    str(backup_dir),
+                    "--log",
+                    str(log_path),
+                    "--apply",
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert apply_payload["schema_version"] == 1
+    assert apply_payload["command"] == "metadata_write_apply"
+    assert apply_payload["result"]["dry_run"] is False
+    assert apply_payload["result"]["applied"] == 2
+    assert apply_payload["result"]["files_written"] == 1
+    assert apply_payload["result"]["files_verified"] == 1
+    assert apply_payload["result"]["write_results"] == [
+        {
+            "path": "<ROOT>/sounds/Car Crash 01.wav",
+            "command": [
+                "<TMP>/bwfmetaedit",
+                "--reject-overwrite",
+                "--specialchars",
+                "--Description=Metal Hit",
+                "--IKEY=auto collision; vehicle impact; wreck",
+                "<ROOT>/sounds/Car Crash 01.wav",
+            ],
+            "returncode": 0,
+            "stdout": "updated\n",
+            "stderr": "",
+        }
+    ]
+    assert apply_payload["result"]["readback"] == [
+        {
+            "path": "<ROOT>/sounds/Car Crash 01.wav",
+            "expected_fields": {
+                "Description": "Metal Hit",
+                "IKEY": ["auto collision", "vehicle impact", "wreck"],
+            },
+            "actual_fields": {
+                "Description": "Metal Hit",
+                "IKEY": ["auto collision", "vehicle impact", "wreck"],
+            },
+            "matched_fields": ["Description", "IKEY"],
+            "mismatched_fields": {},
+        }
+    ]
 
 
 def test_ucs_validate_and_catalog_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:

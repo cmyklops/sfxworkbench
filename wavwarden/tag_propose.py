@@ -200,6 +200,13 @@ def _lookup_entry_by_category_or_short(
     return None
 
 
+def _token_can_open_entry(entry: UcsEntry, source_tokens: set[str], matches: list[UcsEntry]) -> bool:
+    if len(matches) <= 3:
+        return True
+    category_terms = _tokens(entry.cat_short) | _tokens(entry.category)
+    return bool(source_tokens & category_terms)
+
+
 def _candidate_entries(
     tokens_by_source: dict[str, set[str]], index: dict[str, list[UcsEntry]], exact_entries: list[UcsEntry]
 ) -> list[UcsEntry]:
@@ -207,16 +214,32 @@ def _candidate_entries(
     for entry in exact_entries:
         by_cat_id[entry.cat_id] = entry
 
-    context_sources = ("path", "embedded_metadata", "accepted_category", "accepted_semantic")
+    context_sources = ("path", "accepted_category", "accepted_semantic")
     for source in context_sources:
         for token in tokens_by_source[source]:
-            for entry in index.get(token, []):
+            matches = index.get(token, [])
+            for entry in matches:
+                if source == "path" and not _token_can_open_entry(entry, tokens_by_source[source], matches):
+                    continue
+                by_cat_id[entry.cat_id] = entry
+
+    embedded_tokens = tokens_by_source["embedded_metadata"]
+    for token in embedded_tokens:
+        matches = index.get(token, [])
+        for entry in matches:
+            if not _token_can_open_entry(entry, embedded_tokens, matches):
+                continue
+            category_terms = _tokens(entry.cat_short) | _tokens(entry.category)
+            if embedded_tokens & category_terms:
                 by_cat_id[entry.cat_id] = entry
 
     has_context = any(tokens_by_source[source] for source in context_sources)
     if has_context:
         for token in tokens_by_source["filename"]:
-            for entry in index.get(token, []):
+            matches = index.get(token, [])
+            for entry in matches:
+                if not _token_can_open_entry(entry, tokens_by_source["filename"], matches):
+                    continue
                 by_cat_id[entry.cat_id] = entry
     return sorted(by_cat_id.values(), key=lambda entry: (entry.category, entry.subcategory, entry.cat_id))
 
@@ -274,6 +297,10 @@ def _proposal_from_evidence(entry: UcsEntry, evidence: _CandidateEvidence) -> Ta
     elif category_sources and subcategory_sources and "path" in sources:
         strength = "strong"
         confidence = 0.82
+    elif category_sources and subcategory_sources and sources == {"embedded_metadata"}:
+        strength = "review"
+        confidence = 0.62
+        notes.append("embedded metadata includes both category and subcategory context")
     elif subcategory_sources and len(sources) >= 2:
         strength = "review"
         confidence = 0.68

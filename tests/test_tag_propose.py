@@ -11,7 +11,8 @@ from wavwarden.models import UcsCatalog, UcsCatalogProvenance, UcsEntry
 from wavwarden.tag_propose import build_tag_proposal_report
 
 
-def _catalog(path: Path) -> None:
+def _catalog(path: Path, entries: list[UcsEntry] | None = None) -> None:
+    catalog_entries = entries or [UcsEntry(cat_short="AMB", category="AMBIENCE", subcategory="RAIN", cat_id="AMBRain")]
     catalog = UcsCatalog(
         tool_version="test",
         provenance=UcsCatalogProvenance(
@@ -21,9 +22,9 @@ def _catalog(path: Path) -> None:
             release_version="v8.2.1",
             imported_at="2026-01-01T00:00:00+00:00",
             attribution="test",
-            entry_count=1,
+            entry_count=len(catalog_entries),
         ),
-        entries=[UcsEntry(cat_short="AMB", category="AMBIENCE", subcategory="RAIN", cat_id="AMBRain")],
+        entries=catalog_entries,
     )
     path.write_text(json.dumps(catalog.model_dump()), encoding="utf-8")
 
@@ -104,3 +105,69 @@ def test_tag_propose_uses_embedded_bext_description_as_evidence(tmp_path: Path, 
     evidence = {item.source: item.value for item in proposal.evidence}
     assert evidence["filename"] == "rain"
     assert evidence["embedded_metadata"] == "ambience, rain"
+
+
+def test_tag_propose_embedded_metadata_opens_when_category_and_subcategory_agree(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    audio = root / "Take 01.wav"
+    _write_wav_with_bext_description(audio, "Ambience rain steady shower")
+    _seed_file(tmp_db, audio)
+    catalog = tmp_path / "ucs_catalog.json"
+    _catalog(catalog)
+
+    report = build_tag_proposal_report(root, db_path=tmp_db, catalog_path=catalog, min_confidence=0.6)
+
+    assert report.summary.files_with_proposals == 1
+    proposal = report.entries[0].proposals[0]
+    assert proposal.category == "AMBIENCE"
+    assert proposal.subcategory == "RAIN"
+    evidence = {item.source: item.value for item in proposal.evidence}
+    assert evidence["embedded_metadata"] == "ambience, rain"
+
+
+def test_tag_propose_embedded_metadata_does_not_open_noisy_subcategory_terms(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    audio = root / "Metal Tonal 01.wav"
+    _write_wav_with_bext_description(audio, "metal tonal texture")
+    _seed_file(tmp_db, audio)
+    catalog = tmp_path / "ucs_catalog.json"
+    _catalog(
+        catalog,
+        entries=[
+            UcsEntry(cat_short="MAT", category="MATERIALS", subcategory="METAL", cat_id="MATMetal"),
+            UcsEntry(cat_short="MUSC", category="MUSICAL", subcategory="TONAL", cat_id="MUSCTonal"),
+        ],
+    )
+
+    report = build_tag_proposal_report(root, db_path=tmp_db, catalog_path=catalog, min_confidence=0.6)
+
+    assert report.summary.files_considered == 1
+    assert report.summary.files_with_proposals == 0
+    assert report.summary.total_proposals == 0
+
+
+def test_tag_propose_ambiguous_path_terms_need_category_context(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "Cinematic Metal Impacts"
+    folder.mkdir(parents=True)
+    audio = folder / "Impact 01.wav"
+    _write_wav_with_bext_description(audio, "metal clang")
+    _seed_file(tmp_db, audio)
+    catalog = tmp_path / "ucs_catalog.json"
+    _catalog(
+        catalog,
+        entries=[
+            UcsEntry(cat_short="DOOR", category="DOORS", subcategory="METAL", cat_id="DOORMetl"),
+            UcsEntry(cat_short="DRWR", category="DRAWERS", subcategory="METAL", cat_id="DRWRMetl"),
+            UcsEntry(cat_short="RAIN", category="RAIN", subcategory="METAL", cat_id="RAINMetl"),
+            UcsEntry(cat_short="WNDW", category="WINDOWS", subcategory="METAL", cat_id="WNDWMetl"),
+        ],
+    )
+
+    report = build_tag_proposal_report(root, db_path=tmp_db, catalog_path=catalog, min_confidence=0.6)
+
+    assert report.summary.files_considered == 1
+    assert report.summary.files_with_proposals == 0
+    assert report.summary.total_proposals == 0

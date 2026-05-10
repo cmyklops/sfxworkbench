@@ -18,3 +18,14 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --extra dev
       - run: uv run poe check
+
+  metadata-extras:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: uv sync --extra metadata --extra dev
+      - run: uv run pytest tests/test_audio.py tests/test_metadata_backends.py tests/test_metadata_write.py -v
