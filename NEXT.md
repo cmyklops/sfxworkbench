@@ -151,6 +151,8 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
   accepted values for the same single-value embedded target as `conflict` and
   omit them from fixture/apply commands. Multi-value keyword targets still allow
   multiple values.
+- `sfx tag propose` now reads indexed WAV/RF64 BEXT `Description` and RIFF INFO
+  `IKEY` fields as report-only `embedded_metadata` evidence for UCS proposals.
 
 Current audit focus:
 
@@ -190,7 +192,6 @@ Current audit focus:
 
 ## Later
 
-- richer embedded metadata reads feeding `sfx tag propose`
 - similarity-assisted tag proposals after the crawler has more real-library
   validation
 - Textual TUI after CLI JSON contracts feel boring, using

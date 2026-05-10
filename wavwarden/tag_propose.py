@@ -16,6 +16,7 @@ from rich.table import Table
 
 from wavwarden import __version__
 from wavwarden.db import DEFAULT_DB_PATH, get_connection
+from wavwarden.metadata_write import read_bwfmetaedit_fields
 from wavwarden.models import (
     TagProposal,
     TagProposalEntry,
@@ -76,6 +77,7 @@ _LOW_VALUE_TOKENS = {
 class _CandidateEvidence:
     filename_tokens: set[str] = field(default_factory=set)
     path_tokens: set[str] = field(default_factory=set)
+    embedded_metadata: set[str] = field(default_factory=set)
     accepted_ucs: set[str] = field(default_factory=set)
     accepted_category: set[str] = field(default_factory=set)
     accepted_semantic: set[str] = field(default_factory=set)
@@ -119,7 +121,8 @@ def _load_rows(db_path: Path, root: Path):
     conn = get_connection(db_path)
     rows = conn.execute(
         """
-        SELECT id, path, filename, stem, size_bytes, mtime, md5
+        SELECT id, path, filename, stem, extension, size_bytes, mtime, md5,
+               has_bext, has_riff_info
         FROM files
         WHERE (path = ? OR path LIKE ?)
           AND scan_error IS NULL
@@ -156,6 +159,32 @@ def _path_tokens(path: Path, root: Path) -> set[str]:
     return tokens
 
 
+def _embedded_metadata_tokens(row) -> set[str]:
+    extension = (row["extension"] or "").lower()
+    if extension not in {".wav", ".rf64"}:
+        return set()
+    fields: list[str] = []
+    if row["has_bext"]:
+        fields.append("Description")
+    if row["has_riff_info"]:
+        fields.append("IKEY")
+    if not fields:
+        return set()
+    try:
+        values = read_bwfmetaedit_fields(Path(row["path"]), fields)
+    except Exception:
+        return set()
+
+    tokens: set[str] = set()
+    for value in values.values():
+        if isinstance(value, list):
+            for item in value:
+                tokens.update(_tokens(item))
+        else:
+            tokens.update(_tokens(value))
+    return tokens
+
+
 def _lookup_entry_by_category_or_short(
     catalog: UcsCatalog, category_or_short: str | None, subcategory: str | None
 ) -> UcsEntry | None:
@@ -178,7 +207,7 @@ def _candidate_entries(
     for entry in exact_entries:
         by_cat_id[entry.cat_id] = entry
 
-    context_sources = ("path", "accepted_category", "accepted_semantic")
+    context_sources = ("path", "embedded_metadata", "accepted_category", "accepted_semantic")
     for source in context_sources:
         for token in tokens_by_source[source]:
             for entry in index.get(token, []):
@@ -196,6 +225,7 @@ def _collect_evidence(entry: UcsEntry, terms: set[str], tokens_by_source: dict[s
     evidence = _CandidateEvidence()
     evidence.filename_tokens = terms & tokens_by_source["filename"]
     evidence.path_tokens = terms & tokens_by_source["path"]
+    evidence.embedded_metadata = terms & tokens_by_source["embedded_metadata"]
     evidence.accepted_ucs = terms & tokens_by_source["accepted_ucs"]
     evidence.accepted_category = terms & tokens_by_source["accepted_category"]
     evidence.accepted_semantic = terms & tokens_by_source["accepted_semantic"]
@@ -207,6 +237,7 @@ def _proposal_from_evidence(entry: UcsEntry, evidence: _CandidateEvidence) -> Ta
     tokens_by_source = {
         "filename": evidence.filename_tokens,
         "path": evidence.path_tokens,
+        "embedded_metadata": evidence.embedded_metadata,
         "accepted_ucs": evidence.accepted_ucs,
         "accepted_category": evidence.accepted_category,
         "accepted_semantic": evidence.accepted_semantic,
@@ -262,6 +293,7 @@ def _proposal_from_evidence(entry: UcsEntry, evidence: _CandidateEvidence) -> Ta
     for source, tokens in [
         ("filename", evidence.filename_tokens),
         ("path", evidence.path_tokens),
+        ("embedded_metadata", evidence.embedded_metadata),
         ("accepted_ucs", evidence.accepted_ucs),
         ("accepted_category", evidence.accepted_category),
         ("accepted_semantic", evidence.accepted_semantic),
@@ -348,6 +380,7 @@ def build_tag_proposal_report(
         tokens_by_source = {
             "filename": _tokens(row["stem"] or path.stem),
             "path": _path_tokens(path, root),
+            "embedded_metadata": _embedded_metadata_tokens(row),
             "accepted_ucs": accepted_ucs_tokens,
             "accepted_category": accepted_category_tokens,
             "accepted_semantic": accepted_semantic_tokens,

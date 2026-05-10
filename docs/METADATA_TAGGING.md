@@ -132,7 +132,8 @@ lower-trust layers only after real-library review proves they help.
 Evidence can come from:
 
 - parent folders
-- existing embedded metadata
+- existing embedded metadata, currently WAV/RF64 BEXT `Description` and RIFF
+  INFO `IKEY`
 - filename tokens
 - UCS provenance from catalog matches
 - related groups

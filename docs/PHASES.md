@@ -716,7 +716,8 @@ Command contracts:
 - `similarity feedback set/list/clear --json`: includes DB-only review-state
   changes or filtered feedback entries.
 - `tag propose PATH --json`: includes candidate UCS proposals, confidence,
-  strength/action classification, and per-source evidence.
+  strength/action classification, and per-source evidence from filenames,
+  paths, accepted tags, and embedded WAV/RF64 BEXT/RIFF INFO metadata.
 - `tag suggest PATH --json`: includes suggestion summary and per-file evidence.
 - `tag plan/review/apply --json`: includes reviewed plan entries, approval
   counts, DB-only apply result, and apply log path.
