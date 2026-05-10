@@ -172,6 +172,32 @@ def _seed_keyword_tags(tmp_db: Path, values: list[str], *, file_id: int = 1) -> 
     conn.close()
 
 
+def _seed_tag(tmp_db: Path, field: str, value: str, *, source: str = "test", file_id: int = 1) -> None:
+    conn = get_connection(tmp_db)
+    conn.execute(
+        """
+        INSERT INTO accepted_tags (
+            file_id, field, value, source, method, confidence, evidence,
+            created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            file_id,
+            field,
+            value,
+            source,
+            "manual",
+            0.95,
+            json.dumps(["fixture"]),
+            "2026",
+            "2026",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
 def test_metadata_write_plan_maps_supported_and_unsupported_tags(tmp_path: Path, tmp_db: Path) -> None:
     root = tmp_path / "library"
     root.mkdir()
@@ -194,6 +220,46 @@ def test_metadata_write_plan_maps_supported_and_unsupported_tags(tmp_path: Path,
     assert by_field["description"].supported is True
     assert by_field["category"].action == "unsupported_field"
     assert by_field["category"].supported is False
+
+
+def test_metadata_write_plan_blocks_conflicting_single_value_targets(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    audio = root / "SFX_HIT_01.wav"
+    audio.write_bytes(b"not really audio")
+    _seed_file(tmp_db, audio)
+    _seed_tag(tmp_db, "description", "Different Metal Hit", source="second_review")
+
+    plan = build_metadata_write_plan(tmp_db, root=root, backend="bwfmetaedit", bwfmetaedit=_fake_bwfmetaedit(tmp_path))
+
+    description_entries = [entry for entry in plan.entries if entry.field == "description"]
+    assert len(description_entries) == 2
+    assert {entry.action for entry in description_entries} == {"conflict"}
+    assert {entry.supported for entry in description_entries} == {False}
+    assert plan.summary.conflict_entries == 2
+    assert plan.summary.supported_entries == 0
+    assert plan.summary.unsupported_entries == 3
+    assert plan.errors == [
+        {
+            "path": str(audio),
+            "backend": "bwfmetaedit",
+            "target_namespace": "bext",
+            "target_key": "Description",
+            "entry_ids": [2, 3],
+            "values": ["Different Metal Hit", "Metal Hit"],
+            "error": "conflicting accepted tags for single-value metadata target",
+        }
+    ]
+
+    plan_path = tmp_path / "metadata_write_plan.json"
+    write_metadata_write_plan(plan, plan_path, quiet=True)
+    review_metadata_write_plan(plan_path, approve_all=True, quiet=True)
+    preview = preview_metadata_write_plan(plan_path, db_path=tmp_db, require_reviewed=True, quiet=True)
+
+    assert preview.would_write == 0
+    assert preview.skipped == 3
+    assert preview.commands == []
+    assert preview.errors == plan.errors
 
 
 def test_metadata_write_plan_skips_existing_bwf_values(tmp_path: Path, tmp_db: Path) -> None:
@@ -321,6 +387,7 @@ def test_metadata_write_bwfmetaedit_maps_keywords_to_riff_info_ikey(tmp_path: Pa
     assert {entry.target_namespace for entry in keyword_entries} == {"riff_info"}
     assert {entry.target_key for entry in keyword_entries} == {"IKEY"}
     assert {entry.action for entry in keyword_entries} == {"write_riff_info"}
+    assert plan.summary.conflict_entries == 0
 
     plan_path = tmp_path / "metadata_write_plan.json"
     write_metadata_write_plan(plan, plan_path, quiet=True)

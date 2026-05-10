@@ -671,9 +671,9 @@ Command contracts:
   backends, executable paths, version command output, and capability flags.
 - `metadata write-plan/review/preview/fixtures/readback --json`: includes backend
   capture, accepted-tag-to-BWF/Mutagen mapping entries, review counts, dry-run
-  validation counts, simulated BWF MetaEdit commands, internal Mutagen write
-  intents, copied fixture manifests, optional copied-fixture write results, and
-  readback reports.
+  validation counts, single-value metadata conflict errors, simulated BWF
+  MetaEdit commands, internal Mutagen write intents, copied fixture manifests,
+  optional copied-fixture write results, and readback reports.
 - `metadata write-apply --json`: includes dry-run/apply mode, reviewed Mutagen
   and BWF MetaEdit write counts, backup/log paths, per-file external command
   results, verification status, and index refresh outcomes.

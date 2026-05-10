@@ -217,6 +217,7 @@ def _summarize_plan(plan: MetadataWritePlan) -> MetadataWritePlanSummary:
         accepted_tags_considered=len(plan.entries),
         candidate_entries=len(plan.entries),
         supported_entries=sum(1 for entry in plan.entries if entry.supported),
+        conflict_entries=sum(1 for entry in plan.entries if entry.action == "conflict"),
         skip_existing_entries=sum(1 for entry in plan.entries if entry.action == "skip_existing"),
         replace_entries=sum(1 for entry in plan.entries if entry.action in {"replace_bext", "replace_riff_info"}),
         unsupported_entries=sum(1 for entry in plan.entries if not entry.supported),
@@ -318,6 +319,37 @@ def _existing_embedded_value(
     if existing is None or not existing.strip():
         return None
     return existing
+
+
+def _mark_single_value_conflicts(entries: list[MetadataWritePlanEntry]) -> list[dict]:
+    grouped: dict[tuple[int, str, str | None, str | None], list[MetadataWritePlanEntry]] = {}
+    for entry in entries:
+        if not entry.supported or entry.target_key is None or entry.target_key in MULTIVALUE_TARGET_KEYS:
+            continue
+        key = (entry.file_id, entry.backend, entry.target_namespace, entry.target_key)
+        grouped.setdefault(key, []).append(entry)
+
+    errors: list[dict] = []
+    for (_file_id, backend, target_namespace, target_key), group in sorted(grouped.items()):
+        values = {entry.value for entry in group}
+        if len(values) <= 1:
+            continue
+        for entry in group:
+            entry.action = "conflict"
+            entry.supported = False
+        first = group[0]
+        errors.append(
+            {
+                "path": first.path,
+                "backend": backend,
+                "target_namespace": target_namespace,
+                "target_key": target_key,
+                "entry_ids": [entry.entry_id for entry in group],
+                "values": sorted(values),
+                "error": "conflicting accepted tags for single-value metadata target",
+            }
+        )
+    return errors
 
 
 def _validate_mutagen_value(entry: MetadataWritePlanEntry) -> str | None:
@@ -638,6 +670,8 @@ def build_metadata_write_plan(
             )
         )
 
+    errors = _mark_single_value_conflicts(entries)
+
     plan = MetadataWritePlan(
         generated_at=_now_iso(),
         tool_version=__version__,
@@ -648,6 +682,7 @@ def build_metadata_write_plan(
         backends=backend_report.backends,
         summary=MetadataWritePlanSummary(),
         entries=entries,
+        errors=errors,
     )
     plan.summary = _summarize_plan(plan)
     return plan
@@ -744,6 +779,7 @@ def preview_metadata_write_plan(
     plan = load_metadata_write_plan(plan_path)
     effective_db = db_path or Path(plan.db_path)
     result = MetadataWritePreviewResult(planned=len(plan.entries), target=plan.target)
+    result.errors.extend(plan.errors)
     if plan.target != "embedded_metadata":
         result.errors.append({"path": str(plan_path), "error": f"unsupported metadata target: {plan.target}"})
         return result
@@ -1194,6 +1230,7 @@ def show_metadata_write_plan(plan: MetadataWritePlan) -> None:
     table.add_row("Backend available", str(plan.backend.available))
     table.add_row("Candidate entries", f"{plan.summary.candidate_entries:,}")
     table.add_row("Supported entries", f"{plan.summary.supported_entries:,}")
+    table.add_row("Conflicts", f"{plan.summary.conflict_entries:,}")
     table.add_row("Skip existing", f"{plan.summary.skip_existing_entries:,}")
     table.add_row("Replace entries", f"{plan.summary.replace_entries:,}")
     table.add_row("Unsupported entries", f"{plan.summary.unsupported_entries:,}")

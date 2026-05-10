@@ -147,6 +147,10 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
   `originator_reference` tags in a slice-only DB. Planning skipped all existing
   descriptions, fixture write/readback passed, copied-slice apply verified 8
   written BEXT values, and undo restored the empty originator fields.
+- Metadata write conflict detection added: plan/preview now mark conflicting
+  accepted values for the same single-value embedded target as `conflict` and
+  omit them from fixture/apply commands. Multi-value keyword targets still allow
+  multiple values.
 
 Current audit focus:
 
@@ -186,7 +190,6 @@ Current audit focus:
 
 ## Later
 
-- stronger metadata conflict detection before embedded writes
 - richer embedded metadata reads feeding `sfx tag propose`
 - similarity-assisted tag proposals after the crawler has more real-library
   validation

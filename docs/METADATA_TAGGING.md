@@ -340,6 +340,13 @@ explicit escape hatch: it converts those would-be skips into reviewed
 `--reject-overwrite` only for command groups that include an approved
 replacement.
 
+Write planning also blocks conflicting accepted tags before embedded writes are
+rendered. If more than one accepted value targets the same single-value
+embedded field on the same file, the affected entries are marked `conflict`,
+counted in the plan summary, reported in plan/preview errors, and omitted from
+fixture/apply commands. Multi-value fields such as RIFF INFO `IKEY` and Mutagen
+`keywords` remain allowed to collect multiple accepted values.
+
 `write-undo` restores originals from a `write-apply` log's backup list and
 refreshes indexed size/mtime/MD5 after restore. It also defaults to dry-run and
 requires `--apply` before copying backup files over originals.

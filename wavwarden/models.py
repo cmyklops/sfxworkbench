@@ -523,6 +523,7 @@ class MetadataWritePlanSummary(BaseModel):
     accepted_tags_considered: int = 0
     candidate_entries: int = 0
     supported_entries: int = 0
+    conflict_entries: int = 0
     skip_existing_entries: int = 0
     replace_entries: int = 0
     unsupported_entries: int = 0
