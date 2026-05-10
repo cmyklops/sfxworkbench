@@ -15,6 +15,7 @@ from wavwarden.tag_suggest import (
     suggest_from_group,
     suggest_from_path,
     suggest_from_ucs_stem,
+    suggest_synonym_keywords,
     write_tag_suggestion_report,
 )
 
@@ -119,6 +120,18 @@ def test_filename_take_via_take_prefix_token() -> None:
     suggestions = suggest_from_filename("Pistol_Take_07")
     take_values = [s.value for s in suggestions if s.field == "take_number"]
     assert take_values == ["07"]
+
+
+def test_synonym_keywords_from_description_suggestions() -> None:
+    base = suggest_from_filename("Car Crash 01")
+
+    suggestions = suggest_synonym_keywords(base)
+
+    assert {s.field for s in suggestions} == {"keyword"}
+    assert {s.value for s in suggestions} == {"vehicle impact", "auto collision", "wreck", "impact", "collision"}
+    assert all(s.source == "synonym" for s in suggestions)
+    assert all(s.method == "controlled_synonym_map" for s in suggestions)
+    assert any("matched:car crash" in s.evidence for s in suggestions)
 
 
 def test_path_emits_one_description_per_meaningful_folder(tmp_path: Path) -> None:
@@ -273,6 +286,27 @@ def test_report_combines_ucs_path_group_evidence(tmp_path: Path, tmp_db: Path) -
     assert {"ucs_stem", "group", "path"}.issubset(sources_used)
     fields = set(report.summary.by_field.keys())
     assert {"ucs_category", "ucs_subcategory", "description", "take_number"}.issubset(fields)
+
+
+def test_report_can_include_synonym_keyword_suggestions(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "Vehicles"
+    folder.mkdir(parents=True)
+    _seed_files(tmp_db, [{"path": folder / "Car Crash 01.wav", "md5": "A"}])
+
+    default_report = build_tag_suggestion_report(root, tmp_db)
+    synonym_report = build_tag_suggestion_report(root, tmp_db, include_synonyms=True)
+
+    assert "synonym" not in default_report.summary.by_source
+    assert synonym_report.summary.by_source["synonym"] == 5
+    assert synonym_report.summary.by_field["keyword"] == 5
+    keywords = {
+        suggestion.value
+        for entry in synonym_report.entries
+        for suggestion in entry.suggestions
+        if suggestion.source == "synonym"
+    }
+    assert keywords == {"vehicle impact", "auto collision", "wreck", "impact", "collision"}
 
 
 def test_report_can_use_explicit_ucs_catalog(tmp_path: Path, tmp_db: Path) -> None:
@@ -462,6 +496,43 @@ def test_tag_plan_review_and_db_apply(tmp_path: Path, tmp_db: Path) -> None:
     )
     assert second.applied == 0
     assert second.skipped == plan.summary.candidate_entries
+
+
+def test_synonym_keywords_can_flow_through_tag_plan_to_accepted_tags(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "Vehicles"
+    folder.mkdir(parents=True)
+    audio = folder / "Car Crash 01.wav"
+    audio.write_bytes(b"not really audio")
+    _seed_files(tmp_db, [{"path": audio, "md5": "A", "size": len(audio.read_bytes())}])
+
+    plan = build_tag_plan(
+        root,
+        db_path=tmp_db,
+        include_synonyms=True,
+        sources=["synonym"],
+        fields=["keyword"],
+    )
+
+    assert plan.summary.candidate_entries == 5
+    assert {entry.field for entry in plan.entries} == {"keyword"}
+    assert {entry.source for entry in plan.entries} == {"synonym"}
+
+    plan_path = tmp_path / "synonym_tag_plan.json"
+    write_tag_plan(plan, plan_path, quiet=True)
+    review_tag_plan(plan_path, approve_all=True, quiet=True)
+    apply_tag_plan(plan_path, db_path=tmp_db, dry_run=False, require_reviewed=True, quiet=True)
+
+    conn = get_connection(tmp_db)
+    rows = conn.execute("SELECT field, value, source FROM accepted_tags ORDER BY value").fetchall()
+    conn.close()
+    assert {(row["field"], row["value"], row["source"]) for row in rows} == {
+        ("keyword", "auto collision", "synonym"),
+        ("keyword", "collision", "synonym"),
+        ("keyword", "impact", "synonym"),
+        ("keyword", "vehicle impact", "synonym"),
+        ("keyword", "wreck", "synonym"),
+    }
 
 
 def test_tag_plan_filters_source_report_by_source_and_field(tmp_path: Path, tmp_db: Path) -> None:

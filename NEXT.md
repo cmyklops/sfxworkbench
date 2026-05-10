@@ -134,6 +134,12 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
   in the full summary. Early real-library checks forced a higher-precision
   candidate rule: exact UCS pairs and primary subcategory terms can open
   candidates; category terms only corroborate.
+- BWF missing-metadata real-library slice defined and run:
+  `/private/tmp/wavwarden_bwf_slice_20260509_113309/missing_bext_library`.
+  Four copied WAV files with no BEXT/iXML were given reviewed `description`
+  tags in a slice-only DB, then plan/review/preview/fixture-write/readback/apply
+  and undo were exercised successfully. Details are in
+  `docs/REAL_LIBRARY_SLICES.md`.
 
 Current audit focus:
 
@@ -160,26 +166,25 @@ Current audit focus:
 
 ## Next
 
-1. Move on from folder nesting unless you want a manual review flow for semantic wrappers.
-2. Use `sfx metadata view QUERY` to spot-check accepted provenance tags,
-   especially ambiguous stems such as `FIRE_BURST`.
-3. Inspect the first `sfx tag propose` report, especially the 5,501 strong
-   proposals and noisy repeated subcategory terms such as `AIR` or `WILD`.
-4. Decide whether to build a dry-run embedded metadata write plan now. Current
-   BWF mapping supports `description`, `originator`, and `originator_reference`;
-   the accepted `ucs_*` provenance tags should remain DB-only/sidecar-only.
-5. Treat group-derived `take_number` and `channel_position` as structural review
-   facts for now, not priority metadata tags.
+1. Stabilize the metadata writing branch before more feature work.
+2. Keep README, `docs/PHASES.md`, and `docs/METADATA_TAGGING.md` aligned with
+   the current Mutagen apply/undo behavior.
+3. Add JSON contract coverage for `metadata write-apply --json` and
+   `metadata write-undo --json`.
+4. Run `uv run --extra dev poe check` and `uv run --extra dev poe json-smoke`
+   before committing this slice.
+5. Broaden BWF metadata only after more copied real-library slices pass the same
+   write/readback/apply/undo loop.
 6. Keep audio conversion and loudness normalization out of scope.
 
 ## Later
 
-- `sfx packs plan/apply` for reviewed folder consolidation.
-- `sfx organize` for safe folder-structure cleanup.
+- stronger metadata conflict detection before embedded writes
 - richer embedded metadata reads feeding `sfx tag propose`
-- `sfx similarity crawl` as an optional Phase 2.5 audio-analysis cache after
-  cleanup and tag-plan foundations settle, then similarity-assisted proposals.
-- Textual TUI after CLI JSON contracts feel boring.
+- similarity-assisted tag proposals after the crawler has more real-library
+  validation
+- Textual TUI after CLI JSON contracts feel boring, using
+  `docs/APP_UI_DIRECTION.md` and the local mockup in `docs/assets/`
 
 ## Solo Workflow
 

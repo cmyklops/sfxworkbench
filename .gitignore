@@ -11,4 +11,6 @@ audit_*.json
 audit_*.md
 dedupe_plan_*.json
 rename_log_*.json
+metadata_write_apply_log_*.json
+tag_apply_log_*.json
 library.csv

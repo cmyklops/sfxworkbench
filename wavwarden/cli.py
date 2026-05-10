@@ -661,20 +661,37 @@ def cmd_metadata_write_plan(
     db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
     path: Annotated[Path | None, typer.Option("--path", help="Optional indexed library root to include.")] = None,
     backend: Annotated[
-        str, typer.Option("--backend", help="Metadata writer backend to plan for. Currently: bwfmetaedit.")
-    ] = "bwfmetaedit",
+        str, typer.Option("--backend", help="Metadata writer backend to plan for: auto, bwfmetaedit, or mutagen.")
+    ] = "auto",
     bwfmetaedit: Annotated[
         Path | None,
         typer.Option("--bwfmetaedit", help="Explicit path to the BWF MetaEdit CLI executable."),
     ] = None,
     limit: Annotated[int, typer.Option("--limit", help="Maximum accepted tag entries to include; 0 writes all.")] = 0,
+    replace_existing: Annotated[
+        bool,
+        typer.Option(
+            "--replace-existing",
+            help=(
+                "Plan explicit reviewed replacements for non-empty existing BWF fields. "
+                "Default preserves existing embedded metadata."
+            ),
+        ),
+    ] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
     """Build a reviewed dry-run plan for future embedded metadata writes."""
     from wavwarden.metadata_write import build_metadata_write_plan, show_metadata_write_plan, write_metadata_write_plan
 
     try:
-        plan = build_metadata_write_plan(db_path=db, root=path, backend=backend, bwfmetaedit=bwfmetaedit, limit=limit)
+        plan = build_metadata_write_plan(
+            db_path=db,
+            root=path,
+            backend=backend,
+            bwfmetaedit=bwfmetaedit,
+            limit=limit,
+            replace_existing=replace_existing,
+        )
     except ValueError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
@@ -776,6 +793,16 @@ def cmd_metadata_write_fixtures(
     require_reviewed: Annotated[
         bool, typer.Option("--require-reviewed", help="Only include approved write plan entries.")
     ] = True,
+    write_fixture_metadata: Annotated[
+        bool,
+        typer.Option(
+            "--write-fixture-metadata",
+            help=(
+                "Apply supported metadata writes to copied fixture files using Mutagen or BWF MetaEdit. "
+                "Original audio files are not modified."
+            ),
+        ),
+    ] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
     """Copy reviewed write targets to a fixture bundle. Original audio files are not modified."""
@@ -789,6 +816,7 @@ def cmd_metadata_write_fixtures(
         output_dir,
         db_path=db,
         require_reviewed=require_reviewed,
+        write_fixture_metadata=write_fixture_metadata,
         quiet=json_output,
     )
     if json_output:
@@ -799,6 +827,7 @@ def cmd_metadata_write_fixtures(
                     "command": "metadata_write_fixtures",
                     "plan_path": plan,
                     "output_dir": output_dir,
+                    "write_fixture_metadata": write_fixture_metadata,
                     "bundle": bundle,
                 }
             )
@@ -813,7 +842,7 @@ def cmd_metadata_write_readback(
     ],
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
-    """Compare copied fixture BEXT metadata against the fixture manifest. No files are modified."""
+    """Compare copied fixture metadata against the fixture manifest. No files are modified."""
     from wavwarden.metadata_write import compare_metadata_write_fixture_readback
 
     if not manifest.exists():
@@ -832,6 +861,81 @@ def cmd_metadata_write_readback(
                     "command": "metadata_write_readback",
                     "manifest_path": manifest,
                     "report": report,
+                }
+            )
+        )
+
+
+@metadata_app.command("write-apply")
+def cmd_metadata_write_apply(
+    plan: Annotated[Path, typer.Argument(help="Reviewed embedded metadata write plan JSON to apply.")],
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index. Defaults to plan db_path.")] = None,
+    require_reviewed: Annotated[
+        bool, typer.Option("--require-reviewed", help="Only apply approved write plan entries.")
+    ] = True,
+    backup_dir: Annotated[
+        Path | None, typer.Option("--backup-dir", help="Directory for original-file backups before metadata writes.")
+    ] = None,
+    log: Annotated[Path | None, typer.Option("--log", help="Write an apply log JSON to this path.")] = None,
+    apply: Annotated[
+        bool, typer.Option("--apply", help="Actually write metadata to original files. Default is dry-run.")
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Apply reviewed Mutagen tag writes and BWF MetaEdit BEXT writes."""
+    from wavwarden.metadata_write import apply_metadata_write_plan
+
+    if not plan.exists():
+        console.print(f"[red]Error: plan file not found: {plan}[/red]")
+        raise typer.Exit(1)
+    result = apply_metadata_write_plan(
+        plan,
+        db_path=db,
+        require_reviewed=require_reviewed,
+        dry_run=not apply,
+        backup_dir=backup_dir,
+        log_path=log,
+        quiet=json_output,
+    )
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "metadata_write_apply",
+                    "plan_path": plan,
+                    "db_path": db,
+                    "result": result,
+                }
+            )
+        )
+
+
+@metadata_app.command("write-undo")
+def cmd_metadata_write_undo(
+    log: Annotated[Path, typer.Argument(help="Metadata write apply log JSON to undo.")],
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index. Defaults to log db_path.")] = None,
+    apply: Annotated[
+        bool, typer.Option("--apply", help="Actually restore files from backups. Default is dry-run.")
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Restore files from a metadata write apply log."""
+    from wavwarden.metadata_write import undo_metadata_write_apply_log
+
+    if not log.exists():
+        console.print(f"[red]Error: apply log not found: {log}[/red]")
+        raise typer.Exit(1)
+    result = undo_metadata_write_apply_log(log, db_path=db, dry_run=not apply, quiet=json_output)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "metadata_write_undo",
+                    "log_path": log,
+                    "db_path": db,
+                    "result": result,
                 }
             )
         )
@@ -1035,6 +1139,13 @@ def cmd_tag_suggest(
         bool,
         typer.Option("--use-ucs-catalog", help="Use the UCS catalog discovery chain for catalog-backed suggestions."),
     ] = False,
+    include_synonyms: Annotated[
+        bool,
+        typer.Option(
+            "--include-synonyms",
+            help="Suggest reviewed keyword synonyms for metadata enrichment.",
+        ),
+    ] = False,
     output: Annotated[
         Path | None, typer.Option("--output", help="Write tag suggestion report JSON to this path.")
     ] = None,
@@ -1073,6 +1184,7 @@ def cmd_tag_suggest(
             limit=limit,
             ucs_catalog_path=ucs_catalog,
             use_ucs_catalog=use_ucs_catalog,
+            include_synonyms=include_synonyms,
             sources=source,
             fields=field,
         )
@@ -1171,6 +1283,13 @@ def cmd_tag_plan(
         bool,
         typer.Option("--use-ucs-catalog", help="Use the UCS catalog discovery chain for catalog-backed suggestions."),
     ] = False,
+    include_synonyms: Annotated[
+        bool,
+        typer.Option(
+            "--include-synonyms",
+            help="Suggest reviewed keyword synonyms when building a new tag plan.",
+        ),
+    ] = False,
     min_confidence: Annotated[
         float, typer.Option("--min-confidence", help="Drop suggestions below this confidence (0.0-1.0).")
     ] = 0.0,
@@ -1204,6 +1323,7 @@ def cmd_tag_plan(
             limit=limit,
             ucs_catalog_path=ucs_catalog,
             use_ucs_catalog=use_ucs_catalog,
+            include_synonyms=include_synonyms,
             source_report=source_report,
             sources=source,
             fields=field,

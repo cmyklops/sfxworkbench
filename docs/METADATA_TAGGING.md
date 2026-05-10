@@ -171,7 +171,9 @@ Current first implementation:
 ```bash
 uv run sfx tag propose PATH --db ~/.wavwarden/index.db --min-confidence 0.6 --output tag_proposals.json
 uv run sfx tag suggest PATH --db ~/.wavwarden/index.db --use-ucs-catalog --min-confidence 0.8 --source ucs_catalog --field ucs_category --field ucs_subcategory --output tag_suggestions.json
+uv run sfx tag suggest PATH --db ~/.wavwarden/index.db --include-synonyms --field keyword --output synonym_keywords.json
 uv run sfx tag plan PATH --db ~/.wavwarden/index.db --from-suggestions tag_suggestions.json --source ucs_catalog --field ucs_category --field ucs_subcategory --output tag_plan.json
+uv run sfx tag plan PATH --db ~/.wavwarden/index.db --include-synonyms --source synonym --field keyword --output synonym_keyword_plan.json
 uv run sfx tag summarize tag_plan.json --value-limit 20
 uv run sfx tag review tag_plan.json --approve-field ucs_category --only-status pending
 uv run sfx tag review tag_plan.json --approve-all
@@ -181,10 +183,16 @@ uv run sfx tag sidecar-import accepted_tags.sidecar.json --db ~/.wavwarden/index
 uv run sfx metadata view QUERY --db ~/.wavwarden/index.db
 uv run sfx metadata backends --json
 uv run sfx metadata write-plan metadata_write_plan.json --db ~/.wavwarden/index.db --path PATH --bwfmetaedit /path/to/bwfmetaedit
+uv run sfx metadata write-plan metadata_write_plan.json --db ~/.wavwarden/index.db --path PATH --bwfmetaedit /path/to/bwfmetaedit --replace-existing
 uv run sfx metadata write-review metadata_write_plan.json --approve-all
 uv run sfx metadata write-preview metadata_write_plan.json --db ~/.wavwarden/index.db --require-reviewed
 uv run sfx metadata write-fixtures metadata_write_plan.json metadata_fixtures --db ~/.wavwarden/index.db
+uv run sfx metadata write-fixtures metadata_write_plan.json metadata_fixtures --db ~/.wavwarden/index.db --write-fixture-metadata
 uv run sfx metadata write-readback metadata_fixtures --json
+uv run sfx metadata write-apply metadata_write_plan.json --db ~/.wavwarden/index.db          # dry-run
+uv run sfx metadata write-apply metadata_write_plan.json --db ~/.wavwarden/index.db --apply  # reviewed BWF/Mutagen writes
+uv run sfx metadata write-undo metadata_write_apply_log.json --db ~/.wavwarden/index.db      # dry-run
+uv run sfx metadata write-undo metadata_write_apply_log.json --db ~/.wavwarden/index.db --apply
 ```
 
 Each plan entry should include validation anchors:
@@ -194,7 +202,8 @@ Each plan entry should include validation anchors:
 - size and mtime
 - MD5 when available
 - target metadata fields
-- action per field: `add`, `skip_existing`, or explicit `replace`
+- action per field: `write_bext`/`write_tag`, `skip_existing`, or explicit
+  `replace_bext`
 - existing value when present
 - proposed value
 - source, confidence, and evidence
@@ -209,38 +218,57 @@ uv run sfx tag review tag_plan.json --approve-entry 1
 uv run sfx tag apply tag_plan.json --require-reviewed
 ```
 
-The initial implementation is DB-only: approved entries are written to
+The initial tag implementation is DB-only: approved entries are written to
 `accepted_tags`, and apply writes `tag_apply_log` rows plus an external JSON log.
 Accepted tags can also be exported and re-imported as JSON sidecars. Embedded
-metadata writes are currently plan/review/preview only and never mutate audio.
+metadata writing now has narrow original-file mutation paths for reviewed
+Mutagen-backed formats and BWF MetaEdit-backed WAV/RF64 `bext` plus RIFF INFO
+keyword fields.
 
 Batch review should start with `sfx tag summarize`, then approve or reject
 narrow selectors such as `--approve-field ucs_category`, `--reject-value FIRE`,
 or `--approve-source group --only-status pending`. Selector review is meant to
 make large plans manageable without opening JSON by hand.
 
+Synonym suggestions are metadata enrichment suggestions, not search-only query
+expansion. `tag suggest --include-synonyms` derives conservative `keyword`
+suggestions from existing filename/path/group/UCS evidence, using source
+`synonym` and method `controlled_synonym_map`. Reviewed synonym keywords can be
+approved into `accepted_tags` like any other DB-only tag. During embedded
+metadata writes, supported tagged formats can carry those approved `keyword`
+values through the existing Mutagen-backed `keywords` target. WAV/RF64 writes
+carry approved keywords through RIFF INFO `IKEY` via BWF MetaEdit. Multiple
+approved keyword values stay structured in wavwarden plans and readback reports;
+for RIFF INFO they are rendered as a semicolon-separated `IKEY` value because
+that container field is text-based.
+
 ## Phase D: Metadata Writes
 
 Start with DB-only accepted tags and portable export. This first slice is
 implemented: `sfx export` includes an `accepted_tags` JSON column, and
 `sfx tag sidecar-export/import` round-trips accepted tags through a validated
-JSON sidecar. `sfx metadata write-plan/review/preview` builds a dry-run embedded
-write plan from accepted tags and validates anchors, but does not write audio.
-Binary audio mutation comes last.
+JSON sidecar. `sfx metadata write-plan/review/preview` builds an embedded write
+plan from accepted tags and validates anchors. `write-fixtures` can exercise
+supported Mutagen and BWF MetaEdit writes against copied fixture files, and
+`write-apply` can write reviewed Mutagen-backed original files plus BWF
+MetaEdit-backed WAV/RF64 `bext` fields with backups and readback verification.
+W64 remains sidecar-first.
 
 Preferred write ladder:
 
 1. DB-only accepted tags
 2. sidecar JSON export/import, then XML only if another tool needs it
 3. reviewed dry-run embedded-write plans
-4. BWF/iXML writes for proven-safe formats
+4. BWF/iXML writes for proven-safe WAV-family formats and native tag writes for
+   standard tagged formats
 5. optional overwrite mode with original-file backup/quarantine
 
 BWF MetaEdit is the leading candidate for Broadcast WAV metadata because it is
 designed for importing, editing, embedding, and exporting BWF metadata. The BWF
-format itself is specified by EBU Tech 3285. Mutagen is useful for many tagged
-formats, but its license and WAV/BWF/iXML limits need evaluation before making
-it a dependency.
+format itself is specified by EBU Tech 3285. Mutagen is the planned backend for
+standard tagged formats outside the BWF/WAV family: AIFF, MP3, FLAC, Ogg/Vorbis,
+Opus, and M4A. W64 remains sidecar-first until a reliable embedded-write backend
+is proven with fixtures.
 
 Use BWF MetaEdit as the professional reference behavior first. If wavwarden
 wraps it, treat it as an external command with explicit version capture in tag
@@ -265,23 +293,56 @@ uv run sfx metadata write-plan metadata_write_plan.json --db ~/.wavwarden/index.
 uv run sfx metadata write-review metadata_write_plan.json --approve-all
 uv run sfx metadata write-preview metadata_write_plan.json --db ~/.wavwarden/index.db --require-reviewed
 uv run sfx metadata write-fixtures metadata_write_plan.json metadata_fixtures --db ~/.wavwarden/index.db
+uv run sfx metadata write-fixtures metadata_write_plan.json metadata_fixtures --db ~/.wavwarden/index.db --write-fixture-metadata
 uv run sfx metadata write-readback metadata_fixtures --json
+uv run sfx metadata write-apply metadata_write_plan.json --db ~/.wavwarden/index.db          # dry-run
+uv run sfx metadata write-apply metadata_write_plan.json --db ~/.wavwarden/index.db --apply  # reviewed BWF/Mutagen writes
+uv run sfx metadata write-undo metadata_write_apply_log.json --db ~/.wavwarden/index.db      # dry-run
+uv run sfx metadata write-undo metadata_write_apply_log.json --db ~/.wavwarden/index.db --apply
 ```
 
-The first supported mapping is deliberately narrow: accepted `description`,
+The first BWF mapping is deliberately narrow: accepted `description`,
 `originator`, and `originator_reference` tags can target BWF `bext` fields via
-BWF MetaEdit. Other accepted tags, such as UCS provenance/take fields,
-remain visible in the plan as `unsupported_field` instead of being silently
-dropped. Preview renders simulated BWF MetaEdit commands with `--simulate`,
-`--reject-overwrite`, and `--specialchars`; these commands are for validation
-and review only, not for execution by wavwarden.
+BWF MetaEdit. The `auto` planner also routes `.aif`, `.aiff`, `.mp3`, `.flac`,
+`.ogg`, `.opus`, and `.m4a` entries to planned Mutagen tag writes for common
+fields such as `description`, `category`, UCS provenance fields, take number,
+and channel position. Fields that do not map cleanly remain visible in the plan
+as `unsupported_field` or `unsupported_extension` instead of being silently
+dropped. Preview renders simulated BWF MetaEdit commands and internal Mutagen
+write intents; these commands are for validation and review only, not for
+execution by wavwarden.
 
 `write-fixtures` copies only the files that survived preview validation into an
 output bundle, rewrites the simulated commands to those copied files, and writes
-`metadata_write_fixture_manifest.json` with expected BEXT fields. That bundle is
-the place to test real BWF MetaEdit readback later; original library audio is
-not modified. `write-readback` compares copied fixture WAV BEXT fields against
-the manifest and reports matched/mismatched/error files.
+`metadata_write_fixture_manifest.json` with expected fields. With
+`--write-fixture-metadata`, wavwarden can apply supported Mutagen writes and BWF
+MetaEdit commands to the copied fixture files only. The fixture manifest records
+the executable command result for BWF MetaEdit. Original library audio is not
+modified.
+`write-readback` compares copied fixture WAV BEXT/RIFF INFO fields or
+Mutagen-readable text tags against the manifest and reports
+matched/mismatched/error files.
+
+`write-apply` is the first original-file mutation path and remains narrow:
+it applies reviewed Mutagen-backed entries and BWF MetaEdit-backed WAV/RF64
+`bext` plus RIFF INFO `IKEY` entries only, defaults to dry-run, requires
+`--apply` to touch originals, writes full-file backups before mutation, records
+an apply log, verifies fields by reading them back after write, and refreshes the indexed file
+size/mtime/MD5 after successful verified writes. W64 and unsupported fields stay
+DB-only/sidecar-only.
+
+For BWF `bext` fields, write planning reads the existing core BEXT values first.
+If the target field already has a non-empty embedded value, the plan marks that
+entry as `skip_existing` and records the current value. This keeps wavwarden in
+add-missing-metadata mode by default. `write-plan --replace-existing` is the
+explicit escape hatch: it converts those would-be skips into reviewed
+`replace_bext` entries and generated BWF MetaEdit commands omit
+`--reject-overwrite` only for command groups that include an approved
+replacement.
+
+`write-undo` restores originals from a `write-apply` log's backup list and
+refreshes indexed size/mtime/MD5 after restore. It also defaults to dry-run and
+requires `--apply` before copying backup files over originals.
 
 ## Audio Listening Suggestions
 

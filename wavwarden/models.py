@@ -491,7 +491,7 @@ class MetadataWriteBackendsReport(BaseModel):
     generated_at: str
     tool: str = "wavwarden"
     tool_version: str
-    recommended_backend: str = "bwfmetaedit"
+    recommended_backend: str = "auto"
     backends: list[MetadataWriteBackend] = []
 
 
@@ -513,6 +513,7 @@ class MetadataWritePlanEntry(BaseModel):
     target_namespace: str | None = None
     target_key: str | None = None
     action: str = "unsupported_field"
+    existing_value: str | None = None
     supported: bool = False
     review_status: str = "pending"
 
@@ -522,6 +523,8 @@ class MetadataWritePlanSummary(BaseModel):
     accepted_tags_considered: int = 0
     candidate_entries: int = 0
     supported_entries: int = 0
+    skip_existing_entries: int = 0
+    replace_entries: int = 0
     unsupported_entries: int = 0
     approved_entries: int = 0
     rejected_entries: int = 0
@@ -537,7 +540,9 @@ class MetadataWritePlan(BaseModel):
     db_path: str
     target: str = "embedded_metadata"
     dry_run_only: bool = True
+    replace_existing: bool = False
     backend: MetadataWriteBackend
+    backends: list[MetadataWriteBackend] = []
     summary: MetadataWritePlanSummary
     entries: list[MetadataWritePlanEntry] = []
     errors: list[dict] = []
@@ -556,7 +561,8 @@ class MetadataWriteCommand(BaseModel):
     file_id: int
     path: str
     command: list[str] = []
-    fields: dict[str, str] = {}
+    fields: dict[str, str | list[str]] = {}
+    allow_overwrite: bool = False
     simulated: bool = True
 
 
@@ -574,8 +580,12 @@ class MetadataWriteFixtureFile(BaseModel):
     file_id: int
     source_path: str
     fixture_path: str
+    backend: str | None = None
     command: list[str] = []
-    expected_fields: dict[str, str] = {}
+    expected_fields: dict[str, str | list[str]] = {}
+    metadata_written: bool = False
+    write_result: dict | None = None
+    errors: list[str] = []
 
 
 class MetadataWriteFixtureBundle(BaseModel):
@@ -594,10 +604,10 @@ class MetadataWriteReadbackFile(BaseModel):
     file_id: int
     source_path: str
     fixture_path: str
-    expected_fields: dict[str, str] = {}
-    actual_fields: dict[str, str] = {}
+    expected_fields: dict[str, str | list[str]] = {}
+    actual_fields: dict[str, str | list[str]] = {}
     matched_fields: list[str] = []
-    mismatched_fields: dict[str, dict[str, str | None]] = {}
+    mismatched_fields: dict[str, dict[str, str | list[str] | None]] = {}
     errors: list[str] = []
 
 
@@ -617,6 +627,34 @@ class MetadataWriteReadbackReport(BaseModel):
     summary: MetadataWriteReadbackSummary
     files: list[MetadataWriteReadbackFile] = []
     errors: list[dict] = []
+
+
+class MetadataWriteApplyResult(BaseModel):
+    planned: int = 0
+    applied: int = 0
+    skipped: int = 0
+    files_written: int = 0
+    files_backed_up: int = 0
+    files_verified: int = 0
+    backup_dir: str | None = None
+    log_path: str | None = None
+    backups: list[dict] = []
+    write_results: list[dict] = []
+    readback: list[dict] = []
+    errors: list[dict] = []
+    dry_run: bool = True
+    target: str = "embedded_metadata"
+
+
+class MetadataWriteUndoResult(BaseModel):
+    planned: int = 0
+    restored: int = 0
+    skipped: int = 0
+    bytes_restored: int = 0
+    log_path: str | None = None
+    errors: list[dict] = []
+    dry_run: bool = True
+    target: str = "embedded_metadata"
 
 
 class RelatedSoundFile(BaseModel):

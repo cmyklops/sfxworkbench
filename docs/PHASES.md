@@ -90,7 +90,12 @@ uv run sfx metadata write-plan ~/reports/metadata_write_plan.json --path PATH --
 uv run sfx metadata write-review ~/reports/metadata_write_plan.json --approve-all
 uv run sfx metadata write-preview ~/reports/metadata_write_plan.json --require-reviewed
 uv run sfx metadata write-fixtures ~/reports/metadata_write_plan.json ~/reports/metadata_fixtures
+uv run sfx metadata write-fixtures ~/reports/metadata_write_plan.json ~/reports/metadata_fixtures --write-fixture-metadata
 uv run sfx metadata write-readback ~/reports/metadata_fixtures --json
+uv run sfx metadata write-apply ~/reports/metadata_write_plan.json --require-reviewed
+uv run sfx metadata write-apply ~/reports/metadata_write_plan.json --require-reviewed --apply --log ~/reports/metadata_write_apply_log.json
+uv run sfx metadata write-undo ~/reports/metadata_write_apply_log.json
+uv run sfx metadata write-undo ~/reports/metadata_write_apply_log.json --apply
 uv run sfx groups audit PATH --output ~/reports/related_groups_report.json
 uv run sfx format audit PATH --output ~/reports/format_report.json
 uv run sfx scan-errors --output ~/reports/scan_error_plan.json
@@ -182,11 +187,20 @@ python3 audit.py ~/CommercialLibraries --json
   embedded metadata presence flags, UCS parse/catalog match, and accepted
   DB-only tags.
 - `metadata backends`: report-only external metadata writer discovery. It
-  captures BWF MetaEdit availability/version without modifying audio.
-- `metadata write-plan/review/preview/fixtures/readback`: reviewed dry-run
-  embedded metadata write workflow. It consumes accepted tags, validates
-  anchors, copies fixture bundles, and compares BEXT readback without modifying
-  original audio.
+  captures BWF MetaEdit and Mutagen availability/capabilities without modifying
+  audio.
+- `metadata write-plan/review/preview/fixtures/readback`: reviewed embedded
+  metadata write workflow. It consumes accepted tags, validates anchors, copies
+  fixture bundles, can write Mutagen-backed tags or run BWF MetaEdit against
+  copied fixtures, and compares BEXT, RIFF INFO, or Mutagen readback without
+  modifying original audio.
+- `metadata write-apply`: dry-run by default; with `--apply`, writes reviewed
+  Mutagen-backed tags to original AIFF, MP3, FLAC, Ogg/Vorbis, Opus, and M4A
+  files plus BWF MetaEdit-backed `bext` and RIFF INFO `IKEY` fields to original
+  WAV/RF64 files after creating backups, then verifies readback and refreshes
+  the index.
+- `metadata write-undo`: dry-run by default; with `--apply`, restores originals
+  from a metadata write apply log's backups and refreshes indexed anchors.
 - `groups audit`: report-only related sound groups inferred from numbered takes
   and channel-set filename patterns.
 - `format audit`: report-only sample-rate, bit-depth, and channel-count consistency
@@ -406,13 +420,15 @@ diagnostic pass.
 Metadata writing follows the reviewed-plan model:
 
 - `sfx metadata audit`
-- `sfx metadata backends`, implemented as BWF MetaEdit availability/version preflight
-- `sfx metadata write-plan/review/preview/fixtures/readback`, implemented as dry-run-only embedded write planning, copied fixture bundles, and BEXT readback comparison
+- `sfx metadata backends`, implemented as BWF MetaEdit and Mutagen availability/capability preflight
+- `sfx metadata write-plan/review/preview/fixtures/readback`, implemented as embedded write planning, copied fixture bundles, optional Mutagen and BWF MetaEdit fixture writes, and BEXT/RIFF INFO/Mutagen readback comparison
+- `sfx metadata write-apply`, implemented for reviewed Mutagen-backed original-file writes and BWF MetaEdit-backed WAV/RF64 `bext`/RIFF INFO writes with backups, readback verification, and index refresh
+- `sfx metadata write-undo`, implemented for backup restores from apply logs
 - `sfx tag propose`, implemented as report-only evidence-fusion UCS candidates
 - `sfx tag suggest`, implemented as a raw filename/path/group/UCS provenance evidence feed
 - `sfx tag plan/review/apply`, implemented for DB-only accepted tags
 - `sfx tag sidecar-export/import`, implemented for portable JSON accepted tags
-- future embedded BWF/iXML writes
+- future iXML and wider BWF field writes after fixture and real-library proof
 
 Both should use mature libraries/tools for BWAV/iXML writes rather than
 hand-rolled binary mutation.
@@ -654,9 +670,16 @@ Command contracts:
 - `metadata backends --json`: includes discovered external metadata writer
   backends, executable paths, version command output, and capability flags.
 - `metadata write-plan/review/preview/fixtures/readback --json`: includes backend
-  capture, accepted-tag-to-BWF mapping entries, review counts, dry-run
-  validation counts, simulated BWF MetaEdit commands, and copied fixture
-  manifests/readback reports.
+  capture, accepted-tag-to-BWF/Mutagen mapping entries, review counts, dry-run
+  validation counts, simulated BWF MetaEdit commands, internal Mutagen write
+  intents, copied fixture manifests, optional copied-fixture write results, and
+  readback reports.
+- `metadata write-apply --json`: includes dry-run/apply mode, reviewed Mutagen
+  and BWF MetaEdit write counts, backup/log paths, per-file external command
+  results, verification status, and index refresh outcomes.
+- `metadata write-undo --json`: includes dry-run/apply mode, source log path,
+  restored/skipped/error counts, per-file restore results, and index refresh
+  outcomes.
 - `groups audit PATH --json`: includes `root`, `db_path`, optional `report_path`, and a versioned report of inferred related sound groups.
 - `format audit PATH --json`: includes `root`, `db_path`, optional `report_path`, and a versioned report of format inconsistencies within related groups.
 - `scan-errors --json`: includes a scan-error `plan` with classifications and actions.

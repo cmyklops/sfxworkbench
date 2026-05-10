@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 
 from typer.testing import CliRunner
+from wavwarden import metadata_backends, metadata_write
 from wavwarden.cli import app
+from wavwarden.db import get_connection
 
 runner = CliRunner()
 
@@ -38,6 +40,47 @@ def _normalize(value, tmp_path: Path, tmp_library: Path, tmp_db: Path):
             return "<PLAN>"
         return _normalize_path(value, tmp_path, tmp_library, tmp_db)
     return value
+
+
+def _seed_metadata_write_file(tmp_db: Path, path: Path) -> None:
+    conn = get_connection(tmp_db)
+    cursor = conn.execute(
+        """
+        INSERT INTO files (
+            path, filename, stem, extension, size_bytes, mtime, md5,
+            sample_rate, bit_depth, channels, duration_s, scanned_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(path),
+            path.name,
+            path.stem,
+            path.suffix.lower(),
+            path.stat().st_size,
+            path.stat().st_mtime,
+            "abc123",
+            48000,
+            24,
+            2,
+            1.0,
+            "2026",
+        ),
+    )
+    file_id = cursor.lastrowid
+    for field, value in (("description", "Metal Hit"), ("category", "SFX")):
+        conn.execute(
+            """
+            INSERT INTO accepted_tags (
+                file_id, field, value, source, method, confidence, evidence,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (file_id, field, value, "test", "manual", 0.95, json.dumps(["fixture"]), "2026", "2026"),
+        )
+    conn.commit()
+    conn.close()
 
 
 def test_scan_json_contract(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
@@ -113,8 +156,9 @@ def test_audit_search_export_json_contract(tmp_library: Path, tmp_db: Path, tmp_
     assert metadata_backends["command"] == "metadata_backends"
     assert metadata_backends["bwfmetaedit"] is None
     assert metadata_backends["report"]["schema_version"] == 1
-    assert metadata_backends["report"]["recommended_backend"] == "bwfmetaedit"
+    assert metadata_backends["report"]["recommended_backend"] == "auto"
     assert metadata_backends["report"]["backends"][0]["name"] == "bwfmetaedit"
+    assert metadata_backends["report"]["backends"][1]["name"] == "mutagen"
     assert "available" in metadata_backends["report"]["backends"][0]
 
     search = _normalize(
@@ -999,7 +1043,8 @@ def test_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
     assert write_plan_payload["plan_path"] == "<TMP>/metadata_write_plan.json"
     assert write_plan_payload["plan"]["dry_run_only"] is True
     assert write_plan_payload["plan"]["backend"]["available"] is True
-    assert write_plan_payload["plan"]["backend"]["executable"] == "<TMP>/bwfmetaedit"
+    assert write_plan_payload["plan"]["backend"]["name"] == "auto"
+    assert write_plan_payload["plan"]["backends"][0]["executable"] == "<TMP>/bwfmetaedit"
     assert write_plan_payload["plan"]["summary"]["candidate_entries"] == 1
     assert write_plan_payload["plan"]["summary"]["supported_entries"] <= 1
 
@@ -1083,6 +1128,143 @@ def test_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
         == "<TMP>/metadata_fixtures/metadata_write_fixture_manifest.json"
     )
     assert "files_checked" in write_readback_payload["report"]["summary"]
+
+
+def test_metadata_write_apply_and_undo_json_contract(
+    tmp_db: Path, tmp_path: Path, tmp_library: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(metadata_backends.importlib_util, "find_spec", lambda _name: object())
+    monkeypatch.setattr(metadata_backends.importlib_metadata, "version", lambda _name: "1.47.0")
+    readbacks: dict[Path, dict[str, str]] = {}
+
+    def fake_write_mutagen_fields(path: Path, fields: dict[str, str]) -> None:
+        path.write_bytes(path.read_bytes() + b"\nTAGS")
+        readbacks[path] = dict(fields)
+
+    monkeypatch.setattr(metadata_write, "write_mutagen_fields", fake_write_mutagen_fields)
+    monkeypatch.setattr(metadata_write, "read_mutagen_fields", lambda path, _fields: readbacks.get(path, {}))
+
+    audio = tmp_library / "sounds" / "SFX_HIT_01.flac"
+    original = b"not really audio"
+    audio.write_bytes(original)
+    _seed_metadata_write_file(tmp_db, audio)
+
+    plan_out = tmp_path / "metadata_write_apply_plan.json"
+    plan_result = runner.invoke(
+        app,
+        [
+            "metadata",
+            "write-plan",
+            str(plan_out),
+            "--db",
+            str(tmp_db),
+            "--path",
+            str(tmp_library),
+            "--json",
+        ],
+    )
+    assert plan_result.exit_code == 0
+    review_result = runner.invoke(app, ["metadata", "write-review", str(plan_out), "--approve-all", "--json"])
+    assert review_result.exit_code == 0
+
+    dry_run_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "metadata",
+                    "write-apply",
+                    str(plan_out),
+                    "--db",
+                    str(tmp_db),
+                    "--require-reviewed",
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert dry_run_payload["schema_version"] == 1
+    assert dry_run_payload["command"] == "metadata_write_apply"
+    assert dry_run_payload["plan_path"] == "<TMP>/metadata_write_apply_plan.json"
+    assert dry_run_payload["db_path"] == "<DB>"
+    assert dry_run_payload["result"]["dry_run"] is True
+    assert dry_run_payload["result"]["planned"] == 2
+    assert dry_run_payload["result"]["applied"] == 2
+    assert dry_run_payload["result"]["files_written"] == 1
+    assert dry_run_payload["result"]["backups"] == []
+
+    backup_dir = tmp_path / "metadata_write_backups"
+    log_path = tmp_path / "metadata_write_apply_log.json"
+    apply_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "metadata",
+                    "write-apply",
+                    str(plan_out),
+                    "--db",
+                    str(tmp_db),
+                    "--require-reviewed",
+                    "--backup-dir",
+                    str(backup_dir),
+                    "--log",
+                    str(log_path),
+                    "--apply",
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert apply_payload["schema_version"] == 1
+    assert apply_payload["command"] == "metadata_write_apply"
+    assert apply_payload["result"]["dry_run"] is False
+    assert apply_payload["result"]["applied"] == 2
+    assert apply_payload["result"]["files_backed_up"] == 1
+    assert apply_payload["result"]["files_verified"] == 1
+    assert apply_payload["result"]["backup_dir"] == "<TMP>/metadata_write_backups"
+    assert apply_payload["result"]["log_path"] == "<TMP>/metadata_write_apply_log.json"
+    assert apply_payload["result"]["backups"][0]["path"] == "<ROOT>/sounds/SFX_HIT_01.flac"
+    assert apply_payload["result"]["readback"][0]["matched_fields"] == ["description", "genre"]
+    assert audio.read_bytes() == original + b"\nTAGS"
+
+    undo_dry_run_payload = _normalize(
+        _load(runner.invoke(app, ["metadata", "write-undo", str(log_path), "--db", str(tmp_db), "--json"]).stdout),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert undo_dry_run_payload["schema_version"] == 1
+    assert undo_dry_run_payload["command"] == "metadata_write_undo"
+    assert undo_dry_run_payload["log_path"] == "<TMP>/metadata_write_apply_log.json"
+    assert undo_dry_run_payload["db_path"] == "<DB>"
+    assert undo_dry_run_payload["result"]["dry_run"] is True
+    assert undo_dry_run_payload["result"]["planned"] == 1
+    assert undo_dry_run_payload["result"]["restored"] == 1
+
+    undo_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                ["metadata", "write-undo", str(log_path), "--db", str(tmp_db), "--apply", "--json"],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert undo_payload["schema_version"] == 1
+    assert undo_payload["command"] == "metadata_write_undo"
+    assert undo_payload["result"]["dry_run"] is False
+    assert undo_payload["result"]["restored"] == 1
+    assert undo_payload["result"]["errors"] == []
+    assert audio.read_bytes() == original
 
 
 def test_ucs_validate_and_catalog_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:

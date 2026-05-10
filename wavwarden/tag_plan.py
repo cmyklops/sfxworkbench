@@ -28,6 +28,7 @@ console = Console()
 
 PLAN_SCHEMA_VERSION = 1
 _VALID_REVIEW_STATES = {"approved", "rejected", "pending"}
+_MULTIVALUE_FIELDS = {"keyword", "keywords"}
 
 
 def _now_iso() -> str:
@@ -78,6 +79,14 @@ def _existing_tag_values(conn, *, file_id: int, field: str) -> list[str]:
     return [row["value"] for row in rows]
 
 
+def _should_skip_existing(field: str, proposed_value: str, existing_values: list[str]) -> bool:
+    if not existing_values:
+        return False
+    if field.lower() in _MULTIVALUE_FIELDS:
+        return proposed_value in existing_values
+    return True
+
+
 def _summarize_plan(plan: TagPlan) -> TagPlanSummary:
     return TagPlanSummary(
         files_considered=plan.summary.files_considered,
@@ -107,7 +116,9 @@ def _plan_from_suggestion_report(
         suggestions = filter_suggestions(suggestion_entry.suggestions, sources=source_filters, fields=field_filters)
         for suggestion in suggestions:
             existing_values = _existing_tag_values(conn, file_id=suggestion_entry.file_id, field=suggestion.field)
-            action = "skip_existing" if existing_values else "add"
+            action = (
+                "skip_existing" if _should_skip_existing(suggestion.field, suggestion.value, existing_values) else "add"
+            )
             entries.append(
                 TagPlanEntry(
                     entry_id=entry_id,
@@ -159,6 +170,7 @@ def build_tag_plan(
     limit: int = 200,
     ucs_catalog_path: Path | None = None,
     use_ucs_catalog: bool = False,
+    include_synonyms: bool = False,
     source_report: Path | None = None,
     target: str = "db",
     sources: list[str] | None = None,
@@ -177,6 +189,7 @@ def build_tag_plan(
             limit=limit,
             ucs_catalog_path=ucs_catalog_path,
             use_ucs_catalog=use_ucs_catalog,
+            include_synonyms=include_synonyms,
             sources=sources,
             fields=fields,
         )
@@ -419,7 +432,7 @@ def apply_tag_plan(
             result.errors.append({"entry_id": entry.entry_id, "path": entry.path, "error": validation_error})
             continue
         existing_values = _existing_tag_values(conn, file_id=entry.file_id, field=entry.field)
-        if entry.action == "skip_existing" or existing_values:
+        if entry.action == "skip_existing" or _should_skip_existing(entry.field, entry.proposed_value, existing_values):
             result.skipped += 1
             continue
         if dry_run:

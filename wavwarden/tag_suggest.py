@@ -51,6 +51,7 @@ _CONFIDENCE_FILENAME_ABBREVIATION = 0.65
 _CONFIDENCE_FILENAME_TAKE = 0.60
 _CONFIDENCE_FILENAME_DESCRIPTION = 0.55
 _CONFIDENCE_PATH = 0.50
+_CONFIDENCE_SYNONYM = 0.62
 
 # Common SFX abbreviations. Conservative list — only expand when the token is
 # unambiguous. Falls back to the original token if not in the dict.
@@ -118,6 +119,27 @@ _TRAILING_NUMBER_RE = re.compile(
 )
 _LEADING_SORT_PREFIX_RE = re.compile(r"^\s*\d{1,3}\s*[-_.\s]+(.+?)\s*$")
 
+# Conservative reviewer-facing search-language enrichment. These become
+# `keyword` suggestions, not descriptions, so approved terms can travel through
+# metadata writes without polluting human-readable description fields.
+_SYNONYM_KEYWORDS: dict[tuple[str, ...], tuple[str, ...]] = {
+    ("car", "crash"): ("vehicle impact", "auto collision", "wreck"),
+    ("car", "hit"): ("vehicle impact", "auto collision"),
+    ("crash",): ("impact", "collision", "wreck"),
+    ("explosion",): ("blast", "detonation", "boom"),
+    ("fire",): ("flame", "burning", "combustion"),
+    ("footstep",): ("footsteps", "walk", "foley step"),
+    ("footsteps",): ("footstep", "walk", "foley step"),
+    ("glass", "break"): ("glass smash", "shatter", "debris"),
+    ("gunshot",): ("gun fire", "shot", "firearm"),
+    ("hit",): ("impact", "strike", "thud"),
+    ("impact",): ("hit", "strike", "collision"),
+    ("rain",): ("rainfall", "shower", "downpour"),
+    ("thunder",): ("storm", "rumble", "thunderclap"),
+    ("whoosh",): ("swoosh", "pass by", "swish"),
+    ("wind",): ("gust", "air", "storm"),
+}
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -165,6 +187,10 @@ def filter_suggestions(
 def _tokenize(text: str) -> list[str]:
     """Split a stem on common separators, drop empty tokens."""
     return [token for token in _SEPARATOR_RE.split(text) if token]
+
+
+def _normalized_keyword_tokens(text: str) -> set[str]:
+    return {token.lower() for token in _tokenize(text)}
 
 
 def _title_case_token(token: str) -> str:
@@ -448,6 +474,48 @@ def suggest_from_group(file_in_group: RelatedSoundFile, group: RelatedSoundGroup
     return suggestions
 
 
+def suggest_synonym_keywords(suggestions: list[TagSuggestion]) -> list[TagSuggestion]:
+    """Suggest reviewer-facing keyword synonyms from existing tag evidence."""
+    evidence_sources = [
+        suggestion
+        for suggestion in suggestions
+        if suggestion.field in {"description", "keyword", "keywords", "ucs_category", "ucs_subcategory"}
+    ]
+    if not evidence_sources:
+        return []
+
+    token_set: set[str] = set()
+    existing_terms: set[str] = set()
+    evidence: list[str] = []
+    for suggestion in evidence_sources:
+        existing_terms.add(suggestion.value.strip().lower())
+        token_set.update(_normalized_keyword_tokens(suggestion.value))
+        evidence.append(f"{suggestion.source}:{suggestion.field}:{suggestion.value}")
+
+    synonym_suggestions: list[TagSuggestion] = []
+    emitted: set[str] = set()
+    for trigger_tokens, keywords in _SYNONYM_KEYWORDS.items():
+        if not set(trigger_tokens).issubset(token_set):
+            continue
+        trigger = " ".join(trigger_tokens)
+        for keyword in keywords:
+            normalized = keyword.lower()
+            if normalized in emitted or normalized in existing_terms:
+                continue
+            emitted.add(normalized)
+            synonym_suggestions.append(
+                TagSuggestion(
+                    field="keyword",
+                    value=keyword,
+                    source="synonym",
+                    method="controlled_synonym_map",
+                    confidence=_CONFIDENCE_SYNONYM,
+                    evidence=[f"matched:{trigger}", *evidence],
+                )
+            )
+    return synonym_suggestions
+
+
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
@@ -492,6 +560,7 @@ def build_tag_suggestion_report(
     limit: int = 200,
     ucs_catalog_path: Path | None = None,
     use_ucs_catalog: bool = False,
+    include_synonyms: bool = False,
     sources: list[str] | None = None,
     fields: list[str] | None = None,
 ) -> TagSuggestionReport:
@@ -544,6 +613,8 @@ def build_tag_suggestion_report(
         path_suggestions = suggest_from_path(path, root)
 
         all_suggestions = ucs_suggestions + group_suggestions + filename_suggestions + path_suggestions
+        if include_synonyms:
+            all_suggestions = all_suggestions + suggest_synonym_keywords(all_suggestions)
         if min_confidence > 0:
             all_suggestions = [s for s in all_suggestions if s.confidence >= min_confidence]
         all_suggestions = filter_suggestions(all_suggestions, sources=source_filters, fields=field_filters)

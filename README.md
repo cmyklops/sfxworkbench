@@ -22,8 +22,8 @@ reviewable library cleanup for real studio copies before public v1.0 polish.
   macOS, Windows, DAWs, sync tools, and external drives.
 - Organize obvious folder patterns, such as numbered Sound Ideas series folders,
   vendor/product folders, and sibling bundle groups.
-- Report metadata, sample-rate, channel-layout, and related-take issues without
-  changing the audio.
+- Report metadata, sample-rate, channel-layout, and related-take issues before
+  any write workflow.
 - Propose useful UCS tags from corroborated evidence while preserving filenames
   and existing metadata.
 
@@ -157,7 +157,7 @@ characters, illegal filename characters, and conservative long-path shortening.
 
 ## Reports And Metadata
 
-These commands are report-only today:
+These commands are report-only:
 
 ```bash
 uv run sfx metadata audit --output ~/reports/metadata_report.json
@@ -166,11 +166,17 @@ uv run sfx metadata backends --json
 uv run sfx groups audit PATH --output ~/reports/related_groups_report.json
 uv run sfx format audit PATH --output ~/reports/format_report.json
 uv run sfx packs audit PATH --output ~/reports/pack_overlap_report.json
+uv run sfx tag propose PATH --db ~/.wavwarden/index.db --min-confidence 0.6 --output ~/reports/tag_proposals.json
+uv run sfx tag suggest PATH --use-ucs-catalog --min-confidence 0.8 --source ucs_catalog --field ucs_category --field ucs_subcategory --output ~/reports/tag_suggestions.json
+```
+
+These commands create reviewed plans, update SQLite DB-only tags, or move files
+only after the usual review/apply gates:
+
+```bash
 uv run sfx packs plan --report ~/reports/pack_overlap_report.json --output ~/reports/pack_consolidation_plan.json
 uv run sfx packs review ~/reports/pack_consolidation_plan.json --approve-all
 uv run sfx packs apply ~/reports/pack_consolidation_plan.json --require-reviewed
-uv run sfx tag propose PATH --db ~/.wavwarden/index.db --min-confidence 0.6 --output ~/reports/tag_proposals.json
-uv run sfx tag suggest PATH --use-ucs-catalog --min-confidence 0.8 --source ucs_catalog --field ucs_category --field ucs_subcategory --output ~/reports/tag_suggestions.json
 uv run sfx tag plan PATH --from-suggestions ~/reports/tag_suggestions.json --source ucs_catalog --field ucs_category --field ucs_subcategory --output ~/reports/tag_plan.json
 uv run sfx tag summarize ~/reports/tag_plan.json --value-limit 20
 uv run sfx tag review ~/reports/tag_plan.json --approve-field ucs_category --only-status pending
@@ -182,8 +188,19 @@ uv run sfx metadata write-plan ~/reports/metadata_write_plan.json --path PATH --
 uv run sfx metadata write-review ~/reports/metadata_write_plan.json --approve-all
 uv run sfx metadata write-preview ~/reports/metadata_write_plan.json --require-reviewed
 uv run sfx metadata write-fixtures ~/reports/metadata_write_plan.json ~/reports/metadata_fixtures
-uv run sfx metadata write-readback ~/reports/metadata_fixtures
+uv run sfx metadata write-fixtures ~/reports/metadata_write_plan.json ~/reports/metadata_fixtures --write-fixture-metadata
+uv run sfx metadata write-readback ~/reports/metadata_fixtures --json
+uv run sfx metadata write-apply ~/reports/metadata_write_plan.json --require-reviewed
+uv run sfx metadata write-apply ~/reports/metadata_write_plan.json --require-reviewed --apply --log ~/reports/metadata_write_apply_log.json
+uv run sfx metadata write-undo ~/reports/metadata_write_apply_log.json
+uv run sfx metadata write-undo ~/reports/metadata_write_apply_log.json --apply
 ```
+
+`metadata write-apply` is deliberately narrow in the beta: it writes reviewed
+Mutagen-backed tags for AIFF, MP3, FLAC, Ogg/Vorbis, Opus, and M4A, plus
+reviewed BWF `bext` fields for WAV/RF64 through BWF MetaEdit. It creates
+backups first, verifies readback, and refreshes the SQLite index. W64 remains
+sidecar/DB-only until a reliable embedded-write backend is proven.
 
 UCS catalog support:
 
@@ -237,6 +254,7 @@ python3 audit.py PATH --json
 - [`docs/PHASES.md`](docs/PHASES.md): roadmap, safety model, JSON contracts
 - [`docs/UCS.md`](docs/UCS.md): UCS data and category integration plan
 - [`docs/METADATA_TAGGING.md`](docs/METADATA_TAGGING.md): metadata writing and audio-suggestion plan
+- [`docs/REAL_LIBRARY_SLICES.md`](docs/REAL_LIBRARY_SLICES.md): copied real-library validation slices
 - [`docs/SIMILARITY.md`](docs/SIMILARITY.md): optional audio similarity crawler roadmap
 - [`docs/PACK_DEDUPLICATION.md`](docs/PACK_DEDUPLICATION.md): pack/folder duplicate detection plan
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): contribution policy during internal beta

@@ -6,6 +6,8 @@ import shutil
 import subprocess
 from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
+from importlib import metadata as importlib_metadata
+from importlib import util as importlib_util
 from pathlib import Path
 
 from rich.console import Console
@@ -18,6 +20,8 @@ console = Console()
 
 BWF_METAEDIT_NAMES = ("bwfmetaedit", "BWFMetaEdit")
 BWF_METAEDIT_VERSION_FLAGS = ("--Version", "--version", "-v")
+BWF_METAEDIT_EXTENSIONS = [".wav", ".rf64"]
+MUTAGEN_EXTENSIONS = [".aif", ".aiff", ".mp3", ".flac", ".ogg", ".opus", ".m4a"]
 
 
 def _now_iso() -> str:
@@ -88,12 +92,12 @@ def probe_bwfmetaedit(
             display_name="BWF MetaEdit",
             available=False,
             error="not found on PATH" if executable is None else f"executable not found: {executable}",
-            supported_extensions=[".wav", ".rf64"],
+            supported_extensions=BWF_METAEDIT_EXTENSIONS,
             writes_bext=True,
             writes_ixml=False,
             notes=[
                 "Preferred external reference for Broadcast WAV metadata writes.",
-                "wavwarden still keeps embedded audio mutation behind reviewed future workflows.",
+                "Supports reviewed WAV/RF64 BEXT and RIFF INFO keyword write workflows.",
             ],
         )
 
@@ -106,12 +110,43 @@ def probe_bwfmetaedit(
         version=version,
         version_command=version_command,
         error=error,
-        supported_extensions=[".wav", ".rf64"],
+        supported_extensions=BWF_METAEDIT_EXTENSIONS,
         writes_bext=True,
         writes_ixml=False,
         notes=[
-            "Use as the reference behavior before enabling any embedded WAV mutation.",
-            "Capture executable and version in future metadata write plans and logs.",
+            "Reference backend for reviewed WAV/RF64 BEXT and RIFF INFO keyword writes.",
+            "Capture executable and version in metadata write plans and logs.",
+        ],
+    )
+
+
+def probe_mutagen() -> MetadataWriteBackend:
+    """Discover the optional Mutagen library without importing it."""
+    if importlib_util.find_spec("mutagen") is None:
+        return MetadataWriteBackend(
+            name="mutagen",
+            display_name="Mutagen",
+            available=False,
+            error="python package not installed; install wavwarden[metadata]",
+            supported_extensions=MUTAGEN_EXTENSIONS,
+            notes=[
+                "Planned backend for tagged standard formats outside the BWF/WAV family.",
+                "Used for reviewed dry-run plans before any embedded mutation is enabled.",
+            ],
+        )
+    try:
+        version = importlib_metadata.version("mutagen")
+    except importlib_metadata.PackageNotFoundError:
+        version = None
+    return MetadataWriteBackend(
+        name="mutagen",
+        display_name="Mutagen",
+        available=True,
+        version=version,
+        supported_extensions=MUTAGEN_EXTENSIONS,
+        notes=[
+            "Planned backend for MP3, FLAC, Ogg/Vorbis, Opus, M4A, and AIFF-style tags.",
+            "Writes are still held behind wavwarden's reviewed dry-run workflow.",
         ],
     )
 
@@ -125,7 +160,7 @@ def build_metadata_backends_report(
     return MetadataWriteBackendsReport(
         generated_at=_now_iso(),
         tool_version=__version__,
-        backends=[probe_bwfmetaedit(bwfmetaedit, run=run)],
+        backends=[probe_bwfmetaedit(bwfmetaedit, run=run), probe_mutagen()],
     )
 
 
