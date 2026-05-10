@@ -268,3 +268,95 @@ Results:
   - `ambience; high frequency; tension layer; texture`
 - Undo restored 2 files with 0 errors; post-undo RIFF INFO readback showed no
   `IKEY` values.
+
+## Existing BWF Originator Fill Slice
+
+Created: 2026-05-10
+
+Purpose: prove reviewed BWF MetaEdit writes can fill missing BEXT
+`Originator` and `OriginatorReference` values on real copied WAV files while
+preserving populated BEXT `Description` values.
+
+Copied slice root:
+
+```text
+/private/tmp/wavwarden_bwf_originator_slice_20260509_214926/library
+```
+
+Slice DB:
+
+```text
+/private/tmp/wavwarden_bwf_originator_slice_20260509_214926/slice.db
+```
+
+Files copied:
+
+```text
+AMB Edinburgh Napier University Cafeteria walla room tone D100.wav
+AMB Edinburgh Napier University Computing Centre walla room tone D100.wav
+AMB South Africa Afternoon savannah Limpopo province birds cicadas crickets insects D100.wav
+AMB South Africa Dawn savannah Limpopo river birds frogs insects D100.wav
+```
+
+Selection criteria:
+
+```sql
+SELECT path
+FROM files
+WHERE path LIKE '/Users/mattwesdock/CommercialLibraries/2016 Holiday Freebies - MAFX/_Sounds/%'
+  AND lower(extension) = '.wav'
+  AND scan_error IS NULL
+  AND COALESCE(has_bext, 0) = 1
+ORDER BY path
+LIMIT 4;
+```
+
+Reviewed tags inserted into the slice DB only:
+
+```text
+field: description
+value: Wavwarden proposed description for <file stem>
+
+field: originator
+value: Wavwarden QA
+
+field: originator_reference
+value: WW-MAFX-ORIG-0001 through WW-MAFX-ORIG-0004
+```
+
+Artifacts:
+
+```text
+/private/tmp/wavwarden_bwf_originator_slice_20260509_214926/metadata_write_plan.json
+/private/tmp/wavwarden_bwf_originator_slice_20260509_214926/fixtures/metadata_write_fixture_manifest.json
+/private/tmp/wavwarden_bwf_originator_slice_20260509_214926/metadata_write_apply_log.json
+```
+
+Verified workflow:
+
+```bash
+uv run sfx scan /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/library --db /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/slice.db --json
+uv run sfx metadata write-plan /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/metadata_write_plan.json --db /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/slice.db --path /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/library --backend bwfmetaedit --bwfmetaedit /opt/homebrew/bin/bwfmetaedit --json
+uv run sfx metadata write-review /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/metadata_write_plan.json --approve-all --json
+uv run sfx metadata write-preview /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/metadata_write_plan.json --db /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/slice.db --require-reviewed --json
+uv run sfx metadata write-fixtures /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/metadata_write_plan.json /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/fixtures --db /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/slice.db --require-reviewed --write-fixture-metadata --json
+uv run sfx metadata write-readback /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/fixtures --json
+uv run sfx metadata write-apply /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/metadata_write_plan.json --db /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/slice.db --require-reviewed --backup-dir /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/backups --log /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/metadata_write_apply_log.json --apply --json
+uv run sfx metadata write-undo /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/metadata_write_apply_log.json --db /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/slice.db --apply --json
+```
+
+Results:
+
+- Write plan considered 12 accepted tags across 4 copied real WAV files.
+- 4 proposed descriptions were marked `skip_existing`, preserving populated
+  vendor BEXT descriptions.
+- Preview grouped 8 missing values into 4 BWF MetaEdit commands with
+  `--reject-overwrite`.
+- Fixture write: 4 files written, 0 errors.
+- Fixture readback: 4 files checked, 4 matched, 0 mismatches.
+- Original copied-slice apply: 4 files backed up, 4 written, 4 verified, 0
+  errors.
+- Post-apply readback showed original descriptions unchanged, `Originator` set
+  to `Wavwarden QA`, and unique `OriginatorReference` values.
+- Undo restored 4 files with 0 errors; post-undo readback showed original
+  descriptions intact and empty originator fields again.

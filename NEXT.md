@@ -140,6 +140,13 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
   tags in a slice-only DB, then plan/review/preview/fixture-write/readback/apply
   and undo were exercised successfully. Details are in
   `docs/REAL_LIBRARY_SLICES.md`.
+- Existing-BWF originator fill slice defined and run:
+  `/private/tmp/wavwarden_bwf_originator_slice_20260509_214926/library`.
+  Four copied MAFX WAV files with populated BEXT descriptions and empty
+  originator fields were given reviewed `description`, `originator`, and
+  `originator_reference` tags in a slice-only DB. Planning skipped all existing
+  descriptions, fixture write/readback passed, copied-slice apply verified 8
+  written BEXT values, and undo restored the empty originator fields.
 
 Current audit focus:
 
@@ -173,8 +180,8 @@ Current audit focus:
    `metadata write-undo --json`.
 4. Run `uv run --extra dev poe check` and `uv run --extra dev poe json-smoke`
    before committing this slice.
-5. Broaden BWF metadata only after more copied real-library slices pass the same
-   write/readback/apply/undo loop.
+5. Continue broadening BWF metadata only through copied real-library slices that
+   pass the same write/readback/apply/undo loop.
 6. Keep audio conversion and loudness normalization out of scope.
 
 ## Later
