@@ -179,7 +179,7 @@ Current audit focus:
 
 ## Next
 
-Progress: 5/6 complete for this sprint.
+Progress: 6/6 complete for this sprint.
 
 1. Done: stabilize the metadata writing work before more feature work.
 2. Done: keep README, `docs/PHASES.md`, and `docs/METADATA_TAGGING.md` aligned with
@@ -190,8 +190,29 @@ Progress: 5/6 complete for this sprint.
    before committing this slice.
 5. Done: broaden BWF metadata only through copied real-library slices that
    pass the same write/readback/apply/undo loop.
-6. Remaining: run one real-library `sfx tag propose` calibration pass with
-   embedded metadata evidence, then record the result here.
+6. Done: run one real-library `sfx tag propose` calibration pass with embedded
+   metadata evidence, then record the result here.
+
+Terminal-test calibration:
+
+- Report:
+  `/Users/mattwesdock/reports/tag_proposals_embedded_20260509_232710.json`.
+- Command:
+  `uv run sfx tag propose /Users/mattwesdock/CommercialLibraries --db /Users/mattwesdock/.wavwarden/index.db --catalog /Users/mattwesdock/.wavwarden/ucs_catalog.json --min-confidence 0.6 --limit 500 --output /Users/mattwesdock/reports/tag_proposals_embedded_20260509_232710.json`
+- Summary: 120,716 files considered; 178,400 proposals across 46,756 files;
+  16,791 strong and 161,609 review.
+- Compared with the pre-embedded report
+  `/Users/mattwesdock/reports/tag_proposals_evidence_20260509.json`, proposals
+  rose from 38,025 to 178,400 and files with proposals rose from 15,754 to
+  46,756.
+- In the saved 500-entry sample, 802 proposals included `embedded_metadata`
+  evidence: 174 strong and 628 review.
+- Spot-check finding: embedded BEXT/RIFF INFO helps real matches such as
+  ambience/traffic and rain/vegetation, but it also broadens noisy generic
+  terms such as `metal` and `tonal` into too many review candidates.
+- Terminal testing guidance: start with high-confidence proposal review
+  (`--min-confidence 0.8`) and treat the broad `review` bucket as diagnostic
+  until candidate opening is tightened further.
 
 ## Later
 
