@@ -171,6 +171,8 @@ def build_tag_plan(
     ucs_catalog_path: Path | None = None,
     use_ucs_catalog: bool = False,
     include_synonyms: bool = False,
+    synonym_limit: int = 0,
+    synonym_depth: int = 0,
     source_report: Path | None = None,
     target: str = "db",
     sources: list[str] | None = None,
@@ -190,6 +192,8 @@ def build_tag_plan(
             ucs_catalog_path=ucs_catalog_path,
             use_ucs_catalog=use_ucs_catalog,
             include_synonyms=include_synonyms,
+            synonym_limit=synonym_limit,
+            synonym_depth=synonym_depth,
             sources=sources,
             fields=fields,
         )

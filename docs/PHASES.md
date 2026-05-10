@@ -718,7 +718,8 @@ Command contracts:
 - `tag propose PATH --json`: includes candidate UCS proposals, confidence,
   strength/action classification, and per-source evidence from filenames,
   paths, accepted tags, and embedded WAV/RF64 BEXT/RIFF INFO metadata.
-- `tag suggest PATH --json`: includes suggestion summary and per-file evidence.
+- `tag suggest PATH --json`: includes suggestion summary, per-file evidence,
+  and optional synonym keyword limit/depth controls.
 - `tag plan/review/apply --json`: includes reviewed plan entries, approval
   counts, DB-only apply result, and apply log path.
 - `tag sidecar-export/import --json`: includes sidecar paths, exported entries,

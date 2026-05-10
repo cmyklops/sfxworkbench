@@ -1141,6 +1141,8 @@ class TagSuggestionReport(BaseModel):
     ucs_catalog_path: str | None = None
     ucs_catalog_release_version: str | None = None
     min_confidence: float = 0.0
+    synonym_limit: int = 0
+    synonym_depth: int = 0
     sources: list[str] = []
     fields: list[str] = []
     limit: int = 200

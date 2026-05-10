@@ -153,6 +153,10 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
   multiple values.
 - `sfx tag propose` now reads indexed WAV/RF64 BEXT `Description` and RIFF INFO
   `IKEY` fields as report-only `embedded_metadata` evidence for UCS proposals.
+- Synonym keyword suggestions now support `--synonym-limit` and
+  `--synonym-depth` on `sfx tag suggest` and `sfx tag plan`, so terminal tests
+  can choose how many terms to add and how far down the ordered synonym lists to
+  go.
 
 Current audit focus:
 

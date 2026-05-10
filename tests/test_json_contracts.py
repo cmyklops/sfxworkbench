@@ -874,6 +874,8 @@ def test_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
     assert payload["report"]["schema_version"] == 1
     assert payload["report"]["tool"] == "wavwarden"
     assert payload["report"]["min_confidence"] == 0.0
+    assert payload["report"]["synonym_limit"] == 0
+    assert payload["report"]["synonym_depth"] == 0
     assert payload["report"]["summary"]["files_considered"] >= 1
 
     # Confirm UCS-named fixtures (AMB_RAIN_01, SFX_GUNSHOT_01) yield ucs_stem suggestions.
@@ -885,6 +887,32 @@ def test_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
     fields = {s["field"] for s in sample["suggestions"]}
     assert {"ucs_category", "ucs_subcategory", "description"} <= fields
     assert out.exists()
+
+    synonym_payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "tag",
+                    "suggest",
+                    str(tmp_library),
+                    "--db",
+                    str(tmp_db),
+                    "--include-synonyms",
+                    "--synonym-limit",
+                    "2",
+                    "--synonym-depth",
+                    "1",
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert synonym_payload["report"]["synonym_limit"] == 2
+    assert synonym_payload["report"]["synonym_depth"] == 1
 
     plan_out = tmp_path / "tag_plan.json"
     plan_payload = _normalize(

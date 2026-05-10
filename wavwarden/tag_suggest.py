@@ -474,8 +474,17 @@ def suggest_from_group(file_in_group: RelatedSoundFile, group: RelatedSoundGroup
     return suggestions
 
 
-def suggest_synonym_keywords(suggestions: list[TagSuggestion]) -> list[TagSuggestion]:
+def suggest_synonym_keywords(
+    suggestions: list[TagSuggestion],
+    *,
+    synonym_limit: int = 0,
+    synonym_depth: int = 0,
+) -> list[TagSuggestion]:
     """Suggest reviewer-facing keyword synonyms from existing tag evidence."""
+    if synonym_limit < 0:
+        raise ValueError("--synonym-limit must be 0 or greater")
+    if synonym_depth < 0:
+        raise ValueError("--synonym-depth must be 0 or greater")
     evidence_sources = [
         suggestion
         for suggestion in suggestions
@@ -498,7 +507,8 @@ def suggest_synonym_keywords(suggestions: list[TagSuggestion]) -> list[TagSugges
         if not set(trigger_tokens).issubset(token_set):
             continue
         trigger = " ".join(trigger_tokens)
-        for keyword in keywords:
+        candidate_keywords = keywords[:synonym_depth] if synonym_depth else keywords
+        for keyword in candidate_keywords:
             normalized = keyword.lower()
             if normalized in emitted or normalized in existing_terms:
                 continue
@@ -513,6 +523,8 @@ def suggest_synonym_keywords(suggestions: list[TagSuggestion]) -> list[TagSugges
                     evidence=[f"matched:{trigger}", *evidence],
                 )
             )
+            if synonym_limit and len(synonym_suggestions) >= synonym_limit:
+                return synonym_suggestions
     return synonym_suggestions
 
 
@@ -561,6 +573,8 @@ def build_tag_suggestion_report(
     ucs_catalog_path: Path | None = None,
     use_ucs_catalog: bool = False,
     include_synonyms: bool = False,
+    synonym_limit: int = 0,
+    synonym_depth: int = 0,
     sources: list[str] | None = None,
     fields: list[str] | None = None,
 ) -> TagSuggestionReport:
@@ -569,6 +583,10 @@ def build_tag_suggestion_report(
         raise ValueError("--min-confidence must be between 0 and 1")
     if limit < 0:
         raise ValueError("--limit must be 0 or greater")
+    if synonym_limit < 0:
+        raise ValueError("--synonym-limit must be 0 or greater")
+    if synonym_depth < 0:
+        raise ValueError("--synonym-depth must be 0 or greater")
     source_filters = normalize_filter_values(sources, option_name="--source")
     field_filters = normalize_filter_values(fields, option_name="--field")
 
@@ -614,7 +632,11 @@ def build_tag_suggestion_report(
 
         all_suggestions = ucs_suggestions + group_suggestions + filename_suggestions + path_suggestions
         if include_synonyms:
-            all_suggestions = all_suggestions + suggest_synonym_keywords(all_suggestions)
+            all_suggestions = all_suggestions + suggest_synonym_keywords(
+                all_suggestions,
+                synonym_limit=synonym_limit,
+                synonym_depth=synonym_depth,
+            )
         if min_confidence > 0:
             all_suggestions = [s for s in all_suggestions if s.confidence >= min_confidence]
         all_suggestions = filter_suggestions(all_suggestions, sources=source_filters, fields=field_filters)
@@ -660,6 +682,8 @@ def build_tag_suggestion_report(
         ucs_catalog_path=str(resolved_catalog_path.resolve()) if resolved_catalog_path is not None else None,
         ucs_catalog_release_version=catalog.provenance.release_version if catalog is not None else None,
         min_confidence=min_confidence,
+        synonym_limit=synonym_limit,
+        synonym_depth=synonym_depth,
         sources=source_filters,
         fields=field_filters,
         limit=limit,

@@ -173,8 +173,10 @@ Current first implementation:
 uv run sfx tag propose PATH --db ~/.wavwarden/index.db --min-confidence 0.6 --output tag_proposals.json
 uv run sfx tag suggest PATH --db ~/.wavwarden/index.db --use-ucs-catalog --min-confidence 0.8 --source ucs_catalog --field ucs_category --field ucs_subcategory --output tag_suggestions.json
 uv run sfx tag suggest PATH --db ~/.wavwarden/index.db --include-synonyms --field keyword --output synonym_keywords.json
+uv run sfx tag suggest PATH --db ~/.wavwarden/index.db --include-synonyms --synonym-limit 3 --synonym-depth 1 --field keyword --output close_synonym_keywords.json
 uv run sfx tag plan PATH --db ~/.wavwarden/index.db --from-suggestions tag_suggestions.json --source ucs_catalog --field ucs_category --field ucs_subcategory --output tag_plan.json
 uv run sfx tag plan PATH --db ~/.wavwarden/index.db --include-synonyms --source synonym --field keyword --output synonym_keyword_plan.json
+uv run sfx tag plan PATH --db ~/.wavwarden/index.db --include-synonyms --synonym-limit 3 --synonym-depth 1 --source synonym --field keyword --output close_synonym_keyword_plan.json
 uv run sfx tag summarize tag_plan.json --value-limit 20
 uv run sfx tag review tag_plan.json --approve-field ucs_category --only-status pending
 uv run sfx tag review tag_plan.json --approve-all
@@ -242,6 +244,11 @@ carry approved keywords through RIFF INFO `IKEY` via BWF MetaEdit. Multiple
 approved keyword values stay structured in wavwarden plans and readback reports;
 for RIFF INFO they are rendered as a semicolon-separated `IKEY` value because
 that container field is text-based.
+
+Use `--synonym-limit N` to cap total synonym keyword suggestions per file, and
+`--synonym-depth N` to control how far down each ordered synonym list wavwarden
+looks. Lower depth values keep closer, less "out there" terms; `0` means no
+cap and preserves the full controlled list.
 
 ## Phase D: Metadata Writes
 

@@ -168,6 +168,7 @@ uv run sfx format audit PATH --output ~/reports/format_report.json
 uv run sfx packs audit PATH --output ~/reports/pack_overlap_report.json
 uv run sfx tag propose PATH --db ~/.wavwarden/index.db --min-confidence 0.6 --output ~/reports/tag_proposals.json
 uv run sfx tag suggest PATH --use-ucs-catalog --min-confidence 0.8 --source ucs_catalog --field ucs_category --field ucs_subcategory --output ~/reports/tag_suggestions.json
+uv run sfx tag suggest PATH --include-synonyms --synonym-limit 3 --synonym-depth 1 --field keyword --output ~/reports/synonym_keywords.json
 ```
 
 These commands create reviewed plans, update SQLite DB-only tags, or move files
@@ -178,6 +179,7 @@ uv run sfx packs plan --report ~/reports/pack_overlap_report.json --output ~/rep
 uv run sfx packs review ~/reports/pack_consolidation_plan.json --approve-all
 uv run sfx packs apply ~/reports/pack_consolidation_plan.json --require-reviewed
 uv run sfx tag plan PATH --from-suggestions ~/reports/tag_suggestions.json --source ucs_catalog --field ucs_category --field ucs_subcategory --output ~/reports/tag_plan.json
+uv run sfx tag plan PATH --include-synonyms --synonym-limit 3 --synonym-depth 1 --source synonym --field keyword --output ~/reports/synonym_keyword_plan.json
 uv run sfx tag summarize ~/reports/tag_plan.json --value-limit 20
 uv run sfx tag review ~/reports/tag_plan.json --approve-field ucs_category --only-status pending
 uv run sfx tag review ~/reports/tag_plan.json --approve-all

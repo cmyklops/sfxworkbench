@@ -134,6 +134,18 @@ def test_synonym_keywords_from_description_suggestions() -> None:
     assert any("matched:car crash" in s.evidence for s in suggestions)
 
 
+def test_synonym_keywords_can_limit_count_and_depth() -> None:
+    base = suggest_from_filename("Car Crash 01")
+
+    limited = suggest_synonym_keywords(base, synonym_limit=3)
+    shallow = suggest_synonym_keywords(base, synonym_depth=1)
+    shallow_limited = suggest_synonym_keywords(base, synonym_limit=1, synonym_depth=1)
+
+    assert [s.value for s in limited] == ["vehicle impact", "auto collision", "wreck"]
+    assert [s.value for s in shallow] == ["vehicle impact", "impact"]
+    assert [s.value for s in shallow_limited] == ["vehicle impact"]
+
+
 def test_path_emits_one_description_per_meaningful_folder(tmp_path: Path) -> None:
     root = tmp_path / "lib"
     file_path = root / "Footsteps" / "Concrete" / "step.wav"
@@ -307,6 +319,32 @@ def test_report_can_include_synonym_keyword_suggestions(tmp_path: Path, tmp_db: 
         if suggestion.source == "synonym"
     }
     assert keywords == {"vehicle impact", "auto collision", "wreck", "impact", "collision"}
+
+
+def test_report_can_limit_synonym_keyword_suggestions(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "Vehicles"
+    folder.mkdir(parents=True)
+    _seed_files(tmp_db, [{"path": folder / "Car Crash 01.wav", "md5": "A"}])
+
+    report = build_tag_suggestion_report(
+        root,
+        tmp_db,
+        include_synonyms=True,
+        synonym_limit=2,
+        synonym_depth=1,
+    )
+
+    assert report.synonym_limit == 2
+    assert report.synonym_depth == 1
+    assert report.summary.by_source["synonym"] == 2
+    keywords = [
+        suggestion.value
+        for entry in report.entries
+        for suggestion in entry.suggestions
+        if suggestion.source == "synonym"
+    ]
+    assert keywords == ["vehicle impact", "impact"]
 
 
 def test_report_can_use_explicit_ucs_catalog(tmp_path: Path, tmp_db: Path) -> None:
@@ -533,6 +571,27 @@ def test_synonym_keywords_can_flow_through_tag_plan_to_accepted_tags(tmp_path: P
         ("keyword", "vehicle impact", "synonym"),
         ("keyword", "wreck", "synonym"),
     }
+
+
+def test_limited_synonym_keywords_can_flow_through_tag_plan(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "Vehicles"
+    folder.mkdir(parents=True)
+    audio = folder / "Car Crash 01.wav"
+    audio.write_bytes(b"not really audio")
+    _seed_files(tmp_db, [{"path": audio, "md5": "A", "size": len(audio.read_bytes())}])
+
+    plan = build_tag_plan(
+        root,
+        db_path=tmp_db,
+        include_synonyms=True,
+        synonym_limit=2,
+        synonym_depth=1,
+        sources=["synonym"],
+        fields=["keyword"],
+    )
+
+    assert [entry.proposed_value for entry in plan.entries] == ["vehicle impact", "impact"]
 
 
 def test_tag_plan_filters_source_report_by_source_and_field(tmp_path: Path, tmp_db: Path) -> None:

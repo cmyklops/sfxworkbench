@@ -1146,6 +1146,20 @@ def cmd_tag_suggest(
             help="Suggest reviewed keyword synonyms for metadata enrichment.",
         ),
     ] = False,
+    synonym_limit: Annotated[
+        int,
+        typer.Option(
+            "--synonym-limit",
+            help="Maximum synonym keyword suggestions per file when --include-synonyms is enabled; 0 means no cap.",
+        ),
+    ] = 0,
+    synonym_depth: Annotated[
+        int,
+        typer.Option(
+            "--synonym-depth",
+            help="Maximum number of ordered synonyms to consider from each matched synonym list; 0 means all.",
+        ),
+    ] = 0,
     output: Annotated[
         Path | None, typer.Option("--output", help="Write tag suggestion report JSON to this path.")
     ] = None,
@@ -1185,6 +1199,8 @@ def cmd_tag_suggest(
             ucs_catalog_path=ucs_catalog,
             use_ucs_catalog=use_ucs_catalog,
             include_synonyms=include_synonyms,
+            synonym_limit=synonym_limit,
+            synonym_depth=synonym_depth,
             sources=source,
             fields=field,
         )
@@ -1290,6 +1306,20 @@ def cmd_tag_plan(
             help="Suggest reviewed keyword synonyms when building a new tag plan.",
         ),
     ] = False,
+    synonym_limit: Annotated[
+        int,
+        typer.Option(
+            "--synonym-limit",
+            help="Maximum synonym keyword suggestions per file when --include-synonyms is enabled; 0 means no cap.",
+        ),
+    ] = 0,
+    synonym_depth: Annotated[
+        int,
+        typer.Option(
+            "--synonym-depth",
+            help="Maximum number of ordered synonyms to consider from each matched synonym list; 0 means all.",
+        ),
+    ] = 0,
     min_confidence: Annotated[
         float, typer.Option("--min-confidence", help="Drop suggestions below this confidence (0.0-1.0).")
     ] = 0.0,
@@ -1324,6 +1354,8 @@ def cmd_tag_plan(
             ucs_catalog_path=ucs_catalog,
             use_ucs_catalog=use_ucs_catalog,
             include_synonyms=include_synonyms,
+            synonym_limit=synonym_limit,
+            synonym_depth=synonym_depth,
             source_report=source_report,
             sources=source,
             fields=field,
