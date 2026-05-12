@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from wavwarden.db import get_connection
-from wavwarden.models import UcsCatalog, UcsCatalogProvenance, UcsEntry
-from wavwarden.ucs_validate import build_ucs_validation_report, write_ucs_validation_report
+from sfxworkbench.db import get_connection
+from sfxworkbench.models import UcsCatalog, UcsCatalogProvenance, UcsEntry
+from sfxworkbench.ucs_validate import build_ucs_validation_report, write_ucs_validation_report
 
 
 def _catalog(path: Path) -> None:

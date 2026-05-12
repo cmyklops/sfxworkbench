@@ -1,10 +1,11 @@
-"""Tests for wavwarden.rename."""
+"""Tests for sfxworkbench.rename."""
 
+import json
 from pathlib import Path
 
-from wavwarden.db import get_connection
-from wavwarden.rename import apply_rename_plan, build_rename_plan, undo_rename_log
-from wavwarden.scan import scan_library
+from sfxworkbench.db import get_connection
+from sfxworkbench.rename import apply_rename_plan, build_rename_plan, undo_rename_log
+from sfxworkbench.scan import scan_library
 
 
 def test_rename_plan_sanitizes_and_prefixes_non_ucs(tmp_path: Path) -> None:
@@ -226,3 +227,47 @@ def test_apply_rename_plan_allows_partial_when_requested(tmp_path: Path) -> None
     assert allowed.renamed == 1
     assert allowed.errors == focused.errors
     assert Path(valid_entry.new_path).exists()
+
+
+def test_rename_plan_uses_config_safe_folder(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    safe = root / "Master"
+    safe.mkdir(parents=True)
+    protected = safe / "bad:name.wav"
+    protected.write_bytes(b"audio")
+    config_path = tmp_path / "sfxworkbench.json"
+    config_path.write_text(json.dumps({"safe_folders": [str(safe)]}))
+
+    plan = build_rename_plan(root, pattern="safe", config_path=config_path)
+
+    assert plan.entries == []
+    assert plan.errors == [
+        {
+            "path": str(protected),
+            "error": "protected by safe folder",
+            "safe_folder": str(safe.resolve()),
+        }
+    ]
+
+
+def test_apply_rename_plan_refuses_config_safe_folder_for_old_plan(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    safe = root / "Master"
+    safe.mkdir(parents=True)
+    protected = safe / "bad:name.wav"
+    protected.write_bytes(b"audio")
+    config_path = tmp_path / "sfxworkbench.json"
+    config_path.write_text(json.dumps({"safe_folders": [str(safe)]}))
+    old_plan = build_rename_plan(root, pattern="safe")
+
+    result = apply_rename_plan(old_plan, dry_run=False, quiet=True, config_path=config_path)
+
+    assert result.renamed == 0
+    assert result.errors == [
+        {
+            "path": str(protected),
+            "error": "protected by safe folder",
+            "safe_folder": str(safe.resolve()),
+        }
+    ]
+    assert protected.exists()

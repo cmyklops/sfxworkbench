@@ -2,8 +2,10 @@
 
 import json
 
+import numpy as np
+import soundfile as sf
+from sfxworkbench.cli import app
 from typer.testing import CliRunner
-from wavwarden.cli import app
 
 runner = CliRunner()
 
@@ -232,6 +234,10 @@ def test_similarity_cli_json_smoke(tmp_library, tmp_db, tmp_path) -> None:
     )
     assert crawl.exit_code == 0
     assert json.loads(crawl.stdout)["command"] == "similarity_crawl"
+
+    backends = runner.invoke(app, ["similarity", "backends", "--json"])
+    assert backends.exit_code == 0
+    assert json.loads(backends.stdout)["command"] == "similarity_backends"
 
     segments = runner.invoke(
         app, ["similarity", "segments", str(tmp_library), "--db", str(tmp_db), "--limit", "1", "--json"]
@@ -471,3 +477,96 @@ def test_organize_low_value_wrapper_nesting_plan_json(tmp_library, tmp_path) -> 
     assert payload["command"] == "organize_nesting_plan"
     assert payload["plan"]["entries"][0]["kind"] == "low_value_wrapper"
     assert payload["plan"]["entries"][0]["action"] == "flatten_low_value_leaf_wrapper"
+
+
+def test_m4_advanced_cli_json(tmp_path, tmp_db) -> None:
+    library = tmp_path / "library"
+    library.mkdir()
+    audio = library / "Dual Mono.wav"
+    signal = np.ones(32, dtype=np.float32)
+    sf.write(audio, np.column_stack([signal, signal]), 48000)
+
+    scan = runner.invoke(app, ["scan", str(library), "--db", str(tmp_db), "--json"])
+    assert scan.exit_code == 0
+
+    compare_report = tmp_path / "compare.json"
+    compare = runner.invoke(
+        app,
+        [
+            "compare",
+            "audit",
+            str(library),
+            "--against-db",
+            str(tmp_db),
+            "--output",
+            str(compare_report),
+            "--json",
+        ],
+    )
+    assert compare.exit_code == 0
+    assert json.loads(compare.stdout)["command"] == "compare_audit"
+
+    compare_plan = tmp_path / "compare_plan.json"
+    compare_plan_cmd = runner.invoke(
+        app, ["compare", "plan", str(compare_report), "--output", str(compare_plan), "--json"]
+    )
+    assert compare_plan_cmd.exit_code == 0
+    assert json.loads(compare_plan_cmd.stdout)["command"] == "compare_plan"
+
+    processed = runner.invoke(app, ["processed", str(library), "--db", str(tmp_db), "--json"])
+    assert processed.exit_code == 0
+    assert json.loads(processed.stdout)["command"] == "processed"
+
+    dual_report = tmp_path / "dual.json"
+    dual = runner.invoke(
+        app, ["audio", "dual-mono", "audit", str(library), "--db", str(tmp_db), "--output", str(dual_report), "--json"]
+    )
+    assert dual.exit_code == 0
+    assert json.loads(dual.stdout)["command"] == "dual_mono_audit"
+
+    dual_plan = tmp_path / "dual_plan.json"
+    dual_plan_cmd = runner.invoke(
+        app, ["audio", "dual-mono", "plan", str(dual_report), "--output", str(dual_plan), "--json"]
+    )
+    assert dual_plan_cmd.exit_code == 0
+    assert json.loads(dual_plan_cmd.stdout)["command"] == "dual_mono_plan"
+
+    dual_review = runner.invoke(app, ["audio", "dual-mono", "review", str(dual_plan), "--approve-all", "--json"])
+    assert dual_review.exit_code == 0
+    assert json.loads(dual_review.stdout)["command"] == "dual_mono_review"
+
+    dual_apply = runner.invoke(
+        app,
+        [
+            "audio",
+            "dual-mono",
+            "apply",
+            str(dual_plan),
+            "--require-reviewed",
+            "--output-root",
+            str(tmp_path / "converted"),
+            "--json",
+        ],
+    )
+    assert dual_apply.exit_code == 0
+    assert json.loads(dual_apply.stdout)["command"] == "dual_mono_apply"
+
+    quarantined = tmp_path / "quarantine" / "old.wav"
+    quarantined.parent.mkdir()
+    quarantined.write_bytes(b"old")
+    quarantine_log = tmp_path / "pack_quarantine_log.json"
+    quarantine_log.write_text(json.dumps({"entries": [{"quarantine_path": str(quarantined)}]}), encoding="utf-8")
+    delete_plan = tmp_path / "delete_plan.json"
+    delete_plan_cmd = runner.invoke(
+        app, ["delete", "plan", str(quarantine_log), "--output", str(delete_plan), "--json"]
+    )
+    assert delete_plan_cmd.exit_code == 0
+    assert json.loads(delete_plan_cmd.stdout)["command"] == "delete_plan"
+
+    delete_review = runner.invoke(app, ["delete", "review", str(delete_plan), "--approve-all", "--json"])
+    assert delete_review.exit_code == 0
+    assert json.loads(delete_review.stdout)["command"] == "delete_review"
+
+    delete_apply = runner.invoke(app, ["delete", "apply", str(delete_plan), "--require-reviewed", "--json"])
+    assert delete_apply.exit_code == 0
+    assert json.loads(delete_apply.stdout)["command"] == "delete_apply"

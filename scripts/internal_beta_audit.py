@@ -7,12 +7,12 @@ import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
-from wavwarden.audit_cmd import run_audit
-from wavwarden.groups import audit_related_groups, write_related_groups_report
-from wavwarden.metadata_audit import build_metadata_audit_report, write_metadata_audit_report
-from wavwarden.packs import apply_pack_plan, audit_packs, build_pack_plan, write_pack_audit_report
-from wavwarden.scan import scan_library
-from wavwarden.utils import json_dumps
+from sfxworkbench.audit_cmd import run_audit
+from sfxworkbench.groups import audit_related_groups, write_related_groups_report
+from sfxworkbench.metadata_audit import build_metadata_audit_report, write_metadata_audit_report
+from sfxworkbench.packs import apply_pack_plan, audit_packs, build_pack_plan, write_pack_audit_report
+from sfxworkbench.scan import scan_library
+from sfxworkbench.utils import json_dumps
 
 
 def _now_stamp() -> str:
@@ -33,6 +33,7 @@ def run_internal_beta_audit(
     limit: int = 200,
     include_format: bool = False,
     include_similarity: bool = False,
+    similarity_validation: bool = False,
     similarity_threshold: float = 0.95,
     similarity_max_duration_s: float | None = 30.0,
 ) -> dict:
@@ -43,6 +44,7 @@ def run_internal_beta_audit(
         db_path = output_dir / "index.db"
     else:
         db_path = db_path.expanduser().resolve()
+    run_similarity = include_similarity or similarity_validation
 
     output_dir.mkdir(parents=True, exist_ok=True)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -85,15 +87,15 @@ def run_internal_beta_audit(
     format_report = None
     format_path = None
     if include_format:
-        from wavwarden.format_audit import build_format_audit_report, write_format_audit_report
+        from sfxworkbench.format_audit import build_format_audit_report, write_format_audit_report
 
         format_report = build_format_audit_report(root, db_path=db_path, limit=limit)
         format_path = output_dir / "format_report.json"
         write_format_audit_report(format_report, format_path, quiet=True)
 
     similarity = {}
-    if include_similarity:
-        from wavwarden.similarity import (
+    if run_similarity:
+        from sfxworkbench.similarity import (
             audit_similarity_descriptors,
             crawl_similarity_descriptors,
             list_similarity_segments,
@@ -189,7 +191,10 @@ def run_internal_beta_audit(
         "skip_hash": skip_hash,
         "force_rescan": force_rescan,
         "include_format": include_format,
-        "include_similarity": include_similarity,
+        "include_similarity": run_similarity,
+        "similarity_validation": run_similarity,
+        "similarity_validation_mode": "manual_beta_audit" if run_similarity else "disabled",
+        "similarity_automation_recommendation": "defer_overnight_automation_until_manual_validation_passes",
         "similarity_threshold": similarity_threshold,
         "similarity_max_duration_s": similarity_max_duration_s,
         "artifacts": {
@@ -228,13 +233,13 @@ def run_internal_beta_audit(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run wavwarden's report-only Internal Studio Beta audit workflow.")
+    parser = argparse.ArgumentParser(description="Run sfxworkbench's report-only Internal Studio Beta audit workflow.")
     parser.add_argument("path", type=Path, help="Root path of the sound library to audit.")
     parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
-        help="Directory for generated JSON reports. Defaults to ./wavwarden_internal_beta_audit_TIMESTAMP.",
+        help="Directory for generated JSON reports. Defaults to ./sfxworkbench_internal_beta_audit_TIMESTAMP.",
     )
     parser.add_argument("--db", type=Path, default=None, help="SQLite DB path. Defaults to OUTPUT_DIR/index.db.")
     parser.add_argument("--no-hash", action="store_true", help="Skip MD5 hashing. Pack reports will be less useful.")
@@ -249,6 +254,11 @@ def main() -> int:
         "--include-similarity",
         action="store_true",
         help="Also run the experimental report-only similarity crawl, segment listing, and near-duplicate audits.",
+    )
+    parser.add_argument(
+        "--similarity-validation",
+        action="store_true",
+        help="Run manual beta-audit similarity validation. Alias for --include-similarity with explicit intent.",
     )
     parser.add_argument(
         "--similarity-threshold",
@@ -272,7 +282,7 @@ def main() -> int:
     if not 0 < args.similarity_threshold <= 1:
         parser.error("--similarity-threshold must be > 0 and <= 1")
 
-    output_dir = args.output_dir or Path(f"wavwarden_internal_beta_audit_{_now_stamp()}")
+    output_dir = args.output_dir or Path(f"sfxworkbench_internal_beta_audit_{_now_stamp()}")
     similarity_max_duration_s = None if args.similarity_max_duration == 0 else args.similarity_max_duration
     manifest = run_internal_beta_audit(
         root,
@@ -283,6 +293,7 @@ def main() -> int:
         limit=args.limit,
         include_format=args.include_format,
         include_similarity=args.include_similarity,
+        similarity_validation=args.similarity_validation,
         similarity_threshold=args.similarity_threshold,
         similarity_max_duration_s=similarity_max_duration_s,
     )

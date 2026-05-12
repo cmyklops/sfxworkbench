@@ -4,9 +4,9 @@ import struct
 import wave
 from pathlib import Path
 
-from wavwarden.db import get_connection
-from wavwarden.scan import scan_library
-from wavwarden.similarity import (
+from sfxworkbench.db import get_connection
+from sfxworkbench.scan import scan_library
+from sfxworkbench.similarity import (
     audit_similarity_descriptors,
     clear_similarity_feedback,
     crawl_similarity_descriptors,
@@ -14,6 +14,7 @@ from wavwarden.similarity import (
     list_similarity_segments,
     search_similarity_descriptors,
     set_similarity_feedback,
+    similarity_backends_report,
 )
 
 
@@ -119,6 +120,44 @@ def test_similarity_crawl_writes_descriptors_and_skips_current_rows(tmp_path: Pa
     assert 0.49 <= third.descriptors[0].analyzed_duration_s <= 0.51
 
 
+def test_similarity_crawl_reports_progress(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    _make_tone(root / "tone.wav")
+    scan_library(root, tmp_db, skip_hash=False, quiet=True)
+    events: list[tuple[str, int, int | None, str]] = []
+
+    crawl_similarity_descriptors(
+        root,
+        db_path=tmp_db,
+        cache_path=None,
+        quiet=True,
+        progress_callback=lambda phase, completed, total, message: events.append((phase, completed, total, message)),
+    )
+
+    assert any(event[0] == "loading" for event in events)
+    assert any(event[0] == "crawling" and event[2] == 1 for event in events)
+    assert events[-1][0] == "complete"
+
+
+def test_similarity_crawl_can_cancel_before_analysis(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    _make_tone(root / "tone.wav")
+    scan_library(root, tmp_db, skip_hash=False, quiet=True)
+
+    report = crawl_similarity_descriptors(
+        root,
+        db_path=tmp_db,
+        cache_path=None,
+        quiet=True,
+        cancel_requested=lambda: True,
+    )
+
+    assert report.status == "cancelled"
+    assert report.stop_reason == "cancelled"
+    assert report.summary.analyzed == 0
+    assert report.summary.pending == 1
+
+
 def test_similarity_crawl_records_missing_file_errors(tmp_path: Path, tmp_db: Path) -> None:
     root = tmp_path / "library"
     wav = _make_tone(root / "missing.wav")
@@ -153,6 +192,64 @@ def test_similarity_crawl_respects_json_descriptor_limit(tmp_path: Path, tmp_db:
     payload = json.loads((tmp_path / "cache" / f"similarity_crawl_{report.run_id}.json").read_text())
     assert payload["summary"]["total_files"] == 2
     assert len(payload["descriptors"]) == 1
+
+
+def test_similarity_crawl_max_files_leaves_partial_run(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    _make_tone(root / "one.wav")
+    _make_tone(root / "two.wav")
+    _make_tone(root / "three.wav")
+    scan_library(root, tmp_db, skip_hash=False, quiet=True)
+
+    first = crawl_similarity_descriptors(
+        root,
+        db_path=tmp_db,
+        cache_path=tmp_path / "cache",
+        max_files=1,
+        throttle_ms=1,
+        quiet=True,
+    )
+
+    assert first.status == "partial"
+    assert first.stop_reason == "max_files"
+    assert first.max_files == 1
+    assert first.summary.analyzed == 1
+    assert first.summary.pending == 2
+    assert first.summary.stale == 2
+    assert first.backend_version is not None
+    assert first.parameters_hash is not None
+
+    second = crawl_similarity_descriptors(root, db_path=tmp_db, cache_path=None, throttle_ms=1, quiet=True)
+
+    assert second.status == "completed"
+    assert second.summary.skipped == 1
+    assert second.summary.analyzed == 2
+
+    conn = get_connection(tmp_db)
+    runs = conn.execute(
+        "SELECT status, status_reason, max_files, parameters_json, parameters_hash FROM analysis_runs ORDER BY id"
+    ).fetchall()
+    descriptor = conn.execute("SELECT backend_version, parameters_hash FROM audio_descriptors LIMIT 1").fetchone()
+    embedding_columns = {row["name"] for row in conn.execute("PRAGMA table_info(audio_embeddings)").fetchall()}
+    conn.close()
+
+    assert [row["status"] for row in runs] == ["partial", "completed"]
+    assert runs[0]["status_reason"] == "max_files"
+    assert runs[0]["max_files"] == 1
+    assert json.loads(runs[0]["parameters_json"])["throttle_ms"] == 1
+    assert runs[0]["parameters_hash"]
+    assert descriptor["backend_version"]
+    assert descriptor["parameters_hash"]
+    assert {"backend", "model_version", "parameters_hash", "dimensions"} <= embedding_columns
+
+
+def test_similarity_backends_report_exposes_deferred_backends() -> None:
+    report = similarity_backends_report()
+
+    by_backend = {item.backend: item for item in report.capabilities}
+    assert by_backend["deterministic_v1"].status == "available"
+    assert by_backend["fingerprint_optional"].status == "not_configured"
+    assert by_backend["embedding_optional"].model_version == "unselected"
 
 
 def test_similarity_descriptors_capture_spectral_difference(tmp_path: Path, tmp_db: Path) -> None:
@@ -282,8 +379,13 @@ def test_similarity_feedback_tracks_segment_relationships(tmp_path: Path, tmp_db
     assert result.entry is not None
     assert result.entry.scope == "segment"
     assert result.entry.state == "accepted"
-    assert result.entry.left_segment_index == 0
-    assert result.entry.right_segment_index == 1
+    assert {
+        (result.entry.left_path, result.entry.left_segment_index),
+        (result.entry.right_path, result.entry.right_segment_index),
+    } == {
+        (str(first.resolve()), 0),
+        (str(second.resolve()), 1),
+    }
     report = list_similarity_feedback(db_path=tmp_db, scope="segment", quiet=True)
     assert report.summary.total == 1
     assert report.entries[0].scope == "segment"

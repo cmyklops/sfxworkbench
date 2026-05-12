@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark wavwarden scan behavior on a full or sampled library.
+"""Benchmark sfxworkbench scan behavior on a full or sampled library.
 
 By default this creates a temporary symlink mirror for the first N audio files,
 so large-library timing can be measured without indexing the entire collection.
@@ -13,8 +13,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from wavwarden import junk
-from wavwarden.scan import scan_library
+from sfxworkbench import junk
+from sfxworkbench.scan import scan_library
 
 
 def collect_audio_files(root: Path, limit: int | None) -> list[Path]:
@@ -40,7 +40,7 @@ def make_symlink_sample(root: Path, files: list[Path], sample_root: Path) -> Non
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Benchmark wavwarden scan on a library or sampled subset.")
+    parser = argparse.ArgumentParser(description="Benchmark sfxworkbench scan on a library or sampled subset.")
     parser.add_argument("path", type=Path)
     parser.add_argument("--limit", type=int, default=None, help="Sample the first N audio files via symlink mirror.")
     parser.add_argument("--db", type=Path, default=None, help="Optional DB path. Defaults to a temp DB.")
@@ -53,7 +53,7 @@ def main() -> int:
         parser.error(f"path not found: {root}")
 
     files = collect_audio_files(root, args.limit)
-    with tempfile.TemporaryDirectory(prefix="wavwarden-bench-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="sfxworkbench-bench-") as tmp:
         tmp_path = Path(tmp)
         scan_root = root
         if args.limit is not None:

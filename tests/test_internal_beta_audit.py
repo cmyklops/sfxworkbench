@@ -35,6 +35,9 @@ def test_internal_beta_audit_writes_report_bundle(tmp_path: Path, tmp_library: P
     assert payload["include_format"] is False
     assert "format" not in payload["summary"]
     assert "format_report" not in payload["artifacts"]
+    assert payload["include_similarity"] is False
+    assert payload["similarity_validation"] is False
+    assert payload["similarity_validation_mode"] == "disabled"
     for artifact in [
         "scan_result",
         "audit_result",
@@ -98,6 +101,11 @@ def test_internal_beta_audit_can_include_similarity_reports(tmp_path: Path, tmp_
     payload = json.loads(result.stdout)
 
     assert payload["include_similarity"] is True
+    assert payload["similarity_validation"] is True
+    assert payload["similarity_validation_mode"] == "manual_beta_audit"
+    assert (
+        payload["similarity_automation_recommendation"] == "defer_overnight_automation_until_manual_validation_passes"
+    )
     assert payload["similarity_threshold"] == 0.9
     assert "similarity" in payload["summary"]
     assert payload["summary"]["similarity"]["crawl"]["total_files"] == 4
@@ -109,3 +117,31 @@ def test_internal_beta_audit_can_include_similarity_reports(tmp_path: Path, tmp_
         "similarity_audit_segment_report",
     ]:
         assert Path(payload["artifacts"][artifact]).exists()
+
+
+def test_internal_beta_audit_similarity_validation_alias(tmp_path: Path, tmp_library: Path) -> None:
+    script = Path(__file__).resolve().parents[1] / "scripts" / "internal_beta_audit.py"
+    output_dir = tmp_path / "beta_reports"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            str(tmp_library),
+            "--output-dir",
+            str(output_dir),
+            "--similarity-validation",
+            "--limit",
+            "10",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(result.stdout)
+
+    assert payload["include_similarity"] is True
+    assert payload["similarity_validation"] is True
+    assert payload["similarity_validation_mode"] == "manual_beta_audit"
+    assert "similarity" in payload["summary"]
+    assert Path(payload["artifacts"]["similarity_audit_file_report"]).exists()

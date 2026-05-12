@@ -1,8 +1,8 @@
-"""Tests for wavwarden.clean."""
+"""Tests for sfxworkbench.clean."""
 
 from pathlib import Path
 
-from wavwarden.clean import clean_library, find_junk
+from sfxworkbench.clean import clean_library, find_junk
 
 
 def test_find_junk_detects_appledouble(tmp_library: Path) -> None:

@@ -1,11 +1,11 @@
-"""Tests for wavwarden.health — one test per issue type."""
+"""Tests for sfxworkbench.health — one test per issue type."""
 
 import unicodedata
 from pathlib import Path
 
 import pytest
-from wavwarden.health import _MAX_NAME_BYTES, _MAX_PATH_BYTES, check_path
-from wavwarden.models import FilenameIssue
+from sfxworkbench.health import _MAX_NAME_BYTES, _MAX_PATH_BYTES, check_path
+from sfxworkbench.models import FilenameIssue
 
 
 def _issues_of_type(issues: list[FilenameIssue], issue_type: str) -> list[FilenameIssue]:

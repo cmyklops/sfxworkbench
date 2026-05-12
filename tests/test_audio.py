@@ -1,4 +1,4 @@
-"""Tests for wavwarden.audio — AudioInfo from real WAV files."""
+"""Tests for sfxworkbench.audio — AudioInfo from real WAV files."""
 
 import struct
 import sys
@@ -7,7 +7,7 @@ import wave
 from pathlib import Path
 
 import pytest
-from wavwarden.models import AudioInfo
+from sfxworkbench.models import AudioInfo
 
 
 def _make_wav(
@@ -60,7 +60,7 @@ def test_read_audio_info_basic(tmp_path: Path) -> None:
     """AudioInfo should return correct metadata for a simple 44100 Hz mono 16-bit WAV."""
     wav = _make_wav(tmp_path / "test.wav", sample_rate=44100, channels=1, sampwidth=2, nframes=44100)
 
-    from wavwarden.audio import read_audio_info
+    from sfxworkbench.audio import read_audio_info
 
     info = read_audio_info(wav)
 
@@ -85,7 +85,7 @@ def test_read_audio_info_falls_back_for_malformed_side_chunk(monkeypatch: pytest
 
     monkeypatch.setitem(sys.modules, "soundfile", FakeSoundFile)
 
-    from wavwarden.audio import read_audio_info
+    from sfxworkbench.audio import read_audio_info
 
     info = read_audio_info(wav)
 
@@ -101,7 +101,7 @@ def test_read_audio_info_falls_back_for_malformed_side_chunk(monkeypatch: pytest
 def test_read_audio_info_stereo(tmp_path: Path) -> None:
     wav = _make_wav(tmp_path / "stereo.wav", sample_rate=48000, channels=2, sampwidth=2, nframes=100)
 
-    from wavwarden.audio import read_audio_info
+    from sfxworkbench.audio import read_audio_info
 
     info = read_audio_info(wav)
 
@@ -116,7 +116,7 @@ def test_read_audio_info_stereo(tmp_path: Path) -> None:
 def test_read_audio_info_24bit(tmp_path: Path) -> None:
     wav = _make_wav(tmp_path / "24bit.wav", sample_rate=96000, channels=1, sampwidth=3, nframes=100)
 
-    from wavwarden.audio import read_audio_info
+    from sfxworkbench.audio import read_audio_info
 
     info = read_audio_info(wav)
 
@@ -132,7 +132,7 @@ def test_read_audio_info_bext_detected(tmp_path: Path) -> None:
     """WAV with bext chunk should have has_bext=True."""
     wav = _make_wav_with_bext(tmp_path / "bext.wav")
 
-    from wavwarden.audio import read_audio_info
+    from sfxworkbench.audio import read_audio_info
 
     info = read_audio_info(wav)
 
@@ -148,7 +148,7 @@ def test_read_audio_info_bext_detected(tmp_path: Path) -> None:
 def test_read_audio_info_no_bext(tmp_path: Path) -> None:
     wav = _make_wav(tmp_path / "no_bext.wav")
 
-    from wavwarden.audio import read_audio_info
+    from sfxworkbench.audio import read_audio_info
 
     info = read_audio_info(wav)
 
@@ -162,7 +162,7 @@ def test_read_audio_info_no_bext(tmp_path: Path) -> None:
 
 def test_read_audio_info_nonexistent_file(tmp_path: Path) -> None:
     """Non-existent file should return an AudioInfo with an error field."""
-    from wavwarden.audio import read_audio_info
+    from sfxworkbench.audio import read_audio_info
 
     info = read_audio_info(tmp_path / "nonexistent.wav")
 
@@ -206,7 +206,7 @@ def test_read_audio_info_uses_optional_wavinfo(monkeypatch: pytest.MonkeyPatch, 
 
     monkeypatch.setitem(sys.modules, "wavinfo", types.SimpleNamespace(WavInfoReader=FakeWavInfoReader))
 
-    from wavwarden.audio import read_audio_info
+    from sfxworkbench.audio import read_audio_info
 
     info = read_audio_info(wav)
 

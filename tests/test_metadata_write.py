@@ -6,12 +6,13 @@ import hashlib
 import json
 import shutil
 import struct
+import subprocess
 from pathlib import Path
 
 import pytest
-from wavwarden import metadata_backends, metadata_write
-from wavwarden.db import get_connection
-from wavwarden.metadata_write import (
+from sfxworkbench import metadata_backends, metadata_write
+from sfxworkbench.db import get_connection
+from sfxworkbench.metadata_write import (
     FIXTURE_MANIFEST_NAME,
     apply_metadata_write_plan,
     build_metadata_write_fixture_bundle,
@@ -86,8 +87,55 @@ def _write_wav_with_info(path: Path, *, info: dict[str, str], description: str =
 
 
 def _seed_file(tmp_db: Path, path: Path) -> None:
+    file_id = _seed_indexed_file(tmp_db, path)
     conn = get_connection(tmp_db)
     conn.execute(
+        """
+        INSERT INTO accepted_tags (
+            file_id, field, value, source, method, confidence, evidence,
+            created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            file_id,
+            "description",
+            "Metal Hit",
+            "test",
+            "manual",
+            0.95,
+            json.dumps(["fixture"]),
+            "2026",
+            "2026",
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO accepted_tags (
+            file_id, field, value, source, method, confidence, evidence,
+            created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            file_id,
+            "category",
+            "SFX",
+            "test",
+            "manual",
+            0.95,
+            json.dumps(["fixture"]),
+            "2026",
+            "2026",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _seed_indexed_file(tmp_db: Path, path: Path) -> int:
+    conn = get_connection(tmp_db)
+    cursor = conn.execute(
         """
         INSERT INTO files (
             path, filename, stem, extension, size_bytes, mtime, md5,
@@ -110,46 +158,57 @@ def _seed_file(tmp_db: Path, path: Path) -> None:
             "2026",
         ),
     )
-    conn.execute(
-        """
-        INSERT INTO accepted_tags (
-            file_id, field, value, source, method, confidence, evidence,
-            created_at, updated_at
-        )
-        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            "description",
-            "Metal Hit",
-            "test",
-            "manual",
-            0.95,
-            json.dumps(["fixture"]),
-            "2026",
-            "2026",
-        ),
-    )
-    conn.execute(
-        """
-        INSERT INTO accepted_tags (
-            file_id, field, value, source, method, confidence, evidence,
-            created_at, updated_at
-        )
-        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            "category",
-            "SFX",
-            "test",
-            "manual",
-            0.95,
-            json.dumps(["fixture"]),
-            "2026",
-            "2026",
-        ),
-    )
+    file_id = int(cursor.lastrowid)
     conn.commit()
     conn.close()
+    return file_id
+
+
+def _write_real_tagged_audio_fixture(path: Path) -> None:
+    sf = pytest.importorskip("soundfile")
+    import numpy as np
+
+    samples = np.zeros(2400, dtype="float32")
+    extension = path.suffix.lower()
+    if extension == ".flac":
+        sf.write(path, samples, 24000, format="FLAC")
+    elif extension == ".ogg":
+        sf.write(path, samples, 24000, format="OGG", subtype="VORBIS")
+    elif extension == ".opus":
+        sf.write(path, samples, 24000, format="OGG", subtype="OPUS")
+    elif extension in {".aif", ".aiff"}:
+        sf.write(path, samples, 24000, format="AIFF", subtype="PCM_16")
+    elif extension == ".mp3":
+        sf.write(path, samples, 24000, format="MP3")
+    elif extension == ".m4a":
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg is None:
+            raise RuntimeError("ffmpeg is required to create a tiny M4A fixture")
+        wav_path = path.with_suffix(".wav")
+        sf.write(wav_path, samples, 24000, format="WAV")
+        result = subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(wav_path),
+                "-c:a",
+                "aac",
+                "-b:a",
+                "64k",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"ffmpeg could not create M4A fixture: {result.stderr.strip()}")
+    else:
+        raise ValueError(f"unsupported fixture extension: {extension}")
 
 
 def _seed_keyword_tags(tmp_db: Path, values: list[str], *, file_id: int = 1) -> None:
@@ -426,7 +485,7 @@ def test_metadata_write_auto_routes_standard_tagged_formats_to_mutagen(
     monkeypatch.setattr(metadata_backends.importlib_metadata, "version", lambda _name: "1.47.0")
     root = tmp_path / "library"
     root.mkdir()
-    audio = root / "SFX_HIT_01.mp3"
+    audio = root / "SFX_HIT_01.flac"
     audio.write_bytes(b"not really audio")
     _seed_file(tmp_db, audio)
 
@@ -460,6 +519,98 @@ def test_metadata_write_auto_routes_standard_tagged_formats_to_mutagen(
         "--set=genre=SFX",
         str(audio),
     ]
+
+
+def test_metadata_write_mutagen_support_is_container_specific(tmp_path: Path, tmp_db: Path, monkeypatch) -> None:
+    monkeypatch.setattr(metadata_backends.importlib_util, "find_spec", lambda _name: object())
+    monkeypatch.setattr(metadata_backends.importlib_metadata, "version", lambda _name: "1.47.0")
+    root = tmp_path / "library"
+    root.mkdir()
+    fields = [
+        "description",
+        "originator",
+        "originator_reference",
+        "category",
+        "subcategory",
+        "ucs_category",
+        "ucs_subcategory",
+        "take_number",
+        "channel_position",
+        "keyword",
+    ]
+    expected_supported = {
+        ".flac": set(fields),
+        ".ogg": set(fields),
+        ".opus": set(fields),
+        ".mp3": {"originator", "originator_reference", "category"},
+        ".m4a": {"description", "category"},
+        ".aif": set(),
+        ".aiff": set(),
+    }
+
+    for extension in expected_supported:
+        audio = root / f"fixture{extension}"
+        audio.write_bytes(b"not really audio")
+        file_id = _seed_indexed_file(tmp_db, audio)
+        for field in fields:
+            _seed_tag(tmp_db, field, f"{field} value", file_id=file_id)
+
+    plan = build_metadata_write_plan(tmp_db, root=root, backend="mutagen", bwfmetaedit=_fake_bwfmetaedit(tmp_path))
+
+    by_extension: dict[str, dict[str, str]] = {}
+    for entry in plan.entries:
+        by_extension.setdefault(Path(entry.path).suffix.lower(), {})[entry.field] = entry.action
+
+    for extension, supported_fields in expected_supported.items():
+        actions = by_extension[extension]
+        assert {field for field, action in actions.items() if action == "write_tag"} == supported_fields
+        assert {field for field, action in actions.items() if action == "unsupported_field"} == set(
+            fields
+        ) - supported_fields
+
+
+def test_metadata_write_plan_skips_and_replaces_existing_mutagen_values(tmp_path: Path, tmp_db: Path) -> None:
+    pytest.importorskip("mutagen")
+    root = tmp_path / "library"
+    root.mkdir()
+    audio = root / "SFX_HIT_01.flac"
+    _write_real_tagged_audio_fixture(audio)
+    metadata_write.write_mutagen_fields(audio, {"description": "Existing Vendor Description"})
+    _seed_file(tmp_db, audio)
+
+    plan = build_metadata_write_plan(tmp_db, root=root, backend="mutagen", bwfmetaedit=_fake_bwfmetaedit(tmp_path))
+
+    by_field = {entry.field: entry for entry in plan.entries}
+    assert plan.summary.supported_entries == 1
+    assert plan.summary.skip_existing_entries == 1
+    assert by_field["description"].action == "skip_existing"
+    assert by_field["description"].supported is False
+    assert by_field["description"].existing_value == "Existing Vendor Description"
+    assert by_field["category"].action == "write_tag"
+
+    replace_plan = build_metadata_write_plan(
+        tmp_db,
+        root=root,
+        backend="mutagen",
+        bwfmetaedit=_fake_bwfmetaedit(tmp_path),
+        replace_existing=True,
+    )
+
+    by_field = {entry.field: entry for entry in replace_plan.entries}
+    assert replace_plan.summary.supported_entries == 2
+    assert replace_plan.summary.replace_entries == 1
+    assert by_field["description"].action == "replace_tag"
+    assert by_field["description"].supported is True
+
+    plan_path = tmp_path / "metadata_write_plan.json"
+    write_metadata_write_plan(replace_plan, plan_path, quiet=True)
+    review_metadata_write_plan(plan_path, approve_all=True, quiet=True)
+    preview = preview_metadata_write_plan(plan_path, db_path=tmp_db, require_reviewed=True, quiet=True)
+
+    assert preview.errors == []
+    assert preview.would_write == 2
+    assert preview.commands[0].allow_overwrite is True
+    assert preview.commands[0].fields == {"description": "Metal Hit", "genre": "SFX"}
 
 
 def test_metadata_write_fixture_bundle_can_write_and_readback_mutagen_tags(
@@ -563,6 +714,157 @@ def test_metadata_write_fixture_bundle_preserves_multiple_mutagen_keywords(
     assert report.summary.mismatched_files == 0
     assert report.files[0].actual_fields["keywords"] == expected_keywords
     assert "keywords" in report.files[0].matched_fields
+
+
+def test_metadata_write_fixture_bundle_writes_real_mutagen_format_matrix(tmp_path: Path, tmp_db: Path) -> None:
+    pytest.importorskip("mutagen")
+    root = tmp_path / "library"
+    root.mkdir()
+    cases = {
+        ".flac": [("description", "Flac Description"), ("category", "SFX"), ("keyword", "impact")],
+        ".ogg": [("description", "Ogg Description"), ("category", "SFX"), ("keyword", "texture")],
+        ".opus": [("description", "Opus Description"), ("category", "SFX"), ("keyword", "whoosh")],
+        ".mp3": [("category", "SFX"), ("originator", "Wavwarden QA"), ("originator_reference", "WW-MP3")],
+        ".m4a": [("description", "M4A Description"), ("category", "SFX")],
+        ".aif": [("description", "AIFF Description"), ("category", "SFX")],
+        ".aiff": [("description", "AIFF Description"), ("category", "SFX")],
+    }
+
+    generated_extensions: set[str] = set()
+    for extension, tags in cases.items():
+        audio = root / f"fixture{extension}"
+        try:
+            _write_real_tagged_audio_fixture(audio)
+        except Exception:
+            continue
+        generated_extensions.add(extension)
+        file_id = _seed_indexed_file(tmp_db, audio)
+        for field, value in tags:
+            _seed_tag(tmp_db, field, value, file_id=file_id)
+
+    if not generated_extensions:
+        pytest.skip("no real Mutagen fixture formats could be generated")
+    assert ".flac" in generated_extensions
+
+    plan = build_metadata_write_plan(tmp_db, root=root, backend="mutagen", bwfmetaedit=_fake_bwfmetaedit(tmp_path))
+    plan_path = tmp_path / "metadata_write_plan.json"
+    write_metadata_write_plan(plan, plan_path, quiet=True)
+    review_metadata_write_plan(plan_path, approve_all=True, quiet=True)
+
+    preview = preview_metadata_write_plan(plan_path, db_path=tmp_db, require_reviewed=True, quiet=True)
+
+    assert preview.errors == []
+    assert {Path(command.path).suffix.lower() for command in preview.commands} == generated_extensions - {
+        ".aif",
+        ".aiff",
+    }
+    assert not any(entry.supported for entry in plan.entries if Path(entry.path).suffix.lower() in {".aif", ".aiff"})
+
+    bundle_dir = tmp_path / "metadata_fixtures"
+    bundle = build_metadata_write_fixture_bundle(
+        plan_path,
+        bundle_dir,
+        db_path=tmp_db,
+        write_fixture_metadata=True,
+        quiet=True,
+    )
+
+    assert bundle.errors == []
+    assert all(fixture.metadata_written for fixture in bundle.files)
+
+    report = compare_metadata_write_fixture_readback(bundle_dir, quiet=True)
+
+    assert report.summary.files_checked == len(preview.commands)
+    assert report.summary.matched_files == len(preview.commands)
+    assert report.summary.mismatched_files == 0
+    assert report.summary.error_files == 0
+
+
+def test_metadata_write_apply_writes_and_undoes_real_flac(tmp_path: Path, tmp_db: Path) -> None:
+    pytest.importorskip("mutagen")
+    root = tmp_path / "library"
+    root.mkdir()
+    audio = root / "SFX_HIT_01.flac"
+    _write_real_tagged_audio_fixture(audio)
+    original = audio.read_bytes()
+    _seed_file(tmp_db, audio)
+    _seed_keyword_tags(tmp_db, ["impact", "metal"])
+
+    plan = build_metadata_write_plan(tmp_db, root=root, backend="mutagen", bwfmetaedit=_fake_bwfmetaedit(tmp_path))
+    plan_path = tmp_path / "metadata_write_plan.json"
+    write_metadata_write_plan(plan, plan_path, quiet=True)
+    review_metadata_write_plan(plan_path, approve_all=True, quiet=True)
+    log_path = tmp_path / "metadata_apply_log.json"
+
+    applied = apply_metadata_write_plan(
+        plan_path,
+        db_path=tmp_db,
+        dry_run=False,
+        backup_dir=tmp_path / "backups",
+        log_path=log_path,
+        quiet=True,
+    )
+
+    assert applied.errors == []
+    assert applied.files_backed_up == 1
+    assert applied.files_written == 1
+    assert applied.files_verified == 1
+    assert applied.backups[0]["pre_apply_md5"] == _md5(Path(applied.backups[0]["backup_path"]))
+    assert applied.backups[0]["post_apply_md5"] == _md5(audio)
+    assert metadata_write.read_mutagen_fields(audio, ["description", "genre", "keywords"]) == {
+        "description": "Metal Hit",
+        "genre": "SFX",
+        "keywords": ["impact", "metal"],
+    }
+
+    undone = undo_metadata_write_apply_log(log_path, db_path=tmp_db, dry_run=False, quiet=True)
+
+    assert undone.errors == []
+    assert undone.restored == 1
+    assert audio.read_bytes() == original
+
+
+def test_metadata_write_apply_refuses_config_safe_folder(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    safe = root / "Master"
+    safe.mkdir(parents=True)
+    audio = safe / "SFX_HIT_01.wav"
+    _write_wav_without_bext(audio)
+    original = audio.read_bytes()
+    _seed_file(tmp_db, audio)
+    config_path = tmp_path / "sfxworkbench.json"
+    config_path.write_text(json.dumps({"safe_folders": [str(safe)]}))
+
+    plan = build_metadata_write_plan(
+        tmp_db,
+        root=root,
+        backend="bwfmetaedit",
+        bwfmetaedit=_fake_bwfmetaedit(tmp_path),
+    )
+    plan_path = tmp_path / "metadata_write_plan.json"
+    write_metadata_write_plan(plan, plan_path, quiet=True)
+    review_metadata_write_plan(plan_path, approve_all=True, quiet=True)
+
+    applied = apply_metadata_write_plan(
+        plan_path,
+        db_path=tmp_db,
+        dry_run=False,
+        backup_dir=tmp_path / "backups",
+        log_path=tmp_path / "metadata_apply_log.json",
+        config_path=config_path,
+        quiet=True,
+    )
+
+    assert applied.files_written == 0
+    assert applied.files_backed_up == 0
+    assert applied.errors == [
+        {
+            "path": str(audio),
+            "error": "protected by safe folder",
+            "safe_folder": str(safe.resolve()),
+        }
+    ]
+    assert audio.read_bytes() == original
 
 
 def test_metadata_write_fixture_bundle_can_execute_bwfmetaedit_on_copied_fixture(
@@ -906,8 +1208,17 @@ def test_metadata_write_apply_writes_mutagen_original_with_backup_and_db_refresh
 def test_metadata_write_apply_reports_mutagen_readback_mismatch(tmp_path: Path, tmp_db: Path, monkeypatch) -> None:
     monkeypatch.setattr(metadata_backends.importlib_util, "find_spec", lambda _name: object())
     monkeypatch.setattr(metadata_backends.importlib_metadata, "version", lambda _name: "1.47.0")
-    monkeypatch.setattr(metadata_write, "write_mutagen_fields", lambda _path, _fields: None)
-    monkeypatch.setattr(metadata_write, "read_mutagen_fields", lambda _path, _fields: {"description": "Wrong"})
+    wrote = False
+
+    def fake_write_mutagen_fields(_path: Path, _fields: dict[str, str]) -> None:
+        nonlocal wrote
+        wrote = True
+
+    def fake_read_mutagen_fields(_path: Path, _fields: list[str]) -> dict[str, str]:
+        return {"description": "Wrong"} if wrote else {}
+
+    monkeypatch.setattr(metadata_write, "write_mutagen_fields", fake_write_mutagen_fields)
+    monkeypatch.setattr(metadata_write, "read_mutagen_fields", fake_read_mutagen_fields)
     root = tmp_path / "library"
     root.mkdir()
     audio = root / "SFX_HIT_01.flac"
@@ -1123,14 +1434,14 @@ def test_read_bext_core_fields_reads_supported_fields(tmp_path: Path) -> None:
     _write_wav_with_bext(
         wav,
         description="Metal Hit",
-        originator="wavwarden",
+        originator="sfxworkbench",
         originator_reference="WW-001",
     )
 
     fields = read_bext_core_fields(wav)
 
     assert fields["Description"] == "Metal Hit"
-    assert fields["Originator"] == "wavwarden"
+    assert fields["Originator"] == "sfxworkbench"
     assert fields["OriginatorReference"] == "WW-001"
 
 

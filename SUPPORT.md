@@ -1,19 +1,20 @@
 # Support
 
-wavwarden is currently an internal studio beta.
+sfxworkbench is currently a public-readiness beta.
 
 Supported use:
 
 - local CLI workflows
 - test fixtures and synthetic libraries
 - reviewed dry-run, quarantine, and undo workflows
+- copied commercial libraries where the original source remains untouched
 
 Not supported yet:
 
 - unattended destructive cleanup on production libraries
 - audio-content mutation workflows
 - guaranteed compatibility with every DAW or vendor metadata convention
-- public production support for outside studios
+- guaranteed production support response times
 
 For internal support, file a report with:
 

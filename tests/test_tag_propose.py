@@ -6,9 +6,9 @@ import json
 import struct
 from pathlib import Path
 
-from wavwarden.db import get_connection
-from wavwarden.models import UcsCatalog, UcsCatalogProvenance, UcsEntry
-from wavwarden.tag_propose import build_tag_proposal_report
+from sfxworkbench.db import get_connection
+from sfxworkbench.models import UcsCatalog, UcsCatalogProvenance, UcsEntry
+from sfxworkbench.tag_propose import build_tag_proposal_report
 
 
 def _catalog(path: Path, entries: list[UcsEntry] | None = None) -> None:
@@ -126,6 +126,86 @@ def test_tag_propose_embedded_metadata_opens_when_category_and_subcategory_agree
     assert evidence["embedded_metadata"] == "ambience, rain"
 
 
+def test_tag_propose_uses_indexed_metadata_fields_as_evidence(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    audio = root / "Take 01.wav"
+    audio.write_bytes(b"placeholder")
+    _seed_file(tmp_db, audio)
+    conn = get_connection(tmp_db)
+    conn.execute(
+        """
+        INSERT INTO metadata_fields (
+            file_id, namespace, key, value, source, updated_at
+        )
+        VALUES (1, ?, ?, ?, ?, ?)
+        """,
+        ("bext", "Description", "Ambience rain steady shower", "riff", "2026"),
+    )
+    conn.commit()
+    conn.close()
+    catalog = tmp_path / "ucs_catalog.json"
+    _catalog(catalog)
+
+    report = build_tag_proposal_report(root, db_path=tmp_db, catalog_path=catalog, min_confidence=0.6)
+
+    assert report.summary.files_with_proposals == 1
+    proposal = report.entries[0].proposals[0]
+    evidence = {item.source: item.value for item in proposal.evidence}
+    assert evidence["embedded_metadata"] == "ambience, rain"
+
+
+def test_tag_propose_includes_similarity_descriptor_as_review_support(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    audio = root / "Rain 01.wav"
+    _write_wav_with_bext_description(audio, "Ambience rain steady shower")
+    _seed_file(tmp_db, audio)
+    conn = get_connection(tmp_db)
+    conn.execute(
+        """
+        INSERT INTO audio_descriptors (
+            file_id, backend, backend_version, parameters_hash, path, size_bytes,
+            mtime, md5, max_duration_s, analyzed_duration_s, peak, rms,
+            spectral_centroid, spectral_rolloff, transient_density,
+            segment_count, segment_method, duration_bucket, generated_at
+        )
+        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "deterministic_v1",
+            "1.1",
+            "abc123",
+            str(audio),
+            audio.stat().st_size,
+            audio.stat().st_mtime,
+            "abc123",
+            30.0,
+            1.0,
+            0.8,
+            0.2,
+            440.0,
+            1200.0,
+            0.5,
+            2,
+            "rms_event_v2",
+            "short",
+            "2026",
+        ),
+    )
+    conn.commit()
+    conn.close()
+    catalog = tmp_path / "ucs_catalog.json"
+    _catalog(catalog)
+
+    report = build_tag_proposal_report(root, db_path=tmp_db, catalog_path=catalog, min_confidence=0.6)
+
+    evidence = {item.source: item for item in report.entries[0].proposals[0].evidence}
+    assert "similarity_descriptor" in evidence
+    assert "duration_bucket=short" in evidence["similarity_descriptor"].value
+    assert evidence["similarity_descriptor"].detail.endswith("not semantic proof")
+
+
 def test_tag_propose_embedded_metadata_does_not_open_noisy_subcategory_terms(tmp_path: Path, tmp_db: Path) -> None:
     root = tmp_path / "library"
     root.mkdir()
@@ -171,3 +251,58 @@ def test_tag_propose_ambiguous_path_terms_need_category_context(tmp_path: Path, 
     assert report.summary.files_considered == 1
     assert report.summary.files_with_proposals == 0
     assert report.summary.total_proposals == 0
+
+
+def test_tag_propose_broad_path_tokens_do_not_open_without_category_context(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "Room Walla Sea Loop"
+    folder.mkdir(parents=True)
+    audio = folder / "Take 01.wav"
+    _write_wav_with_bext_description(audio, "neutral ambience")
+    _seed_file(tmp_db, audio)
+    catalog = tmp_path / "ucs_catalog.json"
+    _catalog(
+        catalog,
+        entries=[
+            UcsEntry(cat_short="AMB", category="AMBIENCE", subcategory="ROOM TONE", cat_id="AMBRoom"),
+            UcsEntry(cat_short="HUMN", category="HUMAN", subcategory="WALLA", cat_id="HUMNWalla"),
+            UcsEntry(cat_short="WATR", category="WATER", subcategory="SEA", cat_id="WATRSea"),
+            UcsEntry(cat_short="MUSC", category="MUSICAL", subcategory="LOOP", cat_id="MUSCLoop"),
+        ],
+    )
+
+    report = build_tag_proposal_report(root, db_path=tmp_db, catalog_path=catalog)
+
+    assert report.summary.files_considered == 1
+    assert report.summary.files_with_proposals == 0
+    assert report.summary.total_proposals == 0
+    blocked = {(item["source"], item["token"]): item for item in report.summary.top_blocked_tokens}
+    assert blocked[("path", "room")]["blocked_candidates"] == 1
+    assert blocked[("path", "walla")]["blocked_candidates"] == 1
+    assert blocked[("path", "sea")]["blocked_candidates"] == 1
+    assert blocked[("path", "loop")]["blocked_candidates"] == 1
+
+
+def test_tag_propose_broad_path_tokens_can_open_with_category_context(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "Ambience Room Tone"
+    folder.mkdir(parents=True)
+    audio = folder / "Take 01.wav"
+    _write_wav_with_bext_description(audio, "neutral ambience")
+    _seed_file(tmp_db, audio)
+    catalog = tmp_path / "ucs_catalog.json"
+    _catalog(
+        catalog,
+        entries=[UcsEntry(cat_short="AMB", category="AMBIENCE", subcategory="ROOM TONE", cat_id="AMBRoom")],
+    )
+
+    report = build_tag_proposal_report(root, db_path=tmp_db, catalog_path=catalog, min_confidence=0.6)
+
+    assert report.summary.files_with_proposals == 1
+    proposal = report.entries[0].proposals[0]
+    assert proposal.category == "AMBIENCE"
+    assert proposal.subcategory == "ROOM TONE"
+    assert proposal.strength == "strong"
+    opened = {(item["source"], item["token"]): item for item in report.summary.top_opening_tokens}
+    assert opened[("path", "room")]["catalog_matches"] == 1
+    assert opened[("path", "room")]["opened_candidates"] == 1

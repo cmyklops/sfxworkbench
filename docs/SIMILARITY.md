@@ -1,6 +1,6 @@
 # Audio Similarity Crawler Roadmap
 
-wavwarden should treat audio similarity as an optional analysis layer, not as
+sfxworkbench should treat audio similarity as an optional analysis layer, not as
 part of the baseline cleanup scan. The goal is to borrow the strongest product
 lesson from Sononym and the strongest implementation lesson from Soundminer:
 descriptor and similarity browsing are useful, but large libraries need an
@@ -27,15 +27,38 @@ explicitly:
 
 ```bash
 uv run sfx similarity crawl ~/CommercialLibraries \
-  --db ~/.wavwarden/index.db \
-  --cache ~/.wavwarden/similarity \
-  --max-duration 30
+  --db ~/.sfxworkbench/index.db \
+  --cache ~/.sfxworkbench/similarity \
+  --max-duration 30 \
+  --max-files 500 \
+  --throttle-ms 10
+
+uv run sfx similarity backends --json
 
 uv run sfx similarity search --file ~/Desktop/query.wav \
-  --db ~/.wavwarden/index.db \
+  --db ~/.sfxworkbench/index.db \
   --limit 50 \
   --json
 ```
+
+## Validation Decision
+
+Similarity validation should run as a manual beta-audit option for now, not as
+an overnight automation by default. The crawler is deterministic and
+report-only, but real-library runtime, segment fan-out, and false-positive rates
+still need visible review before it becomes a scheduled workflow.
+
+Use the beta-audit harness when validating a copied library:
+
+```bash
+uv run --extra dev poe beta-audit ~/CommercialLibraries \
+  --output-dir ~/reports/sfxworkbench_beta_audit \
+  --similarity-validation
+```
+
+`--include-similarity` remains supported as the older spelling. The manifest
+records `similarity_validation_mode: manual_beta_audit` and defers overnight
+automation until manual validation passes on representative libraries.
 
 Implemented first slice:
 
@@ -46,11 +69,19 @@ Implemented first slice:
 - `sfx similarity audit PATH`
 - `sfx similarity audit PATH --scope segment`
 - `sfx similarity feedback set/list/clear`
+- `sfx similarity backends`
 - deterministic backend name: `deterministic_v1`
+- deterministic backend version and parameter hashes in crawl reports and cache
+  rows
 - SQLite-backed `analysis_runs`, `audio_descriptors`, `audio_segments`, and
   `similarity_feedback` tables
+- reserved `audio_embeddings` schema with backend, model version, parameter
+  hash, dimensions, and vector reference fields for future optional embeddings
 - optional cache directory for run report JSON
 - incremental skips when path anchors still match size, mtime, and MD5
+- bounded stale-file crawl runs with `--max-files`, optional `--throttle-ms`
+  CPU yielding, partial-run status, stop reasons, and pending/stale counts for
+  clear resume behavior
 - descriptor fields for peak, RMS, crest factor, silence ratio, clipping count,
   zero-crossing rate, transient density, spectral centroid/bandwidth/rolloff/
   flatness, and duration bucket
@@ -64,6 +95,8 @@ Implemented first slice:
   `candidate_comparisons` in the report summary
 - DB-only feedback states for favorite, hidden, ignored, accepted, and rejected
   similarity relationships
+- cached descriptor evidence can appear in `sfx tag propose` output as
+  review-only support; it is not treated as semantic proof
 
 ## Product Lessons
 

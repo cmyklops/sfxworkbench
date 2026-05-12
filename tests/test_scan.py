@@ -1,12 +1,33 @@
-"""Tests for wavwarden.scan."""
+"""Tests for sfxworkbench.scan."""
 
 import json
+import struct
 import time
 from pathlib import Path
 
-from wavwarden.db import get_connection
-from wavwarden.models import AudioInfo
-from wavwarden.scan import scan_library
+from sfxworkbench.db import get_connection
+from sfxworkbench.models import AudioInfo
+from sfxworkbench.scan import scan_library
+
+
+def _chunk(chunk_id: bytes, payload: bytes) -> bytes:
+    return chunk_id + struct.pack("<I", len(payload)) + payload + (b"\x00" if len(payload) % 2 else b"")
+
+
+def _padded_ascii(value: str, size: int) -> bytes:
+    encoded = value.encode("ascii")
+    return encoded + b"\x00" * (size - len(encoded))
+
+
+def _write_wav_with_metadata(path: Path) -> None:
+    fmt_chunk = _chunk(b"fmt ", struct.pack("<HHIIHH", 1, 1, 48000, 96000, 2, 16))
+    bext_payload = _padded_ascii("Ambience rain steady", 256) + b"\x00" * (602 - 256)
+    bext_chunk = _chunk(b"bext", bext_payload)
+    info_payload = b"INFO" + _chunk(b"IKEY", b"rain; ambience\x00")
+    info_chunk = _chunk(b"LIST", info_payload)
+    data_chunk = _chunk(b"data", b"\x00\x00")
+    body = fmt_chunk + bext_chunk + info_chunk + data_chunk
+    path.write_bytes(b"RIFF" + struct.pack("<I", len(body) + 4) + b"WAVE" + body)
 
 
 def test_scan_indexes_audio_files(tmp_library: Path, tmp_db: Path) -> None:
@@ -38,6 +59,30 @@ def test_scan_is_incremental(tmp_library: Path, tmp_db: Path) -> None:
     assert first.scanned > 0
     assert second.scanned == 0, "Nothing changed; nothing should be re-scanned"
     assert second.skipped == first.scanned
+
+
+def test_scan_can_cancel_between_files(tmp_library: Path, tmp_db: Path) -> None:
+    cancel = False
+    events: list[tuple[str, int, int | None, str]] = []
+
+    def progress(phase: str, completed: int, total: int | None, message: str) -> None:
+        nonlocal cancel
+        events.append((phase, completed, total, message))
+        if phase == "scanning" and completed >= 1:
+            cancel = True
+
+    result = scan_library(
+        tmp_library,
+        tmp_db,
+        skip_hash=True,
+        quiet=True,
+        progress_callback=progress,
+        cancel_requested=lambda: cancel,
+    )
+
+    assert result.scanned == 1
+    assert result.total > result.scanned
+    assert events[-1][0] == "cancelled"
 
 
 def test_scan_force_rescan(tmp_library: Path, tmp_db: Path) -> None:
@@ -98,7 +143,7 @@ def test_scan_stores_extended_metadata_flags(monkeypatch, tmp_library: Path, tmp
             metadata_sources=["soundfile", "wavinfo"],
         )
 
-    monkeypatch.setattr("wavwarden.scan.audio_mod.read_audio_info", fake_read_audio_info)
+    monkeypatch.setattr("sfxworkbench.scan.audio_mod.read_audio_info", fake_read_audio_info)
 
     scan_library(tmp_library, tmp_db, skip_hash=True)
     conn = get_connection(tmp_db)
@@ -111,6 +156,37 @@ def test_scan_stores_extended_metadata_flags(monkeypatch, tmp_library: Path, tmp
     assert row["has_riff_info"] == 1
     assert row["has_cue_markers"] == 1
     assert json.loads(row["metadata_sources"]) == ["soundfile", "wavinfo"]
+
+
+def test_scan_populates_normalized_metadata_fields(monkeypatch, tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    audio = root / "Rain 01.wav"
+    _write_wav_with_metadata(audio)
+
+    def fake_read_audio_info(path: Path) -> AudioInfo:
+        return AudioInfo(
+            sample_rate=48000,
+            channels=1,
+            has_bext=path.name == "Rain 01.wav",
+            has_riff_info=path.name == "Rain 01.wav",
+            metadata_sources=["fixture"],
+        )
+
+    monkeypatch.setattr("sfxworkbench.scan.audio_mod.read_audio_info", fake_read_audio_info)
+
+    scan_library(root, tmp_db, skip_hash=True)
+
+    conn = get_connection(tmp_db)
+    rows = conn.execute("SELECT namespace, key, value, source FROM metadata_fields ORDER BY namespace, key").fetchall()
+    conn.close()
+
+    assert ("bext", "Description", "Ambience rain steady", "riff") in [
+        (row["namespace"], row["key"], row["value"], row["source"]) for row in rows
+    ]
+    assert ("riff_info", "IKEY", "rain; ambience", "riff") in [
+        (row["namespace"], row["key"], row["value"], row["source"]) for row in rows
+    ]
 
 
 def test_scan_md5_when_not_skipped(tmp_library: Path, tmp_db: Path) -> None:

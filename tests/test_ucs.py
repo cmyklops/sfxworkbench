@@ -1,8 +1,8 @@
-"""Tests for wavwarden.ucs."""
+"""Tests for sfxworkbench.ucs."""
 
 import unicodedata
 
-from wavwarden.ucs import looks_ucs, looks_ucs_casefold, normalize_stem, parse_ucs_stem
+from sfxworkbench.ucs import looks_ucs, looks_ucs_casefold, normalize_stem, parse_ucs_stem
 
 
 def test_parse_ucs_stem_extracts_parts() -> None:

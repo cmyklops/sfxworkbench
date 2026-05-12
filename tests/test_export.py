@@ -1,11 +1,11 @@
-"""Tests for wavwarden.export."""
+"""Tests for sfxworkbench.export."""
 
 import csv
 from pathlib import Path
 
-from wavwarden.db import get_connection
-from wavwarden.export import export_csv
-from wavwarden.scan import scan_library
+from sfxworkbench.db import get_connection
+from sfxworkbench.export import export_csv
+from sfxworkbench.scan import scan_library
 
 
 def test_export_empty_db_writes_empty_file(tmp_db: Path, tmp_path: Path) -> None:

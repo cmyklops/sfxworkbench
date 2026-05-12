@@ -1,6 +1,6 @@
 # Contributing
 
-wavwarden is currently an internal studio beta. External contributions are not
+sfxworkbench is currently an internal studio beta. External contributions are not
 being actively accepted yet, but the repo is being prepared so that outside
 collaboration can happen cleanly later.
 

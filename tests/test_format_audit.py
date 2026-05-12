@@ -3,8 +3,8 @@
 import json
 from pathlib import Path
 
-from wavwarden.db import get_connection
-from wavwarden.format_audit import build_format_audit_report, write_format_audit_report
+from sfxworkbench.db import get_connection
+from sfxworkbench.format_audit import build_format_audit_report, write_format_audit_report
 
 
 def _seed_files(tmp_db: Path, files: list[dict]) -> None:

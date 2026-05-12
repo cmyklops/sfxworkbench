@@ -5,10 +5,10 @@ import json
 import struct
 from pathlib import Path
 
+from sfxworkbench import metadata_backends, metadata_write
+from sfxworkbench.cli import app
+from sfxworkbench.db import get_connection
 from typer.testing import CliRunner
-from wavwarden import metadata_backends, metadata_write
-from wavwarden.cli import app
-from wavwarden.db import get_connection
 
 runner = CliRunner()
 
@@ -156,6 +156,36 @@ def test_audit_search_export_json_contract(tmp_library: Path, tmp_db: Path, tmp_
     assert audit["result"]["total_files"] == 5
     assert audit["result"]["fn_issues_by_type"]["illegal_chars"] == 1
     assert audit["result"]["fn_issues_by_type"]["unicode_normalization"] == 1
+
+    bundle_dir = tmp_path / "audit_bundle"
+    bundle = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "audit-bundle",
+                    str(tmp_library),
+                    "--db",
+                    str(tmp_db),
+                    "--output-dir",
+                    str(bundle_dir),
+                    "--skip-hash",
+                    "--limit",
+                    "2",
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+    assert bundle["schema_version"] == 1
+    assert bundle["command"] == "audit_bundle"
+    assert bundle["bundle"]["summary"]["total_files"] == 5
+    assert bundle["bundle"]["summary"]["reports_written"] >= 7
+    assert bundle["bundle"]["report_paths"]["audit_bundle"] == "<TMP>/audit_bundle/audit_bundle.json"
+    assert (bundle_dir / "audit_bundle.json").exists()
 
     metadata_out = tmp_path / "metadata_report.json"
     metadata = _normalize(
@@ -534,6 +564,42 @@ def test_rename_json_contract(tmp_library: Path, tmp_db: Path, tmp_path: Path) -
     assert any(entry["new_filename"].startswith("SFX_MISC_") for entry in payload["plan"]["entries"])
 
 
+def test_rename_config_safe_folder_json_contract(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
+    safe = tmp_library / "Master"
+    safe.mkdir()
+    protected = safe / "bad:name.wav"
+    protected.write_bytes(b"audio")
+    config_path = tmp_path / "sfxworkbench.json"
+    config_path.write_text(json.dumps({"safe_folders": [str(safe)]}))
+
+    payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "rename",
+                    str(tmp_library),
+                    "--pattern",
+                    "safe",
+                    "--config",
+                    str(config_path),
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert payload["command"] == "rename"
+    assert {
+        "path": "<ROOT>/Master/bad:name.wav",
+        "error": "protected by safe folder",
+        "safe_folder": "<ROOT>/Master",
+    } in payload["plan"]["errors"]
+
+
 def test_dedupe_summary_and_output_contract(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
     runner.invoke(app, ["scan", str(tmp_library), "--db", str(tmp_db), "--json"])
 
@@ -596,7 +662,7 @@ def test_dedupe_summary_and_output_contract(tmp_library: Path, tmp_db: Path, tmp
 def test_scan_errors_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
     bad = tmp_path / "bad.wav"
     bad.write_bytes(b"\x00" * 128)
-    from wavwarden.db import get_connection
+    from sfxworkbench.db import get_connection
 
     conn = get_connection(tmp_db)
     conn.execute(
@@ -623,7 +689,7 @@ def test_scan_errors_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
 
 
 def test_packs_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
-    from wavwarden.db import get_connection
+    from sfxworkbench.db import get_connection
 
     pack_a = tmp_library / "Pack A"
     pack_b = tmp_library / "Pack B"
@@ -730,7 +796,7 @@ def test_packs_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
 
 
 def test_groups_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
-    from wavwarden.db import get_connection
+    from sfxworkbench.db import get_connection
 
     root = tmp_library
     conn = get_connection(tmp_db)
@@ -772,7 +838,7 @@ def test_groups_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: P
 
 
 def test_format_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
-    from wavwarden.db import get_connection
+    from sfxworkbench.db import get_connection
 
     root = tmp_library
     conn = get_connection(tmp_db)
@@ -914,7 +980,7 @@ def test_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
     assert payload["db_path"] == "<DB>"
     assert payload["report_path"] == "<TMP>/tag_suggestions.json"
     assert payload["report"]["schema_version"] == 1
-    assert payload["report"]["tool"] == "wavwarden"
+    assert payload["report"]["tool"] == "sfxworkbench"
     assert payload["report"]["min_confidence"] == 0.0
     assert payload["report"]["synonym_limit"] == 0
     assert payload["report"]["synonym_depth"] == 0
@@ -1337,6 +1403,73 @@ def test_metadata_write_apply_and_undo_json_contract(
     assert audio.read_bytes() == original
 
 
+def test_metadata_write_apply_config_safe_folder_json_contract(
+    tmp_db: Path, tmp_path: Path, tmp_library: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(metadata_backends.importlib_util, "find_spec", lambda _name: object())
+    monkeypatch.setattr(metadata_backends.importlib_metadata, "version", lambda _name: "1.47.0")
+    monkeypatch.setattr(metadata_write, "read_mutagen_fields", lambda _path, _fields: {})
+
+    safe = tmp_library / "Master"
+    safe.mkdir()
+    audio = safe / "SFX_HIT_01.flac"
+    audio.write_bytes(b"not really audio")
+    _seed_metadata_write_file(tmp_db, audio)
+    config_path = tmp_path / "sfxworkbench.json"
+    config_path.write_text(json.dumps({"safe_folders": [str(safe)]}))
+
+    plan_out = tmp_path / "metadata_write_safe_plan.json"
+    plan_result = runner.invoke(
+        app,
+        [
+            "metadata",
+            "write-plan",
+            str(plan_out),
+            "--db",
+            str(tmp_db),
+            "--path",
+            str(tmp_library),
+            "--json",
+        ],
+    )
+    assert plan_result.exit_code == 0
+    review_result = runner.invoke(app, ["metadata", "write-review", str(plan_out), "--approve-all", "--json"])
+    assert review_result.exit_code == 0
+
+    payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "metadata",
+                    "write-apply",
+                    str(plan_out),
+                    "--db",
+                    str(tmp_db),
+                    "--config",
+                    str(config_path),
+                    "--require-reviewed",
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert payload["command"] == "metadata_write_apply"
+    assert payload["result"]["applied"] == 0
+    assert payload["result"]["files_written"] == 0
+    assert payload["result"]["errors"] == [
+        {
+            "path": "<ROOT>/Master/SFX_HIT_01.flac",
+            "error": "protected by safe folder",
+            "safe_folder": "<ROOT>/Master",
+        }
+    ]
+
+
 def test_metadata_write_apply_bwf_and_riff_info_json_contract(
     tmp_db: Path, tmp_path: Path, tmp_library: Path, monkeypatch
 ) -> None:
@@ -1547,7 +1680,7 @@ def test_organize_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library:
         "report_path": "<TMP>/organize_report.json",
         "report": {
             "schema_version": 1,
-            "tool": "wavwarden",
+            "tool": "sfxworkbench",
             "tool_version": "0.1.0",
             "root": "<ROOT>",
             "pattern": "strip-leading-numbers",
@@ -1573,6 +1706,47 @@ def test_organize_audit_json_contract(tmp_db: Path, tmp_path: Path, tmp_library:
         },
     }
     assert out.exists()
+
+
+def test_organize_audit_config_safe_folder_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:
+    safe = tmp_library / "Master"
+    safe.mkdir()
+    protected = safe / "01 Pack"
+    protected.mkdir()
+    config_path = tmp_path / "sfxworkbench.json"
+    config_path.write_text(json.dumps({"safe_folders": [str(safe)]}))
+
+    payload = _normalize(
+        _load(
+            runner.invoke(
+                app,
+                [
+                    "organize",
+                    "audit",
+                    str(tmp_library),
+                    "--depth",
+                    "2",
+                    "--config",
+                    str(config_path),
+                    "--json",
+                ],
+            ).stdout
+        ),
+        tmp_path,
+        tmp_library,
+        tmp_db,
+    )
+
+    assert payload["command"] == "organize_audit"
+    assert payload["report"]["summary"]["planned"] == 0
+    assert payload["report"]["summary"]["errors"] == 1
+    assert payload["report"]["errors"] == [
+        {
+            "path": "<ROOT>/Master/01 Pack",
+            "error": "protected by safe folder",
+            "safe_folder": "<ROOT>/Master",
+        }
+    ]
 
 
 def test_vendor_product_organize_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Path) -> None:

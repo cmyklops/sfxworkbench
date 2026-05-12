@@ -1,15 +1,17 @@
-# wavwarden Finish Plan
+# sfxworkbench Finish Plan
 
 Generated: 2026-05-09
+Updated: 2026-05-11
 
-This plan audits the remaining work needed to move wavwarden from the current
+This plan audits the remaining work needed to move sfxworkbench from the current
 Internal Studio Beta codebase toward a finished, trustworthy v1 product. It is
 based on the implemented CLI surface, current roadmap docs, tests, and the app
-UI direction reference in `docs/APP_UI_DIRECTION.md`.
+UI direction reference in `docs/APP_UI_DIRECTION.md`. Product positioning and
+polished GUI feature direction live in `docs/PRODUCT_DIRECTION.md`.
 
 ## Current State
 
-wavwarden already has a broad, safety-first CLI core:
+sfxworkbench already has a broad, safety-first CLI core:
 
 - Standalone zero-dependency `audit.py`.
 - SQLite-backed scan, audit, search, and export.
@@ -22,10 +24,19 @@ wavwarden already has a broad, safety-first CLI core:
   write plans, fixture bundles, readback, Mutagen apply, backup, verification,
   and undo.
 - UCS import, info, category query, validation, raw tag suggestions, evidence
-  proposals, DB-only tag plans, sidecar export/import, and tag apply logs.
+  proposals, DB-only tag plans, CSV-backed bulk tag plans, sidecar
+  export/import, and tag apply logs.
+- Normalized embedded metadata evidence in `metadata_fields`, populated during
+  scan/index refresh and used by metadata view and tag proposals.
 - Deterministic similarity crawl, segment listing, whole-file and segment
   search/audit, plus DB-only feedback states.
 - JSON contracts and tests for the major automation surfaces.
+- A read-only Textual alpha behind `sfx tui` with start guidance, review
+  queues, saved review/report views, indexed-file detail, generated JSON
+  report/log browsing, and protected-folder visibility.
+- A first full-feature operations workbench slice behind `sfx tui`, organized
+  around Scan, Files, Clean, Dedupe, Organize, Metadata, Similarity, and
+  Advanced feature pages with shared action-result contracts.
 - A first app UI direction mockup and note under `docs/assets/` and
   `docs/APP_UI_DIRECTION.md`.
 
@@ -36,86 +47,52 @@ reviewed, backed up, quarantined, or undoable.
 
 ### Documentation Drift
 
-Some durable docs still describe older behavior and need a synchronization pass:
-
-- `README.md` says the "Reports And Metadata" section is report-only, but that
-  list now includes commands with real reviewed apply behavior, and it does not
-  yet mention `metadata write-apply` or `metadata write-undo`.
-- `docs/PHASES.md` lists metadata write planning/readback but not the latest
-  Mutagen apply/undo/readback verification flow.
-- `docs/PHASES.md` JSON contract list does not yet include
-  `metadata write-apply` or `metadata write-undo`.
-- `NEXT.md` still says to decide whether to build an embedded metadata write
-  plan, but that lane has now advanced to Mutagen-backed original-file writes.
-- Two root-level generated metadata apply logs are present and should either be
-  removed before commit or covered by `.gitignore`.
+The M0/M1/M2/M6 closeout pass on 2026-05-11 removed the known drift around
+metadata write apply/undo, generated root-level apply logs, beta validation, and
+the read-only TUI alpha. Remaining roadmap drift should now be treated as part
+of the next active milestone, not as unfinished baseline work.
 
 ### Beta Readiness Gaps
 
-The beta-safe workflows are mostly present. The remaining beta work is about
-proving them on clean installs, realistic fixture sequences, copied real
-libraries, and user-facing documentation.
-
-Important gaps:
-
-- Clean install and packaging validation from a fresh machine/environment.
-- Full docs-to-CLI command parity.
-- Real-library dry-run audit bundles captured and reviewed after the recent
-  metadata-write additions.
-- More end-to-end fixture workflows for complete command sequences, especially
-  metadata write apply/undo and pack/organize edge cases.
-- CI remains Python 3.11-only; the package claims Python 3.10+.
+The beta-safe baseline is closed for M0/M1. Clean install checks, Python
+3.10/3.11 CI, JSON smoke coverage, full local checks, a real-library beta audit,
+and a bounded copied-library similarity-validation audit have been captured.
+Future beta work should focus on the active feature milestone being changed.
 
 ### Metadata Writing Gaps
 
-Mutagen-backed formats have the first safe path. Remaining work:
+M2 is closed for the current beta scope. Mutagen-backed standard tagged formats
+and BWF MetaEdit-backed WAV/RF64 writes now use reviewed plans, existing-value
+skip/replace behavior, fixture/readback paths, original-file backups, apply
+logs, readback verification, index refresh, and undo guards. AIFF/AIF remain
+unsupported plan entries, W64 remains sidecar-first unless a backend is proven,
+and future iXML/wider BWF writes are deferred feature work rather than baseline
+stragglers.
 
-- Real BWF/WAV apply through BWF MetaEdit, including fixture execution, original
-  apply, backup, readback, undo, and version capture.
-- Real tiny fixture files for each supported standard format:
-  `.flac`, `.mp3`, `.m4a`, `.ogg`, `.opus`, `.aif`, `.aiff`.
-- Field-by-field mapping decisions by container, including UCS provenance,
-  semantic category/subcategory, keywords, originator, take number, and channel
-  position.
-- Existing embedded metadata reads before embedded write planning, so non-empty
-  fields default to skip unless the user explicitly chooses replace.
-- W64 policy: keep sidecar-first unless a safe write/readback backend is proven.
-- Stronger apply/undo guards: store pre/post hashes in logs and refuse undo when
-  the target has changed unexpectedly unless a future explicit force flag is
-  provided.
+### Tagging And Metadata Review
 
-### Tagging And Metadata Model Gaps
+M3 is closed for the current beta scope. The tag review path now has normalized
+embedded metadata evidence, CSV-backed bulk tag plans, synonym-assisted keyword
+suggestions, selector/batch review summaries, accepted DB-only tags, sidecars,
+and embedded metadata write handoff through reviewed plans. Ongoing real-library
+calibration, richer user dictionaries, and future similarity/audio evidence
+remain product-quality improvements rather than blockers for the current M3
+acceptance bar.
 
-The current `accepted_tags` path works, but the long-term model needs more
-state:
+### Advanced Workflow Status
 
-- Normalized embedded metadata table(s), such as `metadata_fields`, for read
-  evidence and write conflict checks.
-- Tag states beyond accepted DB-only values: suggested, rejected, hidden,
-  manual, auto, alias, provenance, and semantic.
-- User alias/synonym dictionaries for filename/path matching.
-- CSV-backed bulk find/replace through reviewed tag plans.
-- Better `tag propose` calibration on real libraries, especially noisy terms
-  such as short category/subcategory words.
-- Audio descriptor and similarity evidence feeding proposals without automatic
-  tagging.
+M4 is closed for the current beta scope. Advanced maintenance now covers
+config-backed safe folders across mutating workflows, preservation-priority
+scoring explanations, exact-hash import/database comparison, report-only
+processed-file detection, permanent deletion from reviewed quarantine logs, and
+dual-mono audit/plan/review/apply with copy-output conversion. Advanced
+destructive actions still start from reviewed plans and either stay undoable or
+require explicit irreversible confirmation.
 
-### Advanced Workflow Gaps
-
-The advanced roadmap is clear but mostly not implemented:
-
-- Shared config-backed safe folders across all planners, not only CLI overrides
-  for dedupe/packs.
-- Preservation-priority scoring with visible rationale across dedupe, packs,
-  and future import compare workflows.
-- Workflow presets over existing commands, such as `internal-beta`,
-  `duplicate-review`, `metadata-prep`, and `advanced-forensics`.
-- Database/import compare before adding a new pack/library to a master index.
-- Processed-file detection for normalized, reverbed, denoised, stretched, or
-  pitched variants.
-- Permanent deletion only from reviewed quarantine logs.
-- Dual-mono audit, reviewed copy-output conversion, and later guarded in-place
-  replacement.
+Remaining advanced work is product polish beyond the current M4 acceptance bar:
+new-pack intake presets, before/after cleanup simulation, richer safe-folder
+editing surfaces in the TUI/GUI, and future guarded in-place audio replacement
+after copy-output conversion has more field validation.
 
 ### Similarity And Audio Analysis Gaps
 
@@ -131,25 +108,98 @@ The deterministic crawler is implemented and useful. Remaining work:
 
 ### UI Gaps
 
-The CLI JSON surface is ready to support a review UI, but no UI exists yet.
-
-The first UI should be Textual, not Tauri. It should use the visual direction in
-`docs/APP_UI_DIRECTION.md` and `docs/assets/app-ui-direction-mockup.png`, while
-staying dense and workbench-like:
-
-- Scan dashboard and command history.
-- Searchable file table.
-- Filename, metadata, and UCS issue queues.
-- Duplicate and pack-overlap review.
-- Tag and metadata write planning, apply, readback, and undo logs.
-- Similarity group review.
-- Safe-folder and preservation-priority controls.
+M6's read-only TUI baseline is closed. The remaining UI gap is intentionally
+later: review/apply surfaces should only be added after the read-only workbench
+has more real-library use and every action can stay backed by the same CLI JSON
+plans/logs.
 
 ## Finish Milestones
+
+### Mini Milestone: M0/M1/M2/M6 Closeout
+
+Goal: close all known straggling work from the mostly-complete stabilization,
+beta-freeze, metadata-writing, and read-only TUI milestones before starting the
+next similarity expansion slice.
+
+Status: complete on 2026-05-11.
+
+Completed tasks:
+
+- Reconciled this finish plan with the current repo state: M0, M1, M2, and the
+  read-only portion of M6 are no longer listed as open baseline work.
+- Confirmed M0 documentation and generated-log cleanup through the existing
+  README/PHASES/NEXT updates, `.gitignore`, and green validation.
+- Confirmed M1 clean install and CI coverage: `uv sync --extra dev`,
+  `uv sync --extra metadata --extra dev`, `uv run sfx --help`, Python 3.10/3.11
+  CI, JSON smoke, and full local checks are recorded in `NEXT.md`.
+- Ran the missing manual similarity-validation beta audit on a bounded copied
+  real-library slice:
+  `/private/tmp/sfxworkbench_mini_closeout_slice_20260511/audit`.
+- Captured performance numbers on that 200-file copied real-library slice:
+  scan 1.61s, pack audit 0.17s, metadata write-plan 0.18s, tag propose 0.29s,
+  similarity crawl 5.74s, and full similarity-validation beta audit 7.55s.
+- Recorded the whole-library force-rescan attempt as performance evidence:
+  stopped after 755.56s before report generation, reinforcing that similarity
+  validation should stay bounded/manual until M5 adds crawl job controls and
+  resume clarity.
+- Reviewed mutation command trust language across CLI and implementation
+  surfaces. Existing output/help consistently exposes dry-run, reviewed apply,
+  backup, quarantine, safe-folder refusal, collision refusal, readback, and undo
+  wording for the current beta mutation paths.
+- Confirmed M2 scope: reviewed Mutagen and BWF MetaEdit writes have backup,
+  readback, logs, index refresh, existing-value protection, and undo guards;
+  W64 remains sidecar-first and future iXML/wider BWF writes are deferred.
+- Confirmed M6 scope: the read-only Textual alpha has start guidance, review
+  queues, saved views, grouped file detail, report/log browsing, summary rows,
+  and protected-folder visibility. Mutation UI remains deferred by design.
+
+Validation:
+
+- `uv run --extra dev poe beta-audit /private/tmp/sfxworkbench_mini_closeout_slice_20260511/library --output-dir /private/tmp/sfxworkbench_mini_closeout_slice_20260511/audit --similarity-validation --include-format --limit 200`
+  passed.
+- `uv run sfx scan /private/tmp/sfxworkbench_mini_closeout_slice_20260511/library --db /private/tmp/sfxworkbench_mini_closeout_slice_20260511/perf_scan.db --force --json`
+  passed.
+- `uv run sfx packs audit /private/tmp/sfxworkbench_mini_closeout_slice_20260511/library --db /private/tmp/sfxworkbench_mini_closeout_slice_20260511/audit/index.db --json`
+  passed.
+- `uv run sfx metadata write-plan /private/tmp/sfxworkbench_mini_closeout_slice_20260511/perf_metadata_write_plan.json --db /private/tmp/sfxworkbench_mini_closeout_slice_20260511/audit/index.db --path /private/tmp/sfxworkbench_mini_closeout_slice_20260511/library --limit 200 --json`
+  passed.
+- `uv run sfx tag propose /private/tmp/sfxworkbench_mini_closeout_slice_20260511/library --db /private/tmp/sfxworkbench_mini_closeout_slice_20260511/audit/index.db --catalog /private/tmp/sfxworkbench_mini_closeout_slice_20260511/mini_ucs_catalog.json --min-confidence 0.6 --limit 200 --json`
+  passed.
+- `uv run sfx similarity crawl /private/tmp/sfxworkbench_mini_closeout_slice_20260511/library --db /private/tmp/sfxworkbench_mini_closeout_slice_20260511/audit/index.db --cache /private/tmp/sfxworkbench_mini_closeout_slice_20260511/perf_similarity_cache --max-duration 30 --force --limit 200 --json`
+  passed.
+
+### Mini Milestone: M3 Closeout
+
+Goal: make metadata/tag review useful without requiring hand-edited JSON plans.
+
+Status: complete on 2026-05-11.
+
+Completed tasks:
+
+- Added normalized `metadata_fields` rows for readable embedded metadata,
+  including BEXT, RIFF INFO, and supported Mutagen-backed text tags.
+- Populated normalized metadata fields during `sfx scan` and after successful
+  embedded metadata write index refresh.
+- Exposed indexed embedded fields in `sfx metadata view`.
+- Updated `sfx tag propose` to use indexed embedded metadata evidence before
+  falling back to direct WAV/RF64 reads.
+- Added `sfx tag plan --from-csv` for reviewed bulk tag updates using
+  `file_id`, `path`, `filename`, or `stem` selectors plus `field` and `value`.
+- Kept CSV imports inside the existing reviewed DB-only tag plan/apply flow, so
+  writes still require explicit review/apply gates and anchor validation.
+
+Validation:
+
+- `uv run pytest tests/test_scan.py tests/test_metadata_view.py tests/test_tag_propose.py tests/test_tag_suggest.py -v`
+  passed.
+- `uv run --extra dev poe check` passed.
+- `uv run --extra dev poe json-smoke` passed.
 
 ### M0: Stabilize The Current Branch
 
 Goal: make the current repo internally consistent after the recent metadata work.
+
+Status: complete as of 2026-05-11.
 
 Tasks:
 
@@ -172,6 +222,8 @@ Acceptance criteria:
 
 Goal: make the current beta-safe product reliable enough for repeated studio
 use on copied libraries.
+
+Status: complete as of 2026-05-11 for the current beta baseline.
 
 Tasks:
 
@@ -200,6 +252,10 @@ Acceptance criteria:
 ### M2: Finish Metadata Writing
 
 Goal: complete safe embedded metadata writing for standard formats.
+
+Status: complete as of 2026-05-11 for reviewed Mutagen-backed standard tagged
+formats and BWF MetaEdit-backed WAV/RF64 BEXT/RIFF INFO writes. Future iXML and
+wider BWF field writes remain deferred feature work.
 
 Tasks:
 
@@ -252,6 +308,8 @@ Acceptance criteria:
 Goal: cover the remaining professional maintenance workflows without weakening
 the beta safety model.
 
+Status: complete on 2026-05-11.
+
 Tasks:
 
 - Add config-backed safe folders and apply them across dedupe, packs, organize,
@@ -265,6 +323,22 @@ Tasks:
 - Keep in-place audio replacement outside the default path until copy-output
   conversion is proven.
 
+Completed scope:
+
+- Config-backed safe folders now guard dedupe, packs, organize, rename,
+  metadata writes, dual-mono copy conversion, and permanent delete.
+- Preservation rules expose score explanations for reviewer-facing rationale.
+- `sfx compare audit/plan` compares candidate imports against an existing index
+  using exact MD5 matches and creates import-review plans.
+- `sfx processed` reports likely rendered/processed variants without cleanup
+  actions.
+- `sfx delete plan/review/apply` permanently deletes only paths already present
+  in sfxworkbench quarantine logs, requires reviewed plans, and requires
+  `--i-understand-permanent-delete --apply`.
+- `sfx audio dual-mono audit/plan/review/apply` detects dual-mono stereo files
+  and writes approved mono copies to a separate output root without replacing
+  originals.
+
 Acceptance criteria:
 
 - Advanced destructive actions start from reviewed plans and cannot operate
@@ -272,9 +346,16 @@ Acceptance criteria:
 - Every advanced mutation has logs and recovery or intentionally irreversible
   confirmation.
 
+Validation:
+
+- `uv run pytest tests/test_m4_advanced.py -v` passed.
+- `uv run --extra dev poe check` passed.
+
 ### M5: Finish Similarity And Audio Analysis
 
 Goal: make similarity useful for discovery and review, not automatic cleanup.
+
+Status: complete on 2026-05-11 for the deterministic/report-only beta scope.
 
 Tasks:
 
@@ -287,24 +368,62 @@ Tasks:
   support.
 - Add similarity review UX contracts for future UI.
 
+Completed scope:
+
+- `sfx similarity crawl` now supports bounded stale-file runs with
+  `--max-files` and lightweight CPU yielding with `--throttle-ms`, records
+  partial-run status and stop reasons, and reports pending/stale counts for
+  resumable follow-up runs.
+- Similarity cache records now include backend version and parameter hashes;
+  `analysis_runs` stores run parameters, segment method, force/max-file limits,
+  and status reason.
+- `audio_embeddings` is reserved in schema with model/version/parameter
+  anchoring for future embedding backends, without enabling any model by
+  default.
+- `sfx similarity backends` reports the available deterministic backend and
+  explicitly deferred fingerprint/embedding backends for dependency and license
+  review.
+- `tag propose` includes cached deterministic descriptor evidence as
+  review-only support on proposals; it does not use similarity descriptors as
+  semantic proof or raise confidence.
+- Existing similarity search, segment listing, audit, and feedback JSON remain
+  report-only UI contracts for future review surfaces.
+
 Acceptance criteria:
 
 - Similarity search/audit remains report-only.
 - False positives are explainable and reviewable.
 - Cached analysis can be rebuilt when backend/model parameters change.
 
+Validation:
+
+- `uv run pytest tests/test_similarity.py tests/test_tag_propose.py tests/test_cli_json.py::test_similarity_cli_json_smoke -v` passed.
+
 ### M6: Build The Review UI
 
-Goal: make wavwarden comfortable for long review sessions without hiding the CLI.
+Goal: make sfxworkbench comfortable for long review sessions without hiding the CLI.
+
+Status: complete as of 2026-05-11 for the read-only Textual alpha baseline.
+Review/apply UI surfaces remain intentionally deferred.
 
 Tasks:
 
 - Build a Textual app using CLI JSON and SQLite state.
 - Start with read-only dashboards:
-  scan state, audit issues, metadata coverage, duplicates, packs, and tags.
+  scan state, audit issues, metadata coverage, duplicates, packs, UCS drift,
+  pending plans, logs, and protected folders.
+- Build decision queues for unsafe filenames, long paths, Unicode
+  normalization, missing metadata, UCS validation failures, duplicates, pack
+  overlaps, format inconsistencies, tag proposals, and embedded metadata
+  conflicts.
+- Build a before/after plan viewer for rename, organize, dedupe, packs,
+  metadata write, tag apply, and future intake plans.
+- Surface the safe-folder firewall and metadata gap report as first-class
+  screens.
 - Add review/apply surfaces only after the read-only views are stable.
-- Use `docs/APP_UI_DIRECTION.md` and the mockup as visual direction:
-  dense workbench, graphite panels, off-white workspace, safety colors.
+- Use `docs/PRODUCT_DIRECTION.md`, `docs/APP_UI_DIRECTION.md`, and the mockup as
+  product/visual direction: safe cleanup workbench, dense review UI, graphite
+  panels, off-white workspace, safety colors.
 - Keep every UI action backed by the same JSON plans/logs as CLI commands.
 
 Acceptance criteria:
@@ -314,8 +433,10 @@ Acceptance criteria:
 
 ### M7: Public v1 Readiness
 
-Goal: make wavwarden installable, documented, and supportable outside the
+Goal: make sfxworkbench installable, documented, and supportable outside the
 original development machine.
+
+Status: complete on 2026-05-11 for GitHub-release beta packaging readiness.
 
 Tasks:
 
@@ -328,34 +449,173 @@ Tasks:
 - Add sample fixture/demo library and screenshots once UI exists.
 - Run final clean-machine smoke tests on macOS and Linux.
 
+Completed scope:
+
+- Built source distribution and wheel artifacts with `uv build`.
+- Verified a clean Python 3.11 wheel install in `/private/tmp`, then ran
+  `sfx --help`, `sfx scan`, and `sfx audit` from the installed console script
+  against the committed demo fixture.
+- Updated README install guidance for GitHub release wheels, future PyPI
+  installs, GitHub source installs, optional metadata extras, and the read-only
+  TUI.
+- Added release, migration, and demo-library docs:
+  `docs/RELEASE.md`, `docs/MIGRATIONS.md`, and `docs/DEMO.md`.
+- Expanded `CHANGELOG.md` with milestone-oriented unreleased entries.
+- Expanded `SECURITY.md` and `SUPPORT.md` with commercial audio-library privacy,
+  generated artifact, and optional analysis guidance.
+- Updated package metadata description and documentation URL.
+
 Acceptance criteria:
 
 - A new user can install, scan a copied library, review reports, apply safe
   workflows, and undo changes by following README alone.
 - CI, docs, and package metadata agree.
 
+Validation:
+
+- `uv sync --extra dev` passed.
+- `uv sync --extra metadata --extra dev` passed.
+- `uv run sfx --help` passed.
+- `uv build` passed and produced `dist/sfxworkbench-0.1.0.tar.gz` plus
+  `dist/sfxworkbench-0.1.0-py3-none-any.whl`.
+- `uv venv --python 3.11 /private/tmp/sfxworkbench_m7_smoke` passed.
+- `uv pip install --python /private/tmp/sfxworkbench_m7_smoke/bin/python dist/sfxworkbench-0.1.0-py3-none-any.whl` passed.
+- `/private/tmp/sfxworkbench_m7_smoke/bin/sfx --help` passed.
+- `/private/tmp/sfxworkbench_m7_smoke/bin/sfx scan tests/fixtures/library_basic --db /private/tmp/sfxworkbench_m7_smoke/index.db --json` passed.
+- `/private/tmp/sfxworkbench_m7_smoke/bin/sfx audit --db /private/tmp/sfxworkbench_m7_smoke/index.db --json` passed.
+- `uv run --extra dev poe check` passed.
+
+### M8: Local Validation And TUI Improvement
+
+Goal: exercise the finished beta locally on realistic copied-library workflows
+while turning the read-only Textual alpha into a more useful daily review
+surface.
+
+Status: in progress as of 2026-05-11.
+
+Tasks:
+
+- Create a local validation workspace with copied audio, generated reports,
+  throwaway SQLite indexes, and safe output/quarantine roots.
+- Run the core happy paths end to end on local data:
+  scan, audit, search, clean preview, dedupe plan/review/apply/undo, rename
+  preview/apply/undo, organize review/apply/undo, pack audit/plan/review/apply,
+  tag suggest/plan/review/apply, metadata write fixture/readback, similarity
+  crawl/search/audit, advanced compare/processed/delete/dual-mono workflows.
+- Capture usability notes from each local run: confusing command output,
+  missing report fields, stale-plan surprises, slow steps, and places where the
+  next action is not obvious.
+- Improve the TUI around real review sessions:
+  clearer start checklist, report discovery, plan/log summaries, file detail,
+  queue filtering, similarity feedback visibility, protected-folder visibility,
+  and command copy/run affordances.
+  - Started: the report browser now auto-discovers JSON artifacts beside the
+    validation DB, near the last scanned root, and in `~/reports`; file detail
+    now includes indexed embedded metadata fields from SQLite.
+  - Completed Start-page optimization slice: compact workflow areas, persistent
+    two-line orientation/status strip, responsive table columns, selected-area
+    command/detail table, grouped library status, and no always-visible Start
+    scrollbar when content fits.
+  - Converted the feature coverage map into focused area tabs: Import, Cleanup,
+    Metadata, Tags/UCS, Similarity, and Advanced each pair workflow/detail rows
+    with their relevant review queues and matching files. Files and Reports
+    stay global because they answer cross-cutting questions.
+  - Expanded Files into a live SQLite-backed master list with per-row accepted
+    tag, indexed embedded-field, and filename-issue counts while keeping the
+    adapter capped for large-library performance.
+  - Added a read-only button pass for the guided TUI: Start, Files, Reports, and
+    each focused area now expose button controls for opening selected queues,
+    jumping to matching files, finding related reports, clearing filters, and
+    opening selected start recommendations.
+  - Refined the buttons into action-oriented controls rather than duplicate
+    page navigation, and added an editable library path context so generated
+    workflow/queue commands can target a different copied library root without
+    mutating the index.
+  - Persisted the explicit TUI library path in the validation DB so reopening
+    the TUI resumes the same generated-command root, while "Use Indexed Root"
+    can still switch back to the last scan root.
+  - Removed the Header clock and trimmed repeated summary fields from detail
+    panes so detail tables focus on extra context and commands.
+  - Routed default apply/undo logs through `apply_logs/` folders beside their
+    source reports/plans, and taught the TUI report browser to include that
+    folder.
+  - Added the standalone Phase 0 `audit.py` filesystem audit as an Import
+    workflow for first-pass folder review before a library is indexed.
+- Keep TUI mutation actions out of scope until local read-only review flows feel
+  reliable and every action maps cleanly to existing CLI JSON plans/logs.
+- Add focused tests for any TUI data adapters or JSON contracts changed during
+  the local validation pass.
+
+Acceptance criteria:
+
+- A local copied-library session can be driven from the TUI plus documented CLI
+  commands without hand-opening JSON except for debugging.
+- Every confusing or risky local behavior found during validation is either
+  fixed, documented, or recorded as a follow-up.
+- TUI improvements remain backed by the same CLI/SQLite data contracts and do
+  not introduce hidden mutation paths.
+
+Validation:
+
+- Run `uv run --extra tui --extra dev sfx tui --help`.
+- Run targeted `tests/test_tui_data.py` coverage for changed TUI adapters.
+- Run `uv run --extra tui --extra dev poe check` before closing the milestone.
+
+### M9: Full-Feature Operations Workbench
+
+Goal: make the TUI/GUI direction cover the full sfxworkbench product surface
+instead of narrowing around only metadata or dedupe.
+
+Status: implemented as an initial TUI/action-contract slice.
+
+Completed scope:
+
+- Replaced the Start/workflow/queue/report-browser structure with feature tabs:
+  Scan, Files, Clean, Dedupe, Organize, Metadata, Similarity, and Advanced.
+- Moved normal UI framing to library path plus status; index/cache path is only
+  surfaced in Advanced findings.
+- Added shared TUI/GUI action results for scan, full audit, junk cleanup,
+  dedupe plans/review/apply, pack audit/plan/review/apply, portable rename
+  preview/apply/undo, metadata audit/tag plan/review/apply/sidecar export, and
+  similarity crawl.
+- Added `sfx audit-bundle PATH --db DB --output-dir DIR --json` to refresh the
+  index and write core read-only audit artifacts for scan health, metadata,
+  duplicates, groups/format, UCS validation when available, and pack overlap.
+- Reworked Files so an indexed DB shows file rows immediately and an empty DB
+  gives a scan-oriented empty state.
+- Embedded generated reports/logs into each feature page by relevance instead
+  of requiring a standalone Reports page.
+
+Validation:
+
+- `uv run --extra tui --extra dev pytest tests/test_tui_data.py tests/test_tui_actions.py tests/test_apply_logs.py tests/test_json_contracts.py::test_audit_search_export_json_contract -v`
+  passed.
+
 ## Recommended Order
+
+Completed baseline milestones:
 
 1. M0: stabilize docs and remove generated artifacts.
 2. M1: beta freeze and real-library dry-run audit.
-3. M2: finish metadata writing because audio mutation is the highest-risk
-   already-started lane.
+3. M2: finish current-scope metadata writing.
 4. M3: finish tag review ergonomics.
 5. M4: advanced workflows.
 6. M5: similarity expansion.
-7. M6: Textual UI.
-8. M7: public release polish.
+7. M6: read-only Textual UI baseline.
+8. M7: public release readiness.
+
+Remaining order:
+
+1. M8: local validation and TUI improvement.
 
 ## Near-Term Sprint
 
-The next focused sprint should be M0 plus the first half of M1:
+The next focused sprint should be M8 local validation and TUI improvement:
 
-1. Update README, PHASES, and NEXT.
-2. Remove or ignore generated metadata apply logs.
-3. Add JSON contract coverage for `metadata write-apply` and `metadata write-undo`.
-4. Add CI Python 3.10.
-5. Run clean install with `--extra metadata`.
-6. Run `poe check`, `poe json-smoke`, and one beta audit bundle.
-
-That sprint turns the current feature-rich branch into a coherent beta baseline
-before more feature work is layered on.
+1. Create the local validation workspace and run the main report/review/apply
+   loops against copied data.
+2. Convert friction found during those runs into TUI data/view improvements.
+3. Keep mutation in the CLI while using the TUI to make review state, next
+   commands, and generated artifacts easier to navigate.
+4. Preserve the release-execution follow-up: run the wheel smoke test on Linux
+   before advertising the release broadly.

@@ -1,11 +1,11 @@
-"""Pytest fixtures for wavwarden tests."""
+"""Pytest fixtures for sfxworkbench tests."""
 
 import unicodedata
 import wave
 from pathlib import Path
 
 import pytest
-from wavwarden.db import get_connection
+from sfxworkbench.db import get_connection
 
 
 def _make_tiny_wav(

@@ -1,9 +1,9 @@
-"""Tests for wavwarden.search."""
+"""Tests for sfxworkbench.search."""
 
 from pathlib import Path
 
-from wavwarden.scan import scan_library
-from wavwarden.search import search
+from sfxworkbench.scan import scan_library
+from sfxworkbench.search import search
 
 
 def test_search_finds_by_filename(tmp_library: Path, tmp_db: Path) -> None:

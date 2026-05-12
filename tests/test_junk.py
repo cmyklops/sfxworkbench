@@ -1,8 +1,8 @@
-"""Tests for wavwarden.junk shared module."""
+"""Tests for sfxworkbench.junk shared module."""
 
 from pathlib import Path
 
-from wavwarden import junk
+from sfxworkbench import junk
 
 
 def test_apple_double_detection() -> None:

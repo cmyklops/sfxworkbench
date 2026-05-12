@@ -1,10 +1,10 @@
-"""Tests for wavwarden.audit_cmd."""
+"""Tests for sfxworkbench.audit_cmd."""
 
 from pathlib import Path
 
-from wavwarden.audit_cmd import run_audit
-from wavwarden.db import get_connection
-from wavwarden.scan import scan_library
+from sfxworkbench.audit_cmd import run_audit
+from sfxworkbench.db import get_connection
+from sfxworkbench.scan import scan_library
 
 
 def _seed_simple(tmp_db: Path, rows: list[dict]) -> None:

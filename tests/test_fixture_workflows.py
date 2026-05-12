@@ -3,11 +3,11 @@
 import json
 from pathlib import Path
 
-from wavwarden.audit_cmd import run_audit
-from wavwarden.clean import find_junk
-from wavwarden.dedupe import find_duplicates
-from wavwarden.rename import build_rename_plan
-from wavwarden.scan import scan_library
+from sfxworkbench.audit_cmd import run_audit
+from sfxworkbench.clean import find_junk
+from sfxworkbench.dedupe import find_duplicates
+from sfxworkbench.rename import build_rename_plan
+from sfxworkbench.scan import scan_library
 
 
 def test_tmp_library_matches_basic_manifest(tmp_library: Path, tmp_db: Path) -> None:

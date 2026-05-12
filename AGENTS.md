@@ -23,45 +23,45 @@ uv run pytest tests/test_similarity.py tests/test_internal_beta_audit.py -v
 uv run sfx --help
 uv run sfx clean ~/CommercialLibraries           # dry-run
 uv run sfx clean ~/CommercialLibraries --apply   # actually remove junk
-uv run sfx scan ~/CommercialLibraries --db ~/.wavwarden/index.db
-uv run sfx metadata audit --db ~/.wavwarden/index.db --output ~/reports/metadata_report.json
-uv run sfx metadata view "FIRE_BURST_SmallBurst_6109.wav" --db ~/.wavwarden/index.db
+uv run sfx scan ~/CommercialLibraries --db ~/.sfxworkbench/index.db
+uv run sfx metadata audit --db ~/.sfxworkbench/index.db --output ~/reports/metadata_report.json
+uv run sfx metadata view "FIRE_BURST_SmallBurst_6109.wav" --db ~/.sfxworkbench/index.db
 uv run sfx metadata backends --json
 uv run sfx metadata backends --bwfmetaedit /path/to/bwfmetaedit --json
-uv run sfx groups audit ~/CommercialLibraries --db ~/.wavwarden/index.db --output ~/reports/related_groups_report.json
-uv run sfx format audit ~/CommercialLibraries --db ~/.wavwarden/index.db --output ~/reports/format_report.json
-uv run sfx scan-errors --db ~/.wavwarden/index.db --output ~/reports/scan_error_plan.json
-uv run sfx scan-errors --apply ~/reports/scan_error_plan.json --db ~/.wavwarden/index.db
-uv run sfx dedupe --db ~/.wavwarden/index.db --summary-only
-uv run sfx dedupe --db ~/.wavwarden/index.db --output ~/reports/dedupe_plan.json
+uv run sfx groups audit ~/CommercialLibraries --db ~/.sfxworkbench/index.db --output ~/reports/related_groups_report.json
+uv run sfx format audit ~/CommercialLibraries --db ~/.sfxworkbench/index.db --output ~/reports/format_report.json
+uv run sfx scan-errors --db ~/.sfxworkbench/index.db --output ~/reports/scan_error_plan.json
+uv run sfx scan-errors --apply ~/reports/scan_error_plan.json --db ~/.sfxworkbench/index.db
+uv run sfx dedupe --db ~/.sfxworkbench/index.db --summary-only
+uv run sfx dedupe --db ~/.sfxworkbench/index.db --output ~/reports/dedupe_plan.json
 uv run sfx dedupe --review ~/reports/dedupe_plan.json --approve-all
-uv run sfx dedupe --apply ~/reports/dedupe_plan.json --db ~/.wavwarden/index.db --require-reviewed
-uv run sfx packs audit ~/CommercialLibraries --db ~/.wavwarden/index.db --output ~/reports/pack_overlap_report.json
+uv run sfx dedupe --apply ~/reports/dedupe_plan.json --db ~/.sfxworkbench/index.db --require-reviewed
+uv run sfx packs audit ~/CommercialLibraries --db ~/.sfxworkbench/index.db --output ~/reports/pack_overlap_report.json
 uv run sfx packs plan --report ~/reports/pack_overlap_report.json --output ~/reports/pack_consolidation_plan.json
 uv run sfx packs review ~/reports/pack_consolidation_plan.json --approve-all
-uv run sfx packs apply ~/reports/pack_consolidation_plan.json --db ~/.wavwarden/index.db --require-reviewed
-uv run sfx packs undo pack_quarantine_log.json --db ~/.wavwarden/index.db --apply
-uv run sfx similarity crawl ~/CommercialLibraries --db ~/.wavwarden/index.db --cache ~/.wavwarden/similarity
-uv run sfx similarity segments ~/CommercialLibraries --db ~/.wavwarden/index.db --limit 200 --json
-uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --limit 20 --json
-uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --scope segment --limit 20 --json
-uv run sfx similarity audit ~/CommercialLibraries --db ~/.wavwarden/index.db --threshold 0.92 --output ~/reports/similarity_audit.json
-uv run sfx similarity audit ~/CommercialLibraries --db ~/.wavwarden/index.db --scope segment --threshold 0.95 --json
-uv run sfx similarity feedback set --left one.wav --right two.wav --state ignored --db ~/.wavwarden/index.db
-uv run sfx similarity feedback list --db ~/.wavwarden/index.db --state ignored --json
-uv run sfx similarity feedback clear --left one.wav --right two.wav --db ~/.wavwarden/index.db
+uv run sfx packs apply ~/reports/pack_consolidation_plan.json --db ~/.sfxworkbench/index.db --require-reviewed
+uv run sfx packs undo pack_quarantine_log.json --db ~/.sfxworkbench/index.db --apply
+uv run sfx similarity crawl ~/CommercialLibraries --db ~/.sfxworkbench/index.db --cache ~/.sfxworkbench/similarity
+uv run sfx similarity segments ~/CommercialLibraries --db ~/.sfxworkbench/index.db --limit 200 --json
+uv run sfx similarity search --file query.wav --db ~/.sfxworkbench/index.db --limit 20 --json
+uv run sfx similarity search --file query.wav --db ~/.sfxworkbench/index.db --scope segment --limit 20 --json
+uv run sfx similarity audit ~/CommercialLibraries --db ~/.sfxworkbench/index.db --threshold 0.92 --output ~/reports/similarity_audit.json
+uv run sfx similarity audit ~/CommercialLibraries --db ~/.sfxworkbench/index.db --scope segment --threshold 0.95 --json
+uv run sfx similarity feedback set --left one.wav --right two.wav --state ignored --db ~/.sfxworkbench/index.db
+uv run sfx similarity feedback list --db ~/.sfxworkbench/index.db --state ignored --json
+uv run sfx similarity feedback clear --left one.wav --right two.wav --db ~/.sfxworkbench/index.db
 uv run sfx organize audit ~/CommercialLibraries --depth 1 --output ~/reports/organize_report.json
 uv run sfx organize audit ~/CommercialLibraries --pattern redundant-nesting --depth 8 --output ~/reports/nesting_report.json
 uv run sfx organize nesting-plan ~/reports/nesting_report.json --output ~/reports/nesting_plan.json
 uv run sfx organize nesting-plan ~/reports/nesting_report.json --kind single_child_chain --output ~/reports/single_child_plan.json
 uv run sfx organize nesting-plan ~/reports/nesting_report.json --kind low_value_wrapper --output ~/reports/wrapper_plan.json
 uv run sfx organize review ~/reports/nesting_plan.json --approve-all
-uv run sfx organize nesting-apply ~/reports/nesting_plan.json --db ~/.wavwarden/index.db --require-reviewed
-uv run sfx organize nesting-apply ~/reports/nesting_plan.json --db ~/.wavwarden/index.db --apply --require-reviewed --log nesting_log.json
-uv run sfx organize nesting-undo nesting_log.json --db ~/.wavwarden/index.db --apply
+uv run sfx organize nesting-apply ~/reports/nesting_plan.json --db ~/.sfxworkbench/index.db --require-reviewed
+uv run sfx organize nesting-apply ~/reports/nesting_plan.json --db ~/.sfxworkbench/index.db --apply --require-reviewed --log nesting_log.json
+uv run sfx organize nesting-undo nesting_log.json --db ~/.sfxworkbench/index.db --apply
 uv run sfx organize review ~/reports/organize_report.json --approve-all
-uv run sfx organize apply ~/reports/organize_report.json --db ~/.wavwarden/index.db --require-reviewed --log organize_log.json
-uv run sfx organize undo organize_log.json --db ~/.wavwarden/index.db --apply
+uv run sfx organize apply ~/reports/organize_report.json --db ~/.sfxworkbench/index.db --require-reviewed --log organize_log.json
+uv run sfx organize undo organize_log.json --db ~/.sfxworkbench/index.db --apply
 uv run sfx organize audit ~/CommercialLibraries --pattern vendor-product-folders --output ~/reports/vendor_folders.json
 uv run sfx search "gunshot exterior"
 uv run sfx rename ~/CommercialLibraries --pattern ucs                   # dry-run
@@ -71,27 +71,27 @@ uv run sfx rename ~/CommercialLibraries --pattern ucs --apply --log rename_log.j
 uv run sfx rename ~/CommercialLibraries --pattern safe --apply --allow-partial --log safe_rename_log.json
 uv run sfx rename ~/CommercialLibraries --pattern portable --apply --log portable_rename_log.json
 uv run sfx rename --undo rename_log.json --apply
-uv run sfx tag propose ~/CommercialLibraries --db ~/.wavwarden/index.db --min-confidence 0.6 --output ~/reports/tag_proposals.json
-uv run sfx tag suggest ~/CommercialLibraries --db ~/.wavwarden/index.db --output ~/reports/tag_suggestions.json
-uv run sfx tag suggest ~/CommercialLibraries --db ~/.wavwarden/index.db --use-ucs-catalog --min-confidence 0.8 --source ucs_catalog --field ucs_category --field ucs_subcategory --json
-uv run sfx tag plan ~/CommercialLibraries --db ~/.wavwarden/index.db --from-suggestions ~/reports/tag_suggestions.json --source ucs_catalog --field ucs_category --field ucs_subcategory --output ~/reports/tag_plan.json
+uv run sfx tag propose ~/CommercialLibraries --db ~/.sfxworkbench/index.db --min-confidence 0.6 --output ~/reports/tag_proposals.json
+uv run sfx tag suggest ~/CommercialLibraries --db ~/.sfxworkbench/index.db --output ~/reports/tag_suggestions.json
+uv run sfx tag suggest ~/CommercialLibraries --db ~/.sfxworkbench/index.db --use-ucs-catalog --min-confidence 0.8 --source ucs_catalog --field ucs_category --field ucs_subcategory --json
+uv run sfx tag plan ~/CommercialLibraries --db ~/.sfxworkbench/index.db --from-suggestions ~/reports/tag_suggestions.json --source ucs_catalog --field ucs_category --field ucs_subcategory --output ~/reports/tag_plan.json
 uv run sfx tag summarize ~/reports/tag_plan.json --value-limit 20
 uv run sfx tag review ~/reports/tag_plan.json --approve-field ucs_category --only-status pending
 uv run sfx tag review ~/reports/tag_plan.json --approve-all
-uv run sfx tag apply ~/reports/tag_plan.json --db ~/.wavwarden/index.db --require-reviewed
-uv run sfx tag apply ~/reports/tag_plan.json --db ~/.wavwarden/index.db --require-reviewed --apply --log ~/reports/tag_apply_log.json
-uv run sfx tag sidecar-export ~/reports/accepted_tags.sidecar.json --db ~/.wavwarden/index.db --path ~/CommercialLibraries
-uv run sfx tag sidecar-import ~/reports/accepted_tags.sidecar.json --db ~/.wavwarden/index.db
-uv run sfx tag sidecar-import ~/reports/accepted_tags.sidecar.json --db ~/.wavwarden/index.db --apply
-uv run sfx metadata write-plan ~/reports/metadata_write_plan.json --db ~/.wavwarden/index.db --path ~/CommercialLibraries --bwfmetaedit /path/to/bwfmetaedit
+uv run sfx tag apply ~/reports/tag_plan.json --db ~/.sfxworkbench/index.db --require-reviewed
+uv run sfx tag apply ~/reports/tag_plan.json --db ~/.sfxworkbench/index.db --require-reviewed --apply --log ~/reports/tag_apply_log.json
+uv run sfx tag sidecar-export ~/reports/accepted_tags.sidecar.json --db ~/.sfxworkbench/index.db --path ~/CommercialLibraries
+uv run sfx tag sidecar-import ~/reports/accepted_tags.sidecar.json --db ~/.sfxworkbench/index.db
+uv run sfx tag sidecar-import ~/reports/accepted_tags.sidecar.json --db ~/.sfxworkbench/index.db --apply
+uv run sfx metadata write-plan ~/reports/metadata_write_plan.json --db ~/.sfxworkbench/index.db --path ~/CommercialLibraries --bwfmetaedit /path/to/bwfmetaedit
 uv run sfx metadata write-review ~/reports/metadata_write_plan.json --approve-all
-uv run sfx metadata write-preview ~/reports/metadata_write_plan.json --db ~/.wavwarden/index.db --require-reviewed
-uv run sfx metadata write-fixtures ~/reports/metadata_write_plan.json ~/reports/metadata_fixtures --db ~/.wavwarden/index.db
+uv run sfx metadata write-preview ~/reports/metadata_write_plan.json --db ~/.sfxworkbench/index.db --require-reviewed
+uv run sfx metadata write-fixtures ~/reports/metadata_write_plan.json ~/reports/metadata_fixtures --db ~/.sfxworkbench/index.db
 uv run sfx metadata write-readback ~/reports/metadata_fixtures --json
 uv run sfx ucs import ~/Desktop/_categorylist.csv --release-version v8.2.1
 uv run sfx ucs info
 uv run sfx ucs categories --cat-short AMB
-uv run sfx ucs validate ~/CommercialLibraries --db ~/.wavwarden/index.db --json
+uv run sfx ucs validate ~/CommercialLibraries --db ~/.sfxworkbench/index.db --json
 uv run sfx organize audit ~/CommercialLibraries --pattern common-prefix-folders --output ~/reports/common_prefix_folders.json
 uv run sfx organize audit ~/CommercialLibraries --pattern numeric-series-folders --output ~/reports/numeric_series_folders.json
 
@@ -101,16 +101,16 @@ python3 audit.py ~/CommercialLibraries --no-hash   # skip MD5
 
 # Developer benchmark
 uv run --extra dev poe bench-scan --files 1000 --no-hash
-uv run --extra dev poe beta-audit ~/CommercialLibraries --output-dir ~/reports/wavwarden_beta_audit --include-similarity
+uv run --extra dev poe beta-audit ~/CommercialLibraries --output-dir ~/reports/sfxworkbench_beta_audit --include-similarity
 ```
 
 ## Architecture
 
 Two parallel layers that don't depend on each other:
 
-**`audit.py`** — standalone zero-dependency Phase 0 auditor. Uses only stdlib (no soundfile, no Typer). Runs on Python 3.9+. Do not import from the `wavwarden` package here and do not break it.
+**`audit.py`** — standalone zero-dependency Phase 0 auditor. Uses only stdlib (no soundfile, no Typer). Runs on Python 3.9+. Do not import from the `sfxworkbench` package here and do not break it.
 
-**`wavwarden/` package** — Phase 1+ CLI engine. Requires Python 3.10+, installed via uv. Entry point is `sfx` → `wavwarden/cli.py`. All commands lazy-import their module (e.g. `from wavwarden.clean import clean_library`) to keep startup fast.
+**`sfxworkbench/` package** — Phase 1+ CLI engine. Requires Python 3.10+, installed via uv. Entry point is `sfx` → `sfxworkbench/cli.py`. All commands lazy-import their module (e.g. `from sfxworkbench.clean import clean_library`) to keep startup fast.
 
 ### Data flow
 
@@ -148,7 +148,7 @@ sfx tag suggest PATH → report-only raw suggestions from filename/path/group/UC
 sfx tag summarize PLAN → report-only tag-plan rollup by field/source/status/value for batch review
 sfx tag plan/review/apply → reviewed DB-only accepted tag writes with selector review and apply log
 sfx tag sidecar-export/import → portable JSON sidecars for accepted DB-only tags
-sfx ucs import SOURCE → parse Soundminer/_categorylist.csv → ~/.wavwarden/ucs_catalog.json
+sfx ucs import SOURCE → parse Soundminer/_categorylist.csv → ~/.sfxworkbench/ucs_catalog.json
 sfx ucs info → show provenance and entry count of the loaded UCS catalog
 sfx ucs categories [--category | --cat-short] → list/filter UCS entries
 sfx audit      →  SELECT queries against index
@@ -157,7 +157,7 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 
 ### Key modules
 
-- **`db.py`** — single source of truth for schema. `get_connection(db_path)` creates the DB, applies schema idempotently, enables WAL mode and foreign keys. Default DB: `~/.wavwarden/index.db`.
+- **`db.py`** — single source of truth for schema. `get_connection(db_path)` creates the DB, applies schema idempotently, enables WAL mode and foreign keys. Default DB: `~/.sfxworkbench/index.db`.
 - **`audio.py`** — wraps `soundfile` (libsndfile). Handles 32-bit float WAV, RF64, W64, AIFF, FLAC. Falls back gracefully if soundfile isn't installed. Also does a manual RIFF chunk walk to detect `bext` and `iXML` chunks, since soundfile doesn't expose those.
 - **`health.py`** — extracted verbatim from `audit.py`. 8 filename checks; returns `list[FilenameIssue]`. Used by both `sfx scan` (written to `fn_issues` table) and `audit.py` (inline in report).
 - **`clean.py`** — `find_junk()` returns `(junk_files, junk_dirs)`. AppleDouble files (`._*`) bypass the audio-extension safety guard since they're always metadata blobs regardless of apparent extension.
@@ -177,7 +177,7 @@ sfx search Q   →  FTS5 MATCH query on files_fts
 - **`tag_suggest.py`** — Phase B report-only raw tag suggestions. Pure suggestor: composes UCS stem parsing, optional UCS catalog matches, filename heuristics (abbreviation expansion, take-number extraction), parent-folder evidence, and related-group membership into versioned JSON suggestion plans. UCS-derived category fields are provenance (`ucs_category`, `ucs_subcategory`), not final semantic tags. No filesystem or DB writes.
 - **`tag_plan.py`** — reviewed metadata-writing workflow. Builds tag plans from suggestions, summarizes batch review groups, stamps review state, validates file anchors, and writes approved entries to SQLite `accepted_tags`; it does not mutate audio files.
 - **`tag_sidecar.py`** — portable JSON sidecar export/import for DB-only accepted tags. Import validates indexed path, size, mtime, MD5, and file existence before writing.
-- **`ucs_catalog.py`** — UCS catalog import, cache, and lookup. Parses the official `Soundminer/_categorylist.csv` from `UCS Release.zip`, writes a normalized JSON cache at `~/.wavwarden/ucs_catalog.json` with provenance (source URL, release version, import timestamp, attribution). Discovery chain for `load_catalog()`: explicit path → `WAVWARDEN_UCS_DATA` env var → default cache → `None`. XLSX import is deferred.
+- **`ucs_catalog.py`** — UCS catalog import, cache, and lookup. Parses the official `Soundminer/_categorylist.csv` from `UCS Release.zip`, writes a normalized JSON cache at `~/.sfxworkbench/ucs_catalog.json` with provenance (source URL, release version, import timestamp, attribution). Discovery chain for `load_catalog()`: explicit path → `SFXWORKBENCH_UCS_DATA` env var → default cache → `None`. XLSX import is deferred.
 - **`ucs_validate.py`** — report-only validation of UCS-looking indexed filenames against a loaded UCS catalog.
 - **`ucs.py`** — shared UCS-looking filename heuristic/parser. This is not a full official UCS catalog validator yet.
 - **`similarity.py`** — optional deterministic audio descriptor crawler, cached event segment detection, whole-file/segment similarity search, report-only similarity audit, and DB-only review feedback. It never mutates audio or makes cleanup decisions.

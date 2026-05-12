@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from wavwarden.db import get_connection
-from wavwarden.models import RelatedSoundFile, RelatedSoundGroup, UcsCatalog, UcsCatalogProvenance, UcsEntry
-from wavwarden.tag_plan import apply_tag_plan, build_tag_plan, review_tag_plan, summarize_tag_plan, write_tag_plan
-from wavwarden.tag_sidecar import build_tag_sidecar_report, import_tag_sidecar, write_tag_sidecar_report
-from wavwarden.tag_suggest import (
+from sfxworkbench.db import get_connection
+from sfxworkbench.models import RelatedSoundFile, RelatedSoundGroup, UcsCatalog, UcsCatalogProvenance, UcsEntry
+from sfxworkbench.tag_plan import apply_tag_plan, build_tag_plan, review_tag_plan, summarize_tag_plan, write_tag_plan
+from sfxworkbench.tag_sidecar import build_tag_sidecar_report, import_tag_sidecar, write_tag_sidecar_report
+from sfxworkbench.tag_suggest import (
     build_tag_suggestion_report,
     suggest_from_filename,
     suggest_from_group,
@@ -471,7 +471,7 @@ def test_write_tag_suggestion_report_round_trip(tmp_path: Path, tmp_db: Path) ->
 
     payload = json.loads(out.read_text())
     assert payload["schema_version"] == 1
-    assert payload["tool"] == "wavwarden"
+    assert payload["tool"] == "sfxworkbench"
     assert payload["root"] == str(root.resolve())
     assert payload["entries"][0]["path"].endswith("SFX_HIT_01.wav")
     assert payload["summary"]["files_with_suggestions"] == 1
@@ -619,6 +619,43 @@ def test_tag_plan_filters_source_report_by_source_and_field(tmp_path: Path, tmp_
     assert plan.summary.candidate_entries == 2
     assert {entry.field for entry in plan.entries} == {"ucs_category", "ucs_subcategory"}
     assert {entry.source for entry in plan.entries} == {"ucs_catalog"}
+
+
+def test_tag_plan_can_import_reviewed_csv_bulk_updates(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "Impacts"
+    folder.mkdir(parents=True)
+    audio = folder / "Hit 01.wav"
+    audio.write_bytes(b"not really audio")
+    _seed_files(tmp_db, [{"path": audio, "md5": "A", "size": len(audio.read_bytes())}])
+    csv_path = tmp_path / "bulk_tags.csv"
+    csv_path.write_text(
+        "path,field,value,source,review_status\n"
+        "Impacts/Hit 01.wav,description,Metal Hit,user_csv,approved\n"
+        "Impacts/Hit 01.wav,keyword,impact,user_csv,approved\n",
+        encoding="utf-8",
+    )
+
+    plan = build_tag_plan(root, db_path=tmp_db, csv_path=csv_path)
+
+    assert plan.source_report == str(csv_path)
+    assert plan.errors == []
+    assert plan.summary.candidate_entries == 2
+    assert plan.summary.approved_entries == 2
+    assert {entry.source for entry in plan.entries} == {"user_csv"}
+
+    plan_path = tmp_path / "csv_tag_plan.json"
+    write_tag_plan(plan, plan_path, quiet=True)
+    applied = apply_tag_plan(plan_path, db_path=tmp_db, dry_run=False, require_reviewed=True, quiet=True)
+
+    assert applied.applied == 2
+    conn = get_connection(tmp_db)
+    rows = conn.execute("SELECT field, value, source FROM accepted_tags ORDER BY field").fetchall()
+    conn.close()
+    assert [(row["field"], row["value"], row["source"]) for row in rows] == [
+        ("description", "Metal Hit", "user_csv"),
+        ("keyword", "impact", "user_csv"),
+    ]
 
 
 def test_tag_plan_summarize_groups_values_for_review(tmp_path: Path, tmp_db: Path) -> None:

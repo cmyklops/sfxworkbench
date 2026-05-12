@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Standalone zero-dependency wavwarden Phase 0 auditor.
+"""Standalone zero-dependency sfxworkbench Phase 0 auditor.
 
-This file intentionally does not import from the wavwarden package. It is meant
+This file intentionally does not import from the sfxworkbench package. It is meant
 to run with only Python 3.9+ on an unprepared machine.
 """
 
@@ -163,7 +163,7 @@ def audit(root: Path, no_hash: bool = False) -> dict:
 def markdown_report(report: dict) -> str:
     summary = report["summary"]
     lines = [
-        "# wavwarden Audit Report",
+        "# sfxworkbench Audit Report",
         "",
         f"Root: `{report['root']}`",
         f"Generated: `{report['generated_at']}`",
@@ -198,7 +198,7 @@ def markdown_report(report: dict) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Standalone wavwarden audit.")
+    parser = argparse.ArgumentParser(description="Standalone sfxworkbench audit.")
     parser.add_argument("path", type=Path)
     parser.add_argument("--output-dir", type=Path, default=Path("."))
     parser.add_argument("--no-hash", action="store_true", help="Skip MD5 hashing and duplicate detection.")

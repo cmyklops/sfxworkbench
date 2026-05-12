@@ -3,8 +3,8 @@
 import json
 from pathlib import Path
 
-from wavwarden.db import get_connection
-from wavwarden.scan_errors import apply_scan_error_plan, build_scan_error_plan, classify_scan_error
+from sfxworkbench.db import get_connection
+from sfxworkbench.scan_errors import apply_scan_error_plan, build_scan_error_plan, classify_scan_error
 
 
 def _seed_scan_error(tmp_db: Path, path: Path, scan_error: str) -> None:

@@ -1,16 +1,17 @@
-"""Tests for wavwarden.dedupe."""
+"""Tests for sfxworkbench.dedupe."""
 
 import json
 from pathlib import Path
 
-from wavwarden.db import get_connection
-from wavwarden.dedupe import (
+from sfxworkbench.db import get_connection
+from sfxworkbench.dedupe import (
     apply_dedupe_plan,
     find_duplicates,
     review_dedupe_plan,
     summarize_duplicates,
     write_dedupe_plan,
 )
+from sfxworkbench.delete import build_delete_plan
 
 
 def _seed_files(tmp_db: Path, files: list[dict]) -> None:
@@ -157,7 +158,7 @@ def test_write_dedupe_plan(tmp_db: Path, tmp_path: Path) -> None:
 
     plan = json.loads(plan_path.read_text())
     assert plan["schema_version"] == 1
-    assert plan["tool"] == "wavwarden"
+    assert plan["tool"] == "sfxworkbench"
     assert "groups" in plan
     assert len(plan["groups"]) == 1
     actions = [e["action"] for e in plan["groups"][0]]
@@ -195,6 +196,31 @@ def test_write_dedupe_plan_prefers_safe_folder_keep_and_ignores_protected_copies
     assert entries[2]["path"] == str(duplicate)
     assert entries[2]["action"] == "remove"
     assert entries[2]["keep_protected_by"] == str(safe.resolve())
+
+
+def test_write_dedupe_plan_uses_config_safe_folder(tmp_db: Path, tmp_path: Path) -> None:
+    safe = tmp_path / "Master"
+    protected = safe / "a.wav"
+    duplicate = tmp_path / "Imports" / "a.wav"
+    _seed_files(
+        tmp_db,
+        [
+            {"path": str(duplicate), "md5": "AAA", "size": 100},
+            {"path": str(protected), "md5": "AAA", "size": 100},
+        ],
+    )
+    config_path = tmp_path / "sfxworkbench.json"
+    config_path.write_text(json.dumps({"safe_folders": [str(safe)]}))
+    plan_path = tmp_path / "plan.json"
+
+    write_dedupe_plan(find_duplicates(tmp_db), plan_path, config_path=config_path, quiet=True)
+
+    plan = json.loads(plan_path.read_text())
+    assert plan["safe_folders"] == [str(safe.resolve())]
+    assert plan["groups"][0][0]["path"] == str(protected)
+    assert plan["groups"][0][0]["action"] == "keep"
+    assert plan["groups"][0][1]["path"] == str(duplicate)
+    assert plan["groups"][0][1]["action"] == "remove"
 
 
 def test_write_dedupe_plan_uses_preferred_folder_and_extension(tmp_db: Path, tmp_path: Path) -> None:
@@ -370,6 +396,43 @@ def test_apply_dedupe_refuses_cli_safe_folder_even_for_old_plan(tmp_path: Path) 
     ]
 
 
+def test_apply_dedupe_refuses_config_safe_folder_even_for_old_plan(tmp_path: Path) -> None:
+    a = tmp_path / "keep.wav"
+    b = tmp_path / "Protected" / "drop.wav"
+    b.parent.mkdir(parents=True, exist_ok=True)
+    a.write_bytes(b"audio")
+    b.write_bytes(b"audio")
+    config_path = tmp_path / "sfxworkbench.json"
+    config_path.write_text(json.dumps({"safe_folders": [str(b.parent)]}))
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "groups": [
+                    [
+                        {"path": str(a), "action": "keep", "size_bytes": 5},
+                        {"path": str(b), "action": "remove", "size_bytes": 5},
+                    ]
+                ]
+            }
+        )
+    )
+    review_dedupe_plan(plan_path, approve_all=True, quiet=True)
+
+    result = apply_dedupe_plan(
+        plan_path,
+        dry_run=False,
+        quarantine_dir=tmp_path / "q",
+        require_reviewed=True,
+        config_path=config_path,
+        quiet=True,
+    )
+
+    assert result.quarantined == 0
+    assert b.exists()
+    assert result.errors[0]["safe_folder"] == str(b.parent.resolve())
+
+
 def test_apply_dedupe_removes_files_and_updates_db(tmp_db: Path, tmp_path: Path) -> None:
     """After --apply, removed files should be quarantined AND deleted from the index."""
     a = tmp_path / "keep.wav"
@@ -414,6 +477,37 @@ def test_apply_dedupe_removes_files_and_updates_db(tmp_db: Path, tmp_path: Path)
     conn.close()
     assert str(a) in paths
     assert str(b) not in paths, "Removed file should also be deleted from the index"
+
+
+def test_apply_dedupe_writes_quarantine_log_for_delete_planning(tmp_path: Path) -> None:
+    keep = tmp_path / "keep.wav"
+    drop = tmp_path / "drop.wav"
+    keep.write_bytes(b"audio")
+    drop.write_bytes(b"audio")
+    plan_path = tmp_path / "plan.json"
+    log_path = tmp_path / "dedupe_quarantine_log.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "groups": [
+                    [
+                        {"path": str(keep), "action": "keep", "size_bytes": 5},
+                        {"path": str(drop), "action": "remove", "size_bytes": 5},
+                    ]
+                ]
+            }
+        )
+    )
+
+    result = apply_dedupe_plan(plan_path, dry_run=False, quarantine_dir=tmp_path / "q", log_path=log_path)
+    payload = json.loads(log_path.read_text())
+    delete_plan = build_delete_plan(log_path)
+
+    assert result.log_path == str(log_path)
+    assert payload["entries"][0]["path"] == str(drop)
+    assert Path(payload["entries"][0]["quarantine_path"]).exists()
+    assert delete_plan.summary.candidate_entries == 1
+    assert delete_plan.entries[0].source_path == str(drop)
 
 
 def test_apply_dedupe_records_errors(tmp_path: Path) -> None:

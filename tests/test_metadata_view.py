@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from wavwarden.db import get_connection
-from wavwarden.metadata_view import build_metadata_view_report
-from wavwarden.models import UcsCatalog, UcsCatalogProvenance, UcsEntry
+from sfxworkbench.db import get_connection
+from sfxworkbench.metadata_view import build_metadata_view_report
+from sfxworkbench.models import UcsCatalog, UcsCatalogProvenance, UcsEntry
 
 
 def _catalog(path: Path) -> None:
@@ -82,6 +82,15 @@ def _seed_file(tmp_db: Path, path: Path) -> None:
             "2026",
         ),
     )
+    conn.execute(
+        """
+        INSERT INTO metadata_fields (
+            file_id, namespace, key, value, source, updated_at
+        )
+        VALUES (1, ?, ?, ?, ?, ?)
+        """,
+        ("bext", "Description", "Small fire burst", "riff", "2026"),
+    )
     conn.commit()
     conn.close()
 
@@ -102,6 +111,9 @@ def test_metadata_view_reports_indexed_metadata_tags_and_ucs_catalog(tmp_path: P
     assert viewed.has_bext is True
     assert viewed.has_riff_info is True
     assert viewed.metadata_sources == ["soundfile", "wavinfo"]
+    assert viewed.embedded_fields[0].namespace == "bext"
+    assert viewed.embedded_fields[0].key == "Description"
+    assert viewed.embedded_fields[0].value == "Small fire burst"
     assert viewed.ucs is not None
     assert viewed.ucs.catalog_match is True
     assert viewed.ucs.catalog_cat_id == "FireBurst"

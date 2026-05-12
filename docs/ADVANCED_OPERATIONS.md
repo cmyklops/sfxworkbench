@@ -1,13 +1,13 @@
 # Advanced Operations Plan
 
-wavwarden's default product posture stays conservative: report first, review
+sfxworkbench's default product posture stays conservative: report first, review
 second, quarantine or undoable apply last. Some studios still need deeper tools
 for duplicate-heavy databases, processed files, dual-mono assets, and permanent
 cleanup. Those workflows belong behind explicit advanced flags, reviewed plans,
 and stronger recovery requirements.
 
 This plan captures product lessons from SMDB Companion and similar professional
-sound-library maintenance tools while keeping wavwarden's filesystem-first,
+sound-library maintenance tools while keeping sfxworkbench's filesystem-first,
 JSON-first safety model.
 
 ## Product Lessons To Adopt
@@ -15,7 +15,7 @@ JSON-first safety model.
 ### Sononym-Inspired Review Ideas
 
 Sononym is a strong reference for similarity-heavy sample browsing and duplicate
-review, but wavwarden should translate those ideas into explicit JSON plans
+review, but sfxworkbench should translate those ideas into explicit JSON plans
 rather than a hidden browser database.
 
 Useful lessons to adopt:
@@ -37,7 +37,7 @@ Useful lessons to adopt:
 ### Soundminer-Inspired Similarity Crawler
 
 Soundminer's similarity crawler points to a practical backend shape for
-Sononym-like discovery without making wavwarden browser-first. Heavy
+Sononym-like discovery without making sfxworkbench browser-first. Heavy
 audio-content work should run as a separate crawler that can be resumed,
 scheduled, CPU-limited, and cached.
 
@@ -70,22 +70,55 @@ Planned behavior:
 
 First implemented slice:
 
+- shared JSON config loading for duplicate-preservation rules. Commands that
+  support it accept `--config PATH`; `SFXWORKBENCH_CONFIG` is also available to
+  lower-level helpers. The supported shape is:
+
+```json
+{
+  "safe_folders": ["~/CommercialLibraries/Master"],
+  "preservation": {
+    "safe_folders": [],
+    "prefer_folders": ["~/CommercialLibraries/Curated"],
+    "prefer_extensions": ["wav"]
+  }
+}
+```
+
 - `sfx dedupe --output PLAN --safe-folder PATH` records protected folders in
   the plan, prefers protected duplicate files as keep copies, and marks
   protected extra copies as ignored rather than remove candidates.
+- `sfx dedupe --config CONFIG --output PLAN` merges config-backed safe folders
+  and preservation priority before CLI overrides.
 - `sfx dedupe --apply PLAN --safe-folder PATH` combines CLI overrides with
   plan-recorded safe folders and refuses to quarantine or delete protected
   files, including for older plans.
+- `sfx dedupe --apply PLAN --config CONFIG` re-checks config-backed safe
+  folders at apply time, including for older plans.
 - `sfx packs plan --safe-folder PATH` records protected folders in the plan,
   prefers protected exact duplicates as keep folders, and marks protected
   sources as ignored rather than quarantine candidates.
+- `sfx packs plan --config CONFIG` merges config-backed safe folders and
+  prefer-folder rules before CLI overrides. Extension preferences are ignored
+  for folder-level pack decisions.
 - `sfx packs apply --safe-folder PATH` combines CLI overrides with plan-recorded
   safe folders and refuses to move protected source folders, including for older
   plans.
+- `sfx packs apply PLAN --config CONFIG` re-checks config-backed safe folders
+  at apply time.
+- `sfx organize audit --config CONFIG`, `sfx organize nesting-plan --config
+  CONFIG`, `sfx organize apply --config CONFIG`, and `sfx organize
+  nesting-apply --config CONFIG` block protected move/flatten entries during
+  plan generation and re-check them during apply validation.
+- `sfx rename PATH --config CONFIG` blocks protected rename entries during
+  preview, and `sfx rename PATH --apply --config CONFIG` re-checks config-backed
+  safe folders for older plans.
+- `sfx metadata write-apply PLAN --config CONFIG` treats safe folders as an
+  original-audio write guard while leaving DB-only tag plans unaffected.
 
 ### Preservation Priority
 
-When duplicates exist, wavwarden should explain which copy it recommends keeping
+When duplicates exist, sfxworkbench should explain which copy it recommends keeping
 and why. The user should be able to tune these rules before plan generation.
 
 Implemented initial CLI rule inputs:
@@ -128,10 +161,10 @@ Each preset should still emit the underlying reports and plans.
 Support comparing a candidate import/show dump against a master index before
 copying or organizing it.
 
-Planned shape:
+Implemented first slice:
 
 ```bash
-uv run sfx compare PATH --against-db ~/.wavwarden/index.db --output compare_report.json
+uv run sfx compare audit PATH --against-db ~/.sfxworkbench/index.db --output compare_report.json
 uv run sfx compare plan compare_report.json --output compare_plan.json
 ```
 
@@ -141,15 +174,19 @@ fingerprints can come later as an optional capability.
 ### Processed-File Detection
 
 Some libraries contain rendered AudioSuite/plugin variants such as normalized,
-reverbed, stretched, denoised, or pitch-shifted files. wavwarden should report
+reverbed, stretched, denoised, or pitch-shifted files. sfxworkbench should report
 these patterns before any cleanup.
 
-Planned behavior:
+Implemented behavior:
 
 - detect common suffix/token patterns
 - group processed candidates with likely source files
 - report method, confidence, and evidence
 - never delete or replace processed files by default
+
+```bash
+uv run sfx processed PATH --db ~/.sfxworkbench/index.db --output processed_files.json
+```
 
 ## Permanent Disk Deletion
 
@@ -168,15 +205,15 @@ Default deletion ladder:
 Planned commands:
 
 ```bash
-uv run sfx delete plan quarantine_log.json --output delete_plan.json
+uv run sfx delete plan apply_logs/quarantine_log.json --output delete_plan.json
 uv run sfx delete review delete_plan.json --approve-all
-uv run sfx delete apply delete_plan.json --require-reviewed --i-understand-permanent-delete
+uv run sfx delete apply delete_plan.json --require-reviewed --i-understand-permanent-delete --apply
 ```
 
 Required safety rules:
 
 - refuse direct deletion from live scan reports in the first implementation
-- delete only files/folders already moved into a wavwarden quarantine
+- delete only files/folders already moved into a sfxworkbench quarantine
 - require reviewed delete plans
 - require a loud, explicit permanent-delete flag
 - record immutable delete logs with path, size, hash, source quarantine log, and
@@ -188,8 +225,9 @@ delete is proven and should remain opt-in.
 
 ## Dual-Mono Detection And Conversion
 
-Dual-mono handling is audio-content mutation, so it belongs outside the main
-beta safety promise. The first implementation should detect candidates only.
+Dual-mono handling is audio-content conversion, so it belongs outside the main
+beta safety promise. The first implementation detects candidates and can write
+reviewed mono copies to a separate output root; originals are preserved.
 
 ### Phase 1: Report
 
@@ -208,7 +246,7 @@ Report evidence:
 Suggested command:
 
 ```bash
-uv run sfx audio dual-mono audit PATH --db ~/.wavwarden/index.db --output dual_mono_report.json
+uv run sfx audio dual-mono audit PATH --db ~/.sfxworkbench/index.db --output dual_mono_report.json
 ```
 
 ### Phase 2: Plan
@@ -229,7 +267,7 @@ original file anchors, and rollback/recovery expectations.
 Conversion should be opt-in and conservative:
 
 ```bash
-uv run sfx audio dual-mono apply dual_mono_plan.json --require-reviewed --output-root ~/ConvertedMono
+uv run sfx audio dual-mono apply dual_mono_plan.json --require-reviewed --output-root ~/ConvertedMono --apply
 ```
 
 Initial apply rules:
@@ -239,7 +277,7 @@ Initial apply rules:
 - preserve original files
 - write conversion logs with tool versions and technical parameters
 - require explicit `--replace-with-backup` before any in-place replacement mode
-- update SQLite only for files actually written or moved by wavwarden
+- do not update the original library index for copy-output conversion
 
 In-place replacement, source quarantine, and permanent deletion of originals
 should come only after copy-output conversion is well tested on fixtures and

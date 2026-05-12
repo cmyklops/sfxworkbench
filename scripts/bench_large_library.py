@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a synthetic library and benchmark wavwarden scan throughput."""
+"""Generate a synthetic library and benchmark sfxworkbench scan throughput."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import unicodedata
 import wave
 from pathlib import Path
 
-from wavwarden.scan import scan_library
+from sfxworkbench.scan import scan_library
 
 
 def make_tiny_wav(path: Path, sample_rate: int = 48000, channels: int = 2, nframes: int = 64) -> None:
@@ -66,9 +66,9 @@ def run_scan(root: Path, db: Path, skip_hash: bool, force_rescan: bool) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Benchmark wavwarden scan on a synthetic large library.")
-    parser.add_argument("--root", type=Path, default=Path("/tmp/wavwarden-bench/library"))
-    parser.add_argument("--db", type=Path, default=Path("/tmp/wavwarden-bench/index.db"))
+    parser = argparse.ArgumentParser(description="Benchmark sfxworkbench scan on a synthetic large library.")
+    parser.add_argument("--root", type=Path, default=Path("/tmp/sfxworkbench-bench/library"))
+    parser.add_argument("--db", type=Path, default=Path("/tmp/sfxworkbench-bench/index.db"))
     parser.add_argument("--files", type=int, default=10_000)
     parser.add_argument("--dirs", type=int, default=100)
     parser.add_argument("--reuse", action="store_true", help="Reuse the existing synthetic library.")

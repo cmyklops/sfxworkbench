@@ -1,6 +1,6 @@
 # Pack And Folder Duplicate Detection
 
-wavwarden's exact `sfx dedupe` workflow catches byte-identical files across a
+sfxworkbench's exact `sfx dedupe` workflow catches byte-identical files across a
 library. It supports repeated `--safe-folder PATH` options during plan and
 apply so protected duplicate files are kept or ignored rather than removed, and
 repeated `--prefer-folder PATH` / `--prefer-extension EXT` options during plan
@@ -32,22 +32,22 @@ whole folder is redundant, partial, newer, or worth preserving.
 Implemented:
 
 ```bash
-uv run sfx packs audit PATH --db ~/.wavwarden/index.db --output ~/reports/pack_overlap_report.json
+uv run sfx packs audit PATH --db ~/.sfxworkbench/index.db --output ~/reports/pack_overlap_report.json
 uv run sfx packs plan --report ~/reports/pack_overlap_report.json --output ~/reports/pack_consolidation_plan.json
 uv run sfx packs plan --report ~/reports/pack_overlap_report.json --safe-folder ~/CommercialLibraries/Master --output ~/reports/pack_consolidation_plan.json
 uv run sfx packs plan --report ~/reports/pack_overlap_report.json --prefer-folder ~/CommercialLibraries/Master --output ~/reports/pack_consolidation_plan.json
 uv run sfx packs review ~/reports/pack_consolidation_plan.json --approve-group 1
 uv run sfx packs apply ~/reports/pack_consolidation_plan.json --require-reviewed
 uv run sfx packs apply ~/reports/pack_consolidation_plan.json --safe-folder ~/CommercialLibraries/Master --require-reviewed
-uv run sfx packs apply ~/reports/pack_consolidation_plan.json --apply --require-reviewed --log pack_quarantine_log.json
-uv run sfx packs undo pack_quarantine_log.json --apply
+uv run sfx packs apply ~/reports/pack_consolidation_plan.json --apply --require-reviewed --log ~/reports/apply_logs/pack_quarantine_log.json
+uv run sfx packs undo ~/reports/apply_logs/pack_quarantine_log.json --apply
 ```
 
 Planned later:
 
 ```bash
 uv run sfx packs apply ~/reports/pack_consolidation_plan.json --merge-unique-files
-uv run sfx delete plan pack_quarantine_log.json --output delete_plan.json
+uv run sfx delete plan ~/reports/apply_logs/pack_quarantine_log.json --output delete_plan.json
 ```
 
 The workflow is intentionally staged: audit first, plan second, reviewed apply
@@ -143,7 +143,7 @@ Current apply behavior:
 
 Permanent deletion should remain an advanced, explicit action after the
 quarantine workflow is proven on copied libraries. The first deletion workflow
-should delete only from wavwarden quarantine logs, require reviewed delete
+should delete only from sfxworkbench quarantine logs, require reviewed delete
 plans, and write immutable delete logs with path, size, hash, quarantine source,
 and timestamp.
 

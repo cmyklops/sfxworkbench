@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import subprocess
 
-from wavwarden import metadata_backends
-from wavwarden.metadata_backends import build_metadata_backends_report
+from sfxworkbench import metadata_backends
+from sfxworkbench.metadata_backends import build_metadata_backends_report
 
 
 def test_metadata_backends_reports_missing_bwfmetaedit(monkeypatch) -> None:

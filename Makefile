@@ -21,7 +21,7 @@ json-smoke:
 	uv run --extra dev poe json-smoke
 
 audit-fixture:
-	python3 audit.py $(FIXTURE_PATH) --output-dir /tmp/wavwarden-audit-fixture --json
+	python3 audit.py $(FIXTURE_PATH) --output-dir /tmp/sfxworkbench-audit-fixture --json
 
 bench-scan:
-	uv run --extra dev poe bench-scan --root /tmp/wavwarden-bench/library --files $(BENCH_LIMIT) --no-hash
+	uv run --extra dev poe bench-scan --root /tmp/sfxworkbench-bench/library --files $(BENCH_LIMIT) --no-hash

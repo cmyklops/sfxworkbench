@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "wavwarden"
+name = "sfxworkbench"
 version = "0.1.0"
-description = "Sound library hygiene — audit, clean, deduplicate, scan, search"
+description = "Safety-first sound-effects library hygiene CLI"
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "Matt Wesdock" }]
@@ -23,24 +23,29 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "typer[all]>=0.12",
+    "typer>=0.12",
+    "rich>=13.0",
     "pydantic>=2.0",
     "soundfile>=0.12",
     "numpy>=1.24",
 ]
 
 [project.scripts]
-sfx = "wavwarden.cli:app"
+sfx = "sfxworkbench.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/cmyklops/wavwarden"
-Repository = "https://github.com/cmyklops/wavwarden"
-Issues = "https://github.com/cmyklops/wavwarden/issues"
-Changelog = "https://github.com/cmyklops/wavwarden/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/cmyklops/sfxworkbench"
+Repository = "https://github.com/cmyklops/sfxworkbench"
+Issues = "https://github.com/cmyklops/sfxworkbench/issues"
+Changelog = "https://github.com/cmyklops/sfxworkbench/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/cmyklops/sfxworkbench#readme"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-cov", "ruff>=0.8", "poethepoet>=0.30"]
 metadata = ["wavinfo>=4.0", "mutagen>=1.47"]
+tui = [
+    "textual>=0.89",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -48,7 +53,7 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 120
 target-version = "py310"
-src = ["wavwarden", "tests"]
+src = ["sfxworkbench", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

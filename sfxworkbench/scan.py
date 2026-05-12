@@ -1,0 +1,273 @@
+"""sfx scan command — index a library path into SQLite."""
+
+import hashlib
+import json
+from collections.abc import Callable
+from datetime import datetime, timezone
+from pathlib import Path
+
+from rich.console import Console
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
+
+from sfxworkbench import audio as audio_mod
+from sfxworkbench import health, junk
+from sfxworkbench.db import get_connection
+from sfxworkbench.metadata_fields import replace_metadata_fields
+from sfxworkbench.models import ScanResult
+from sfxworkbench.ucs import looks_ucs
+
+console = Console()
+
+# Commit every N files to balance throughput vs. crash-recovery granularity.
+_COMMIT_BATCH = 500
+
+ProgressCallback = Callable[[str, int, int | None, str], None]
+CancelCallback = Callable[[], bool]
+
+
+class _ScanCancelled(Exception):
+    """Internal signal used to stop a scan at a safe checkpoint."""
+
+
+def _should_cancel(cancel_requested: CancelCallback | None) -> bool:
+    if cancel_requested is None:
+        return False
+    try:
+        return bool(cancel_requested())
+    except Exception:
+        return False
+
+
+def _md5(path: Path, block: int = 65536, cancel_requested: CancelCallback | None = None) -> str | None:
+    h = hashlib.md5()
+    try:
+        with open(path, "rb") as f:
+            while chunk := f.read(block):
+                if _should_cancel(cancel_requested):
+                    raise _ScanCancelled
+                h.update(chunk)
+        return h.hexdigest()
+    except _ScanCancelled:
+        raise
+    except Exception:
+        return None
+
+
+def scan_library(
+    root: Path,
+    db_path: Path,
+    skip_hash: bool = False,
+    force_rescan: bool = False,
+    quiet: bool = False,
+    progress_callback: ProgressCallback | None = None,
+    cancel_requested: CancelCallback | None = None,
+) -> ScanResult:
+    """Crawl root, index all audio files into SQLite. Incremental by default
+    (skips files where mtime + size match existing record)."""
+    root = root.resolve()
+    conn = get_connection(db_path)
+
+    # Collect all audio files first (for an accurate progress bar)
+    if not quiet:
+        console.print(f"[cyan]Collecting files under {root}...[/cyan]")
+    if progress_callback is not None:
+        progress_callback("collecting", 0, None, f"Collecting files under {root}")
+    all_files: list[Path] = []
+    for f in root.rglob("*"):
+        if _should_cancel(cancel_requested):
+            break
+        if not f.is_file():
+            continue
+        if junk.is_inside_junk_dir(f):
+            continue
+        if junk.is_junk_file(f):
+            continue
+        if f.suffix.lower() in junk.AUDIO_EXTENSIONS:
+            all_files.append(f)
+
+    total = len(all_files)
+    if not quiet:
+        console.print(f"Found [yellow]{total:,}[/yellow] audio files.")
+    if progress_callback is not None:
+        progress_callback("scanning", 0, total, f"Found {total:,} audio files")
+
+    result = ScanResult(total=total)
+    now_str = datetime.now(timezone.utc).isoformat()
+    pending = 0  # uncommitted writes since last batch flush
+    processed = 0
+    cancelled = _should_cancel(cancel_requested)
+
+    progress = None
+    if not quiet:
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            console=console,
+            transient=False,
+        )
+
+    def scan_one(f: Path) -> None:
+        nonlocal pending
+        if _should_cancel(cancel_requested):
+            raise _ScanCancelled
+        try:
+            stat = f.stat()
+        except OSError:
+            result.errors += 1
+            return
+
+        size = stat.st_size
+        mtime = stat.st_mtime
+
+        # Incremental: skip if mtime + size unchanged
+        if not force_rescan:
+            existing = conn.execute(
+                "SELECT id FROM files WHERE path = ? AND mtime = ? AND size_bytes = ?",
+                (str(f), mtime, size),
+            ).fetchone()
+            if existing:
+                result.skipped += 1
+                return
+
+        audio_info = audio_mod.read_audio_info(f)
+        fn_issues = health.check_path(f, root)
+        md5 = _md5(f, cancel_requested=cancel_requested) if not skip_hash else None
+        stem = f.stem
+        is_ucs = looks_ucs(stem)
+        scan_error = audio_info.error if audio_info else None
+        metadata_sources = json.dumps(audio_info.metadata_sources if audio_info else [])
+
+        # Single upsert with RETURNING — avoids the second SELECT id query.
+        row = conn.execute(
+            """
+            INSERT INTO files (
+                path, filename, stem, extension, size_bytes, mtime, md5,
+                sample_rate, bit_depth, channels, duration_s, subtype,
+                has_bext, has_ixml, has_riff_info, has_adm, has_cue_markers,
+                has_sampler, metadata_sources, is_ucs, scan_error, scanned_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(path) DO UPDATE SET
+                filename=excluded.filename,
+                stem=excluded.stem,
+                extension=excluded.extension,
+                size_bytes=excluded.size_bytes,
+                mtime=excluded.mtime,
+                md5=excluded.md5,
+                sample_rate=excluded.sample_rate,
+                bit_depth=excluded.bit_depth,
+                channels=excluded.channels,
+                duration_s=excluded.duration_s,
+                subtype=excluded.subtype,
+                has_bext=excluded.has_bext,
+                has_ixml=excluded.has_ixml,
+                has_riff_info=excluded.has_riff_info,
+                has_adm=excluded.has_adm,
+                has_cue_markers=excluded.has_cue_markers,
+                has_sampler=excluded.has_sampler,
+                metadata_sources=excluded.metadata_sources,
+                is_ucs=excluded.is_ucs,
+                scan_error=excluded.scan_error,
+                scanned_at=excluded.scanned_at
+            RETURNING id
+            """,
+            (
+                str(f),
+                f.name,
+                stem,
+                f.suffix.lower(),
+                size,
+                mtime,
+                md5,
+                audio_info.sample_rate if audio_info else None,
+                audio_info.bit_depth if audio_info else None,
+                audio_info.channels if audio_info else None,
+                audio_info.duration_s if audio_info else None,
+                audio_info.subtype if audio_info else None,
+                int(audio_info.has_bext) if audio_info else 0,
+                int(audio_info.has_ixml) if audio_info else 0,
+                int(audio_info.has_riff_info) if audio_info else 0,
+                int(audio_info.has_adm) if audio_info else 0,
+                int(audio_info.has_cue_markers) if audio_info else 0,
+                int(audio_info.has_sampler) if audio_info else 0,
+                metadata_sources,
+                int(is_ucs),
+                scan_error,
+                now_str,
+            ),
+        ).fetchone()
+
+        if row is not None:
+            file_id = row["id"]
+            conn.execute("DELETE FROM fn_issues WHERE file_id = ?", (file_id,))
+            if fn_issues:
+                conn.executemany(
+                    "INSERT INTO fn_issues (file_id, component, issue, detail) VALUES (?, ?, ?, ?)",
+                    [(file_id, i.component, i.issue, i.detail) for i in fn_issues],
+                )
+            replace_metadata_fields(conn, file_id=file_id, path=f, audio_info=audio_info, updated_at=now_str)
+
+        result.scanned += 1
+        pending += 1
+
+        # Batched commit for performance
+        if pending >= _COMMIT_BATCH:
+            conn.commit()
+            pending = 0
+
+    if progress is None:
+        for f in all_files:
+            if _should_cancel(cancel_requested):
+                cancelled = True
+                break
+            try:
+                scan_one(f)
+            except _ScanCancelled:
+                cancelled = True
+                break
+            processed += 1
+            if progress_callback is not None:
+                progress_callback("scanning", processed, total, f.name)
+    else:
+        with progress:
+            task = progress.add_task("Scanning...", total=total)
+            for f in all_files:
+                if _should_cancel(cancel_requested):
+                    cancelled = True
+                    break
+                try:
+                    scan_one(f)
+                except _ScanCancelled:
+                    cancelled = True
+                    break
+                progress.advance(task)
+                processed += 1
+                if progress_callback is not None:
+                    progress_callback("scanning", processed, total, f.name)
+
+    # Final flush + scan_meta update
+    conn.execute(
+        "INSERT OR REPLACE INTO scan_meta (key, value) VALUES (?, ?)",
+        ("last_scan_root", str(root)),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO scan_meta (key, value) VALUES (?, ?)",
+        ("last_scan_at", now_str),
+    )
+    conn.commit()
+    conn.close()
+
+    if progress_callback is not None:
+        phase = "cancelled" if cancelled else "complete"
+        progress_callback(phase, processed, total, "Scan cancelled" if cancelled else "Scan complete")
+    if not quiet:
+        state = "[yellow]Scan cancelled.[/yellow]" if cancelled else "[green]Scan complete.[/green]"
+        console.print(
+            f"\n{state} "
+            f"Scanned: [yellow]{result.scanned:,}[/yellow], "
+            f"Skipped (unchanged): [cyan]{result.skipped:,}[/cyan], "
+            f"Errors: [red]{result.errors:,}[/red]"
+        )
+
+    return result

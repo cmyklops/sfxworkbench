@@ -1,10 +1,11 @@
 """Tests for folder organization previews."""
 
+import json
 from pathlib import Path
 
-from wavwarden.db import get_connection
-from wavwarden.models import NestingCandidate
-from wavwarden.organize import (
+from sfxworkbench.db import get_connection
+from sfxworkbench.models import NestingCandidate
+from sfxworkbench.organize import (
     apply_nesting_plan,
     apply_organize_report,
     audit_organization,
@@ -291,6 +292,55 @@ def test_apply_organize_report_requires_review(tmp_path: Path) -> None:
     assert source.exists()
 
 
+def test_organize_audit_uses_config_safe_folder(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    safe = root / "Master"
+    safe.mkdir(parents=True)
+    protected = safe / "01 Pack"
+    protected.mkdir()
+    config_path = tmp_path / "sfxworkbench.json"
+    config_path.write_text(json.dumps({"safe_folders": [str(safe)]}))
+
+    report = audit_organization(root, depth=2, config_path=config_path)
+
+    assert report.entries == []
+    assert report.summary.planned == 0
+    assert report.summary.errors == 1
+    assert report.errors == [
+        {
+            "path": str(protected.resolve()),
+            "error": "protected by safe folder",
+            "safe_folder": str(safe.resolve()),
+        }
+    ]
+
+
+def test_apply_organize_report_refuses_config_safe_folder_for_old_report(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    safe = root / "Master"
+    safe.mkdir(parents=True)
+    protected = safe / "01 Pack"
+    protected.mkdir()
+    config_path = tmp_path / "sfxworkbench.json"
+    config_path.write_text(json.dumps({"safe_folders": [str(safe)]}))
+    report = audit_organization(root, depth=2)
+    report_path = tmp_path / "organize.json"
+    write_organize_audit_report(report, report_path, quiet=True)
+    review_organize_report(report_path, approve_all=True, quiet=True)
+
+    result = apply_organize_report(report_path, require_reviewed=True, quiet=True, config_path=config_path)
+
+    assert result.renamed == 0
+    assert result.errors == [
+        {
+            "path": str(protected.resolve()),
+            "error": "protected by safe folder",
+            "safe_folder": str(safe.resolve()),
+        }
+    ]
+    assert protected.exists()
+
+
 def test_apply_and_undo_vendor_product_folder_updates_filesystem_and_db(tmp_path: Path, tmp_db: Path) -> None:
     root = tmp_path / "library"
     source = root / "SoundMorph - Energy"
@@ -456,6 +506,46 @@ def test_redundant_nesting_reports_low_value_wrappers(tmp_path: Path) -> None:
     assert wrappers[0].audio_files == 1
 
 
+def test_redundant_nesting_preserves_source_raw_and_designed_branches(tmp_path: Path) -> None:
+    for branch_name in ("Source", "Raw"):
+        root = tmp_path / f"library_{branch_name.casefold()}"
+        branch = root / "Pack" / branch_name
+        child = branch / "Originals"
+        designed = root / "Pack" / "Designed"
+        child.mkdir(parents=True)
+        designed.mkdir(parents=True)
+        (child / "raw_hit.wav").write_bytes(b"audio")
+        (designed / "designed_hit.wav").write_bytes(b"audio")
+
+        report = audit_organization(root, pattern="redundant-nesting", depth=4)
+
+        assert not [candidate for candidate in report.candidates if candidate.path == str(branch)]
+        assert not [candidate for candidate in report.candidates if candidate.path == str(designed)]
+
+
+def test_redundant_nesting_does_not_suggest_semantic_designed_source_or_sounds_wrappers(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    paths = [
+        root / "Gearbox" / "Designed" / "gearbox_hit.wav",
+        root / "Magic_Elements_v012--Designed" / "Designed" / "magic_hit.wav",
+        root / "Magic_Elements_v012--Source" / "Source" / "source_hit.wav",
+        root / "Melee" / "Sounds" / "melee_hit.wav",
+    ]
+    for path in paths:
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"audio")
+
+    report = audit_organization(root, pattern="redundant-nesting", depth=4)
+    candidate_paths = {candidate.path for candidate in report.candidates}
+
+    assert str(root / "Gearbox" / "Designed") not in candidate_paths
+    assert str(root / "Magic_Elements_v012--Designed") not in candidate_paths
+    assert str(root / "Magic_Elements_v012--Designed" / "Designed") not in candidate_paths
+    assert str(root / "Magic_Elements_v012--Source") not in candidate_paths
+    assert str(root / "Magic_Elements_v012--Source" / "Source") not in candidate_paths
+    assert str(root / "Melee" / "Sounds") not in candidate_paths
+
+
 def test_redundant_nesting_report_is_not_applyable(tmp_path: Path) -> None:
     root = tmp_path / "library"
     wrapper = root / "Vendor" / "Wrapper" / "Only Child"
@@ -491,6 +581,28 @@ def test_build_nesting_plan_from_repeated_folder_report(tmp_path: Path) -> None:
     assert plan.entries[0].target_path == str(repeated.parent)
     assert plan.entries[0].moves[0].new_path == str(repeated.parent / "hit.wav")
     assert plan.errors == []
+
+
+def test_build_nesting_plan_uses_config_safe_folder(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    safe = root / "Master"
+    repeated = safe / "Vendor" / "Pack" / "Pack"
+    repeated.mkdir(parents=True)
+    (repeated / "hit.wav").write_bytes(b"audio")
+    config_path = tmp_path / "sfxworkbench.json"
+    config_path.write_text(json.dumps({"safe_folders": [str(safe)]}))
+    report = audit_organization(root, pattern="redundant-nesting", depth=5)
+    report_path = tmp_path / "nesting_report.json"
+    write_organize_audit_report(report, report_path, quiet=True)
+
+    plan = build_nesting_plan_from_report(report_path, quiet=True, config_path=config_path)
+
+    assert plan.entries == []
+    assert plan.errors[0] == {
+        "path": str(repeated),
+        "error": "protected by safe folder",
+        "safe_folder": str(safe.resolve()),
+    }
 
 
 def test_build_nesting_plan_reports_collisions(tmp_path: Path) -> None:
@@ -624,6 +736,40 @@ def test_build_nesting_plan_low_value_wrapper_skips_semantic_names_and_child_dir
     write_organize_audit_report(report, report_path, quiet=True)
 
     plan = build_nesting_plan_from_report(report_path, kind="low_value_wrapper", quiet=True)
+
+    assert plan.entries == []
+    assert plan.errors == []
+
+
+def test_build_nesting_plan_skips_source_designed_candidates_from_older_reports(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    source = root / "Pack" / "Source"
+    child = source / "Originals"
+    designed = root / "Pack" / "Designed"
+    child.mkdir(parents=True)
+    designed.mkdir(parents=True)
+    (child / "raw_hit.wav").write_bytes(b"audio")
+    (designed / "designed_hit.wav").write_bytes(b"audio")
+    report = audit_organization(root, pattern="redundant-nesting", depth=4)
+    report.candidates.append(
+        NestingCandidate(
+            path=str(source),
+            name="Source",
+            kind="single_child_chain",
+            suggested_action="review_collapse_wrapper",
+            reason="folder only contains one child folder and no direct files",
+            depth=2,
+            parent_path=str(source.parent),
+            target_path=str(child),
+            child_dirs=1,
+            direct_files=0,
+            audio_files=1,
+        )
+    )
+    report_path = tmp_path / "nesting_report.json"
+    write_organize_audit_report(report, report_path, quiet=True)
+
+    plan = build_nesting_plan_from_report(report_path, kind="single_child_chain", quiet=True)
 
     assert plan.entries == []
     assert plan.errors == []

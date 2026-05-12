@@ -7,8 +7,8 @@ import os
 from pathlib import Path
 
 import pytest
-from wavwarden.models import UcsCatalog
-from wavwarden.ucs_catalog import (
+from sfxworkbench.models import UcsCatalog
+from sfxworkbench.ucs_catalog import (
     ENV_OVERRIDE,
     OFFICIAL_ATTRIBUTION,
     default_cache_path,
@@ -104,7 +104,7 @@ def test_save_and_load_catalog_round_trip(tmp_path: Path) -> None:
 
     payload = json.loads(cache.read_text(encoding="utf-8"))
     assert payload["schema_version"] == 1
-    assert payload["tool"] == "wavwarden"
+    assert payload["tool"] == "sfxworkbench"
     assert payload["provenance"]["source_url"] == "https://universalcategorysystem.com/"
     assert payload["provenance"]["entry_count"] == 4
 
@@ -124,7 +124,7 @@ def test_load_catalog_explicit_path_takes_priority(tmp_path: Path, monkeypatch) 
     # Set both env override and a fake default cache; explicit must win.
     monkeypatch.setenv(ENV_OVERRIDE, str(tmp_path / "wrong_env_cache.json"))
     monkeypatch.setattr(
-        "wavwarden.ucs_catalog.default_cache_path",
+        "sfxworkbench.ucs_catalog.default_cache_path",
         lambda: tmp_path / "wrong_default_cache.json",
     )
 
@@ -142,7 +142,7 @@ def test_load_catalog_uses_env_override(tmp_path: Path, monkeypatch) -> None:
 
     monkeypatch.setenv(ENV_OVERRIDE, str(env_cache))
     monkeypatch.setattr(
-        "wavwarden.ucs_catalog.default_cache_path",
+        "sfxworkbench.ucs_catalog.default_cache_path",
         lambda: tmp_path / "missing_default.json",
     )
 
@@ -160,7 +160,7 @@ def test_load_catalog_falls_back_to_default_cache(tmp_path: Path, monkeypatch) -
 
     # Clear env override and point default_cache_path() at our temp file.
     monkeypatch.delenv(ENV_OVERRIDE, raising=False)
-    monkeypatch.setattr("wavwarden.ucs_catalog.default_cache_path", lambda: cache)
+    monkeypatch.setattr("sfxworkbench.ucs_catalog.default_cache_path", lambda: cache)
 
     loaded = load_catalog(None)
     assert loaded is not None
@@ -170,7 +170,7 @@ def test_load_catalog_falls_back_to_default_cache(tmp_path: Path, monkeypatch) -
 def test_load_catalog_returns_none_when_nothing_available(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv(ENV_OVERRIDE, raising=False)
     monkeypatch.setattr(
-        "wavwarden.ucs_catalog.default_cache_path",
+        "sfxworkbench.ucs_catalog.default_cache_path",
         lambda: tmp_path / "definitely_does_not_exist.json",
     )
     assert load_catalog(None) is None
@@ -192,7 +192,7 @@ def test_default_cache_path_lives_alongside_index_db() -> None:
     cache = default_cache_path()
     assert cache.name == "ucs_catalog.json"
     # Sibling of the default index.db location.
-    assert cache.parent == Path(os.path.expanduser("~/.wavwarden"))
+    assert cache.parent == Path(os.path.expanduser("~/.sfxworkbench"))
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +203,7 @@ def test_default_cache_path_lives_alongside_index_db() -> None:
 def test_import_catalog_writes_cache_and_returns_summary(tmp_path: Path) -> None:
     src = tmp_path / "_categorylist.csv"
     _write_sample_csv(src)
-    cache = tmp_path / "wavwarden" / "ucs_catalog.json"
+    cache = tmp_path / "sfxworkbench" / "ucs_catalog.json"
 
     result, catalog = import_catalog(src, output_path=cache, release_version="v8.2.1")
 

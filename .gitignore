@@ -13,4 +13,7 @@ dedupe_plan_*.json
 rename_log_*.json
 metadata_write_apply_log_*.json
 tag_apply_log_*.json
+delete_apply_log_*.json
+dual_mono_apply_log_*.json
+reports/logs/
 library.csv

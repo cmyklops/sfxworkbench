@@ -3,8 +3,8 @@
 import json
 from pathlib import Path
 
-from wavwarden.db import get_connection
-from wavwarden.metadata_audit import build_metadata_audit_report, write_metadata_audit_report
+from sfxworkbench.db import get_connection
+from sfxworkbench.metadata_audit import build_metadata_audit_report, write_metadata_audit_report
 
 
 def _insert_file(tmp_db: Path, path: Path, **overrides) -> None:

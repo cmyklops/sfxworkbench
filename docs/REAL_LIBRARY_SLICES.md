@@ -1,6 +1,6 @@
 # Real Library Slices
 
-Small copied slices let wavwarden prove risky workflows against real files
+Small copied slices let sfxworkbench prove risky workflows against real files
 without touching the full copied library.
 
 ## BWF Missing-Metadata Slice
@@ -19,13 +19,13 @@ Source library:
 Copied slice root:
 
 ```text
-/private/tmp/wavwarden_bwf_slice_20260509_113309/missing_bext_library
+/private/tmp/sfxworkbench_bwf_slice_20260509_113309/missing_bext_library
 ```
 
 Slice DB:
 
 ```text
-/private/tmp/wavwarden_bwf_slice_20260509_113309/missing_bext_slice.db
+/private/tmp/sfxworkbench_bwf_slice_20260509_113309/missing_bext_slice.db
 ```
 
 Selection criteria:
@@ -62,22 +62,22 @@ confidence: 1.0
 Artifacts:
 
 ```text
-/private/tmp/wavwarden_bwf_slice_20260509_113309/metadata_write_plan.json
-/private/tmp/wavwarden_bwf_slice_20260509_113309/fixtures/metadata_write_fixture_manifest.json
-/private/tmp/wavwarden_bwf_slice_20260509_113309/metadata_write_apply_log_rerun.json
+/private/tmp/sfxworkbench_bwf_slice_20260509_113309/metadata_write_plan.json
+/private/tmp/sfxworkbench_bwf_slice_20260509_113309/fixtures/metadata_write_fixture_manifest.json
+/private/tmp/sfxworkbench_bwf_slice_20260509_113309/metadata_write_apply_log_rerun.json
 ```
 
 Verified workflow:
 
 ```bash
-uv run sfx scan /private/tmp/wavwarden_bwf_slice_20260509_113309/missing_bext_library --db /private/tmp/wavwarden_bwf_slice_20260509_113309/missing_bext_slice.db --json
-uv run sfx metadata write-plan /private/tmp/wavwarden_bwf_slice_20260509_113309/metadata_write_plan.json --db /private/tmp/wavwarden_bwf_slice_20260509_113309/missing_bext_slice.db --path /private/tmp/wavwarden_bwf_slice_20260509_113309/missing_bext_library --bwfmetaedit /opt/homebrew/bin/bwfmetaedit --json
-uv run sfx metadata write-review /private/tmp/wavwarden_bwf_slice_20260509_113309/metadata_write_plan.json --approve-all --json
-uv run sfx metadata write-preview /private/tmp/wavwarden_bwf_slice_20260509_113309/metadata_write_plan.json --db /private/tmp/wavwarden_bwf_slice_20260509_113309/missing_bext_slice.db --require-reviewed --json
-uv run sfx metadata write-fixtures /private/tmp/wavwarden_bwf_slice_20260509_113309/metadata_write_plan.json /private/tmp/wavwarden_bwf_slice_20260509_113309/fixtures --db /private/tmp/wavwarden_bwf_slice_20260509_113309/missing_bext_slice.db --require-reviewed --write-fixture-metadata --json
-uv run sfx metadata write-readback /private/tmp/wavwarden_bwf_slice_20260509_113309/fixtures --json
-uv run sfx metadata write-apply /private/tmp/wavwarden_bwf_slice_20260509_113309/metadata_write_plan.json --db /private/tmp/wavwarden_bwf_slice_20260509_113309/missing_bext_slice.db --require-reviewed --backup-dir /private/tmp/wavwarden_bwf_slice_20260509_113309/backups_rerun --log /private/tmp/wavwarden_bwf_slice_20260509_113309/metadata_write_apply_log_rerun.json --apply --json
-uv run sfx metadata write-undo /private/tmp/wavwarden_bwf_slice_20260509_113309/metadata_write_apply_log_rerun.json --db /private/tmp/wavwarden_bwf_slice_20260509_113309/missing_bext_slice.db --apply --json
+uv run sfx scan /private/tmp/sfxworkbench_bwf_slice_20260509_113309/missing_bext_library --db /private/tmp/sfxworkbench_bwf_slice_20260509_113309/missing_bext_slice.db --json
+uv run sfx metadata write-plan /private/tmp/sfxworkbench_bwf_slice_20260509_113309/metadata_write_plan.json --db /private/tmp/sfxworkbench_bwf_slice_20260509_113309/missing_bext_slice.db --path /private/tmp/sfxworkbench_bwf_slice_20260509_113309/missing_bext_library --bwfmetaedit /opt/homebrew/bin/bwfmetaedit --json
+uv run sfx metadata write-review /private/tmp/sfxworkbench_bwf_slice_20260509_113309/metadata_write_plan.json --approve-all --json
+uv run sfx metadata write-preview /private/tmp/sfxworkbench_bwf_slice_20260509_113309/metadata_write_plan.json --db /private/tmp/sfxworkbench_bwf_slice_20260509_113309/missing_bext_slice.db --require-reviewed --json
+uv run sfx metadata write-fixtures /private/tmp/sfxworkbench_bwf_slice_20260509_113309/metadata_write_plan.json /private/tmp/sfxworkbench_bwf_slice_20260509_113309/fixtures --db /private/tmp/sfxworkbench_bwf_slice_20260509_113309/missing_bext_slice.db --require-reviewed --write-fixture-metadata --json
+uv run sfx metadata write-readback /private/tmp/sfxworkbench_bwf_slice_20260509_113309/fixtures --json
+uv run sfx metadata write-apply /private/tmp/sfxworkbench_bwf_slice_20260509_113309/metadata_write_plan.json --db /private/tmp/sfxworkbench_bwf_slice_20260509_113309/missing_bext_slice.db --require-reviewed --backup-dir /private/tmp/sfxworkbench_bwf_slice_20260509_113309/backups_rerun --log /private/tmp/sfxworkbench_bwf_slice_20260509_113309/metadata_write_apply_log_rerun.json --apply --json
+uv run sfx metadata write-undo /private/tmp/sfxworkbench_bwf_slice_20260509_113309/metadata_write_apply_log_rerun.json --db /private/tmp/sfxworkbench_bwf_slice_20260509_113309/missing_bext_slice.db --apply --json
 ```
 
 Results:
@@ -113,13 +113,13 @@ does not overwrite existing embedded BWF values.
 Copied slice root:
 
 ```text
-/private/tmp/wavwarden_existing_bwf_slice_rF9UII/library
+/private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/library
 ```
 
 Slice DB:
 
 ```text
-/private/tmp/wavwarden_existing_bwf_slice_rF9UII/slice.db
+/private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/slice.db
 ```
 
 Files copied:
@@ -146,19 +146,19 @@ value: WW-0001, WW-0002, WW-0003
 Artifacts:
 
 ```text
-/private/tmp/wavwarden_existing_bwf_slice_rF9UII/metadata_write_plan.json
-/private/tmp/wavwarden_existing_bwf_slice_rF9UII/fixtures/metadata_write_fixture_manifest.json
+/private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/metadata_write_plan.json
+/private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/fixtures/metadata_write_fixture_manifest.json
 ```
 
 Verified workflow:
 
 ```bash
-uv run sfx scan /private/tmp/wavwarden_existing_bwf_slice_rF9UII/library --db /private/tmp/wavwarden_existing_bwf_slice_rF9UII/slice.db
-uv run sfx metadata write-plan /private/tmp/wavwarden_existing_bwf_slice_rF9UII/metadata_write_plan.json --db /private/tmp/wavwarden_existing_bwf_slice_rF9UII/slice.db --path /private/tmp/wavwarden_existing_bwf_slice_rF9UII/library --backend bwfmetaedit --bwfmetaedit /opt/homebrew/bin/bwfmetaedit --json
-uv run sfx metadata write-review /private/tmp/wavwarden_existing_bwf_slice_rF9UII/metadata_write_plan.json --approve-all --json
-uv run sfx metadata write-preview /private/tmp/wavwarden_existing_bwf_slice_rF9UII/metadata_write_plan.json --db /private/tmp/wavwarden_existing_bwf_slice_rF9UII/slice.db --require-reviewed --json
-uv run sfx metadata write-fixtures /private/tmp/wavwarden_existing_bwf_slice_rF9UII/metadata_write_plan.json /private/tmp/wavwarden_existing_bwf_slice_rF9UII/fixtures --db /private/tmp/wavwarden_existing_bwf_slice_rF9UII/slice.db --require-reviewed --write-fixture-metadata --json
-uv run sfx metadata write-readback /private/tmp/wavwarden_existing_bwf_slice_rF9UII/fixtures --json
+uv run sfx scan /private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/library --db /private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/slice.db
+uv run sfx metadata write-plan /private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/metadata_write_plan.json --db /private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/slice.db --path /private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/library --backend bwfmetaedit --bwfmetaedit /opt/homebrew/bin/bwfmetaedit --json
+uv run sfx metadata write-review /private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/metadata_write_plan.json --approve-all --json
+uv run sfx metadata write-preview /private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/metadata_write_plan.json --db /private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/slice.db --require-reviewed --json
+uv run sfx metadata write-fixtures /private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/metadata_write_plan.json /private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/fixtures --db /private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/slice.db --require-reviewed --write-fixture-metadata --json
+uv run sfx metadata write-readback /private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/fixtures --json
 ```
 
 Results:
@@ -176,9 +176,9 @@ Results:
 Replace-mode smoke:
 
 ```bash
-uv run sfx metadata write-plan /private/tmp/wavwarden_existing_bwf_slice_rF9UII/metadata_write_plan_replace.json --db /private/tmp/wavwarden_existing_bwf_slice_rF9UII/slice.db --path /private/tmp/wavwarden_existing_bwf_slice_rF9UII/library --backend bwfmetaedit --bwfmetaedit /opt/homebrew/bin/bwfmetaedit --replace-existing --json
-uv run sfx metadata write-review /private/tmp/wavwarden_existing_bwf_slice_rF9UII/metadata_write_plan_replace.json --approve-all --json
-uv run sfx metadata write-preview /private/tmp/wavwarden_existing_bwf_slice_rF9UII/metadata_write_plan_replace.json --db /private/tmp/wavwarden_existing_bwf_slice_rF9UII/slice.db --require-reviewed --json
+uv run sfx metadata write-plan /private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/metadata_write_plan_replace.json --db /private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/slice.db --path /private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/library --backend bwfmetaedit --bwfmetaedit /opt/homebrew/bin/bwfmetaedit --replace-existing --json
+uv run sfx metadata write-review /private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/metadata_write_plan_replace.json --approve-all --json
+uv run sfx metadata write-preview /private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/metadata_write_plan_replace.json --db /private/tmp/sfxworkbench_existing_bwf_slice_rF9UII/slice.db --require-reviewed --json
 ```
 
 Replace-mode results:
@@ -201,13 +201,13 @@ using RIFF INFO `IKEY` via BWF MetaEdit.
 Copied slice root:
 
 ```text
-/private/tmp/wavwarden_ikey_slice_rwtgYd/library
+/private/tmp/sfxworkbench_ikey_slice_rwtgYd/library
 ```
 
 Slice DB:
 
 ```text
-/private/tmp/wavwarden_ikey_slice_rwtgYd/slice.db
+/private/tmp/sfxworkbench_ikey_slice_rwtgYd/slice.db
 ```
 
 Files copied:
@@ -236,22 +236,22 @@ RL_TU_Soundscape Hi freq tension layer.wav:
 Artifacts:
 
 ```text
-/private/tmp/wavwarden_ikey_slice_rwtgYd/metadata_write_plan.json
-/private/tmp/wavwarden_ikey_slice_rwtgYd/fixtures/metadata_write_fixture_manifest.json
-/private/tmp/wavwarden_ikey_slice_rwtgYd/metadata_write_apply_log.json
+/private/tmp/sfxworkbench_ikey_slice_rwtgYd/metadata_write_plan.json
+/private/tmp/sfxworkbench_ikey_slice_rwtgYd/fixtures/metadata_write_fixture_manifest.json
+/private/tmp/sfxworkbench_ikey_slice_rwtgYd/metadata_write_apply_log.json
 ```
 
 Verified workflow:
 
 ```bash
-uv run sfx scan /private/tmp/wavwarden_ikey_slice_rwtgYd/library --db /private/tmp/wavwarden_ikey_slice_rwtgYd/slice.db --json
-uv run sfx metadata write-plan /private/tmp/wavwarden_ikey_slice_rwtgYd/metadata_write_plan.json --db /private/tmp/wavwarden_ikey_slice_rwtgYd/slice.db --path /private/tmp/wavwarden_ikey_slice_rwtgYd/library --backend bwfmetaedit --bwfmetaedit /opt/homebrew/bin/bwfmetaedit --json
-uv run sfx metadata write-review /private/tmp/wavwarden_ikey_slice_rwtgYd/metadata_write_plan.json --approve-all --json
-uv run sfx metadata write-preview /private/tmp/wavwarden_ikey_slice_rwtgYd/metadata_write_plan.json --db /private/tmp/wavwarden_ikey_slice_rwtgYd/slice.db --require-reviewed --json
-uv run sfx metadata write-fixtures /private/tmp/wavwarden_ikey_slice_rwtgYd/metadata_write_plan.json /private/tmp/wavwarden_ikey_slice_rwtgYd/fixtures --db /private/tmp/wavwarden_ikey_slice_rwtgYd/slice.db --require-reviewed --write-fixture-metadata --json
-uv run sfx metadata write-readback /private/tmp/wavwarden_ikey_slice_rwtgYd/fixtures --json
-uv run sfx metadata write-apply /private/tmp/wavwarden_ikey_slice_rwtgYd/metadata_write_plan.json --db /private/tmp/wavwarden_ikey_slice_rwtgYd/slice.db --require-reviewed --backup-dir /private/tmp/wavwarden_ikey_slice_rwtgYd/backups --log /private/tmp/wavwarden_ikey_slice_rwtgYd/metadata_write_apply_log.json --apply --json
-uv run sfx metadata write-undo /private/tmp/wavwarden_ikey_slice_rwtgYd/metadata_write_apply_log.json --db /private/tmp/wavwarden_ikey_slice_rwtgYd/slice.db --apply --json
+uv run sfx scan /private/tmp/sfxworkbench_ikey_slice_rwtgYd/library --db /private/tmp/sfxworkbench_ikey_slice_rwtgYd/slice.db --json
+uv run sfx metadata write-plan /private/tmp/sfxworkbench_ikey_slice_rwtgYd/metadata_write_plan.json --db /private/tmp/sfxworkbench_ikey_slice_rwtgYd/slice.db --path /private/tmp/sfxworkbench_ikey_slice_rwtgYd/library --backend bwfmetaedit --bwfmetaedit /opt/homebrew/bin/bwfmetaedit --json
+uv run sfx metadata write-review /private/tmp/sfxworkbench_ikey_slice_rwtgYd/metadata_write_plan.json --approve-all --json
+uv run sfx metadata write-preview /private/tmp/sfxworkbench_ikey_slice_rwtgYd/metadata_write_plan.json --db /private/tmp/sfxworkbench_ikey_slice_rwtgYd/slice.db --require-reviewed --json
+uv run sfx metadata write-fixtures /private/tmp/sfxworkbench_ikey_slice_rwtgYd/metadata_write_plan.json /private/tmp/sfxworkbench_ikey_slice_rwtgYd/fixtures --db /private/tmp/sfxworkbench_ikey_slice_rwtgYd/slice.db --require-reviewed --write-fixture-metadata --json
+uv run sfx metadata write-readback /private/tmp/sfxworkbench_ikey_slice_rwtgYd/fixtures --json
+uv run sfx metadata write-apply /private/tmp/sfxworkbench_ikey_slice_rwtgYd/metadata_write_plan.json --db /private/tmp/sfxworkbench_ikey_slice_rwtgYd/slice.db --require-reviewed --backup-dir /private/tmp/sfxworkbench_ikey_slice_rwtgYd/backups --log /private/tmp/sfxworkbench_ikey_slice_rwtgYd/metadata_write_apply_log.json --apply --json
+uv run sfx metadata write-undo /private/tmp/sfxworkbench_ikey_slice_rwtgYd/metadata_write_apply_log.json --db /private/tmp/sfxworkbench_ikey_slice_rwtgYd/slice.db --apply --json
 ```
 
 Results:
@@ -280,13 +280,13 @@ preserving populated BEXT `Description` values.
 Copied slice root:
 
 ```text
-/private/tmp/wavwarden_bwf_originator_slice_20260509_214926/library
+/private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/library
 ```
 
 Slice DB:
 
 ```text
-/private/tmp/wavwarden_bwf_originator_slice_20260509_214926/slice.db
+/private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/slice.db
 ```
 
 Files copied:
@@ -327,22 +327,22 @@ value: WW-MAFX-ORIG-0001 through WW-MAFX-ORIG-0004
 Artifacts:
 
 ```text
-/private/tmp/wavwarden_bwf_originator_slice_20260509_214926/metadata_write_plan.json
-/private/tmp/wavwarden_bwf_originator_slice_20260509_214926/fixtures/metadata_write_fixture_manifest.json
-/private/tmp/wavwarden_bwf_originator_slice_20260509_214926/metadata_write_apply_log.json
+/private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/metadata_write_plan.json
+/private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/fixtures/metadata_write_fixture_manifest.json
+/private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/metadata_write_apply_log.json
 ```
 
 Verified workflow:
 
 ```bash
-uv run sfx scan /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/library --db /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/slice.db --json
-uv run sfx metadata write-plan /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/metadata_write_plan.json --db /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/slice.db --path /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/library --backend bwfmetaedit --bwfmetaedit /opt/homebrew/bin/bwfmetaedit --json
-uv run sfx metadata write-review /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/metadata_write_plan.json --approve-all --json
-uv run sfx metadata write-preview /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/metadata_write_plan.json --db /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/slice.db --require-reviewed --json
-uv run sfx metadata write-fixtures /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/metadata_write_plan.json /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/fixtures --db /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/slice.db --require-reviewed --write-fixture-metadata --json
-uv run sfx metadata write-readback /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/fixtures --json
-uv run sfx metadata write-apply /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/metadata_write_plan.json --db /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/slice.db --require-reviewed --backup-dir /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/backups --log /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/metadata_write_apply_log.json --apply --json
-uv run sfx metadata write-undo /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/metadata_write_apply_log.json --db /private/tmp/wavwarden_bwf_originator_slice_20260509_214926/slice.db --apply --json
+uv run sfx scan /private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/library --db /private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/slice.db --json
+uv run sfx metadata write-plan /private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/metadata_write_plan.json --db /private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/slice.db --path /private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/library --backend bwfmetaedit --bwfmetaedit /opt/homebrew/bin/bwfmetaedit --json
+uv run sfx metadata write-review /private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/metadata_write_plan.json --approve-all --json
+uv run sfx metadata write-preview /private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/metadata_write_plan.json --db /private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/slice.db --require-reviewed --json
+uv run sfx metadata write-fixtures /private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/metadata_write_plan.json /private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/fixtures --db /private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/slice.db --require-reviewed --write-fixture-metadata --json
+uv run sfx metadata write-readback /private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/fixtures --json
+uv run sfx metadata write-apply /private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/metadata_write_plan.json --db /private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/slice.db --require-reviewed --backup-dir /private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/backups --log /private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/metadata_write_apply_log.json --apply --json
+uv run sfx metadata write-undo /private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/metadata_write_apply_log.json --db /private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/slice.db --apply --json
 ```
 
 Results:
@@ -360,3 +360,64 @@ Results:
   to `Wavwarden QA`, and unique `OriginatorReference` values.
 - Undo restored 4 files with 0 errors; post-undo readback showed original
   descriptions intact and empty originator fields again.
+
+## Generated Mutagen Format Fixture Matrix
+
+Created: 2026-05-10
+
+Purpose: prove the current Mutagen-backed write surface on tiny generated audio
+fixtures and make unsupported container/field combinations explicit before they
+reach original-file apply.
+
+Generated fixture formats:
+
+```text
+.flac  soundfile FLAC
+.ogg   soundfile Ogg/Vorbis
+.opus  soundfile Ogg/Opus
+.mp3   soundfile MP3
+.m4a   ffmpeg AAC-in-MP4, when ffmpeg is available
+.aif   soundfile AIFF
+.aiff  soundfile AIFF
+```
+
+Verified support matrix:
+
+```text
+FLAC/Ogg/Opus:
+  description, originator, originator_reference, category, subcategory,
+  ucs_category, ucs_subcategory, take_number, channel_position, keyword(s)
+
+MP3:
+  category -> genre
+  originator -> organization
+  originator_reference -> encodedby
+
+M4A:
+  description
+  category -> genre
+
+AIFF/AIF:
+  currently unsupported by the Easy Mutagen write path; entries remain visible
+  as unsupported_field plan rows
+```
+
+Verified workflow:
+
+```bash
+uv run pytest tests/test_metadata_write.py::test_metadata_write_fixture_bundle_writes_real_mutagen_format_matrix -v
+uv run pytest tests/test_metadata_write.py::test_metadata_write_apply_writes_and_undoes_real_flac -v
+```
+
+Results:
+
+- Fixture write/readback passed for generated FLAC, Ogg/Vorbis, Ogg/Opus, MP3,
+  and M4A when the local encoders were available.
+- AIFF/AIF generated valid audio fixtures, but accepted tags were marked
+  unsupported instead of being routed to a write command.
+- A real FLAC apply/undo test wrote reviewed `description`, `genre`, and
+  multi-value `keywords`, verified readback, recorded pre/post MD5 anchors in
+  the apply log, and restored the original bytes through undo.
+- Write planning now reads existing Mutagen target tags before planning writes.
+  Non-empty values default to `skip_existing`; `--replace-existing` produces an
+  explicit reviewed `replace_tag` action.

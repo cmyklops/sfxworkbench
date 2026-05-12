@@ -1,14 +1,27 @@
-# wavwarden
+# sfxworkbench
 
-wavwarden helps sound designers clean up large SFX libraries without guessing
+sfxworkbench helps sound designers clean up large SFX libraries without guessing
 what will happen to their files.
 
 It is built for commercial audio collections: Sound Ideas, GDC/Soniss bundles,
 vendor packs, downloaded freebies, personal recordings, and years of folders
 that have slowly become hard to search.
 
-wavwarden is currently an **Internal Studio Beta**. The goal is practical,
-reviewable library cleanup for real studio copies before public v1.0 polish.
+sfxworkbench is currently a **public-readiness beta**. The goal is practical,
+reviewable library cleanup for copied studio libraries before a stable v1.0
+release.
+
+## Product Direction
+
+The core sfxworkbench CLI is intended to remain free and open source. The free core
+should cover local scanning, reporting, dry-run cleanup plans, duplicate
+detection, search, tagging plans, and other safety-first library hygiene tools.
+
+A future desktop app may be offered as a low-cost paid product, likely in the
+$10-$20 range for solo users. The app would focus on workflow polish rather than
+locking away core safety features: visual review queues, guided metadata repair,
+richer undo/history views, batch decision interfaces, saved profiles, and
+friendlier onboarding for non-CLI users.
 
 ## What It Helps With
 
@@ -27,8 +40,10 @@ reviewable library cleanup for real studio copies before public v1.0 polish.
 - Propose useful UCS tags from corroborated evidence while preserving filenames
   and existing metadata.
 
-wavwarden does **not** change audio content. Loudness normalization and sample
-rate conversion are out of scope for the beta safety promise.
+sfxworkbench does **not** change audio content. Loudness normalization and sample
+rate conversion are out of scope for the beta safety promise. The advanced
+dual-mono workflow only writes reviewed mono copies to a separate output root;
+it does not replace originals.
 
 ## Safety Promise
 
@@ -45,12 +60,28 @@ When in doubt, run the preview command and inspect the report before applying.
 
 ## Install
 
+Recommended beta install from a tagged GitHub release wheel:
+
+```bash
+python3.11 -m venv ~/.venvs/sfxworkbench
+source ~/.venvs/sfxworkbench/bin/activate
+python -m pip install /path/to/sfxworkbench-0.1.0-py3-none-any.whl
+sfx --help
+```
+
+When a PyPI release is published, the install command will be:
+
+```bash
+python -m pip install sfxworkbench
+sfx --help
+```
+
 For development or internal beta use from a cloned repo:
 
 ```bash
 uv sync --extra dev
 uv run sfx --help
-uv run --extra dev poe beta-audit PATH --output-dir ~/reports/wavwarden_beta_audit --include-similarity
+uv run --extra dev poe beta-audit PATH --output-dir ~/reports/sfxworkbench_beta_audit --similarity-validation
 ```
 
 Optional richer WAV metadata reads:
@@ -59,8 +90,29 @@ Optional richer WAV metadata reads:
 uv sync --extra metadata --extra dev
 ```
 
-Single-command installs from GitHub or PyPI are planned, but should be tested
-from clean machines before they are documented as the recommended path.
+Optional Textual review workbench:
+
+```bash
+uv sync --extra tui --extra dev
+uv run --extra tui --extra dev sfx tui --db ~/.sfxworkbench/index.db --report ~/reports
+```
+
+The TUI opens as a feature-oriented operations workbench: Scan, Files, Clean,
+Dedupe, Organize, Metadata, Similarity, and Advanced. Buttons run the same safe
+workflow functions as the CLI: scan/full audit, junk preview/apply, dedupe and
+pack plans, rename previews/applies/undo, DB-only metadata tag review/apply,
+sidecar export, and similarity crawl. Guarded workflows such as embedded audio
+metadata writes and permanent deletion stay in Advanced. The normal UI shows the
+library path and status; the SQLite index path is treated as an advanced cache.
+If `--report` is omitted, the workbench looks for JSON reports beside the
+validation DB, near the last scanned library root, and in `~/reports`.
+
+For source installs from GitHub before a wheel is attached to a release:
+
+```bash
+python -m pip install "sfxworkbench @ git+https://github.com/cmyklops/sfxworkbench.git"
+sfx --help
+```
 
 ## Common Workflow
 
@@ -88,16 +140,35 @@ uv run sfx dedupe --apply ~/reports/dedupe_plan.json --safe-folder ~/CommercialL
 
 # 5. Preview portable filename cleanup.
 uv run sfx rename PATH --pattern portable
-uv run sfx rename PATH --pattern portable --apply --log ~/reports/portable_rename_log.json
+uv run sfx rename PATH --pattern portable --config ~/sfxworkbench.json
+uv run sfx rename PATH --pattern portable --apply --log ~/reports/apply_logs/portable_rename_log.json
 
 # 6. Search indexed filenames.
 uv run sfx search "gunshot exterior"
+
+# 7. Optional advanced reports.
+uv run sfx compare audit ~/IncomingPack --against-db ~/.sfxworkbench/index.db --output ~/reports/compare_report.json
+uv run sfx compare plan ~/reports/compare_report.json --output ~/reports/compare_plan.json
+uv run sfx processed PATH --db ~/.sfxworkbench/index.db --output ~/reports/processed_files.json
+uv run sfx audio dual-mono audit PATH --db ~/.sfxworkbench/index.db --output ~/reports/dual_mono_report.json
+uv run sfx audio dual-mono plan ~/reports/dual_mono_report.json --output ~/reports/dual_mono_plan.json
+uv run sfx audio dual-mono review ~/reports/dual_mono_plan.json --approve-all
+uv run sfx audio dual-mono apply ~/reports/dual_mono_plan.json --require-reviewed --output-root ~/ConvertedMono --apply
+
+# 8. Optional permanent delete, only from quarantine logs.
+uv run sfx delete plan ~/reports/apply_logs/pack_quarantine_log_YYYYMMDD_HHMMSS.json --output ~/reports/delete_plan.json
+uv run sfx delete review ~/reports/delete_plan.json --approve-all
+uv run sfx delete apply ~/reports/delete_plan.json --require-reviewed --i-understand-permanent-delete --apply
 ```
+
+When an apply command writes a default log, it places it in an `apply_logs/`
+folder beside the source plan or report. Explicit `--log` paths are still
+honored.
 
 Default database:
 
 ```text
-~/.wavwarden/index.db
+~/.sfxworkbench/index.db
 ```
 
 Override it with `--db` when needed.
@@ -121,7 +192,8 @@ uv run sfx organize audit PATH --pattern numeric-series-folders --output ~/repor
 
 # Apply an approved organization report.
 uv run sfx organize review ~/reports/organize_report.json --approve-all
-uv run sfx organize apply ~/reports/organize_report.json --require-reviewed --log ~/reports/organize_log.json
+uv run sfx organize apply ~/reports/organize_report.json --require-reviewed --log ~/reports/apply_logs/organize_log.json
+uv run sfx organize apply ~/reports/organize_report.json --config ~/sfxworkbench.json --require-reviewed --log ~/reports/apply_logs/organize_log.json
 ```
 
 Examples:
@@ -141,7 +213,7 @@ CSV exports, and cross-platform collaboration.
 
 ```bash
 uv run sfx rename PATH --pattern portable
-uv run sfx rename PATH --pattern portable --apply --log ~/reports/portable_rename_log.json
+uv run sfx rename PATH --pattern portable --apply --log ~/reports/apply_logs/portable_rename_log.json
 ```
 
 Examples:
@@ -161,12 +233,12 @@ These commands are report-only:
 
 ```bash
 uv run sfx metadata audit --output ~/reports/metadata_report.json
-uv run sfx metadata view "FIRE_BURST_SmallBurst_6109.wav" --db ~/.wavwarden/index.db
+uv run sfx metadata view "FIRE_BURST_SmallBurst_6109.wav" --db ~/.sfxworkbench/index.db
 uv run sfx metadata backends --json
 uv run sfx groups audit PATH --output ~/reports/related_groups_report.json
 uv run sfx format audit PATH --output ~/reports/format_report.json
 uv run sfx packs audit PATH --output ~/reports/pack_overlap_report.json
-uv run sfx tag propose PATH --db ~/.wavwarden/index.db --min-confidence 0.6 --output ~/reports/tag_proposals.json
+uv run sfx tag propose PATH --db ~/.sfxworkbench/index.db --min-confidence 0.6 --output ~/reports/tag_proposals.json
 uv run sfx tag suggest PATH --use-ucs-catalog --min-confidence 0.8 --source ucs_catalog --field ucs_category --field ucs_subcategory --output ~/reports/tag_suggestions.json
 uv run sfx tag suggest PATH --include-synonyms --synonym-limit 3 --synonym-depth 1 --field keyword --output ~/reports/synonym_keywords.json
 ```
@@ -183,9 +255,9 @@ uv run sfx tag plan PATH --include-synonyms --synonym-limit 3 --synonym-depth 1 
 uv run sfx tag summarize ~/reports/tag_plan.json --value-limit 20
 uv run sfx tag review ~/reports/tag_plan.json --approve-field ucs_category --only-status pending
 uv run sfx tag review ~/reports/tag_plan.json --approve-all
-uv run sfx tag apply ~/reports/tag_plan.json --require-reviewed --apply --log ~/reports/tag_apply_log.json
+uv run sfx tag apply ~/reports/tag_plan.json --require-reviewed --apply --log ~/reports/apply_logs/tag_apply_log.json
 uv run sfx tag sidecar-export ~/reports/accepted_tags.sidecar.json --path PATH
-uv run sfx tag sidecar-import ~/reports/accepted_tags.sidecar.json --db ~/.wavwarden/index.db
+uv run sfx tag sidecar-import ~/reports/accepted_tags.sidecar.json --db ~/.sfxworkbench/index.db
 uv run sfx metadata write-plan ~/reports/metadata_write_plan.json --path PATH --bwfmetaedit /path/to/bwfmetaedit
 uv run sfx metadata write-review ~/reports/metadata_write_plan.json --approve-all
 uv run sfx metadata write-preview ~/reports/metadata_write_plan.json --require-reviewed
@@ -193,17 +265,19 @@ uv run sfx metadata write-fixtures ~/reports/metadata_write_plan.json ~/reports/
 uv run sfx metadata write-fixtures ~/reports/metadata_write_plan.json ~/reports/metadata_fixtures --write-fixture-metadata
 uv run sfx metadata write-readback ~/reports/metadata_fixtures --json
 uv run sfx metadata write-apply ~/reports/metadata_write_plan.json --require-reviewed
-uv run sfx metadata write-apply ~/reports/metadata_write_plan.json --require-reviewed --apply --log ~/reports/metadata_write_apply_log.json
-uv run sfx metadata write-undo ~/reports/metadata_write_apply_log.json
-uv run sfx metadata write-undo ~/reports/metadata_write_apply_log.json --apply
+uv run sfx metadata write-apply ~/reports/metadata_write_plan.json --config ~/sfxworkbench.json --require-reviewed
+uv run sfx metadata write-apply ~/reports/metadata_write_plan.json --require-reviewed --apply --log ~/reports/apply_logs/metadata_write_apply_log.json
+uv run sfx metadata write-undo ~/reports/apply_logs/metadata_write_apply_log.json
+uv run sfx metadata write-undo ~/reports/apply_logs/metadata_write_apply_log.json --apply
 ```
 
 `metadata write-apply` is deliberately narrow in the beta: it writes reviewed
-Mutagen-backed tags for AIFF, MP3, FLAC, Ogg/Vorbis, Opus, and M4A, plus
-reviewed BWF `bext` fields and RIFF INFO `IKEY` keywords for WAV/RF64 through
-BWF MetaEdit. It creates backups first, verifies readback, and refreshes the
-SQLite index. W64 remains sidecar/DB-only until a reliable embedded-write
-backend is proven.
+Mutagen-backed tags for proven fields in FLAC, Ogg/Vorbis, Opus, MP3, and M4A,
+plus reviewed BWF `bext` fields and RIFF INFO `IKEY` keywords for WAV/RF64
+through BWF MetaEdit. AIFF/AIF and unsupported container/field combinations stay
+visible as unsupported plan entries instead of failing during apply. It creates
+backups first, verifies readback, and refreshes the SQLite index. W64 remains
+sidecar/DB-only until a reliable embedded-write backend is proven.
 
 UCS catalog support:
 
@@ -218,14 +292,16 @@ Experimental similarity work starts with an optional descriptor crawler, not
 with the default scan:
 
 ```bash
-uv run sfx similarity crawl PATH --db ~/.wavwarden/index.db --cache ~/.wavwarden/similarity
-uv run sfx similarity segments PATH --db ~/.wavwarden/index.db --limit 200 --json
-uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --limit 20 --json
-uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --scope segment --limit 20 --json
-uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --threshold 0.92 --output ~/reports/similarity_audit.json
-uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --scope segment --threshold 0.95 --json
-uv run sfx similarity feedback set --left one.wav --right two.wav --state ignored --db ~/.wavwarden/index.db
-uv run sfx similarity feedback list --db ~/.wavwarden/index.db --state ignored --json
+uv run sfx similarity crawl PATH --db ~/.sfxworkbench/index.db --cache ~/.sfxworkbench/similarity
+uv run sfx similarity crawl PATH --db ~/.sfxworkbench/index.db --max-files 500 --throttle-ms 10 --json
+uv run sfx similarity backends --json
+uv run sfx similarity segments PATH --db ~/.sfxworkbench/index.db --limit 200 --json
+uv run sfx similarity search --file query.wav --db ~/.sfxworkbench/index.db --limit 20 --json
+uv run sfx similarity search --file query.wav --db ~/.sfxworkbench/index.db --scope segment --limit 20 --json
+uv run sfx similarity audit PATH --db ~/.sfxworkbench/index.db --threshold 0.92 --output ~/reports/similarity_audit.json
+uv run sfx similarity audit PATH --db ~/.sfxworkbench/index.db --scope segment --threshold 0.95 --json
+uv run sfx similarity feedback set --left one.wav --right two.wav --state ignored --db ~/.sfxworkbench/index.db
+uv run sfx similarity feedback list --db ~/.sfxworkbench/index.db --state ignored --json
 ```
 
 This first slice stores deterministic descriptors in SQLite and skips unchanged
@@ -243,7 +319,7 @@ Soundminer-style resumable cache builder. See
 ## Standalone First-Look Audit
 
 `audit.py` is a no-install, zero-dependency script for a first look at a library.
-It does not import the `wavwarden` package.
+It does not import the `sfxworkbench` package.
 
 ```bash
 python3 audit.py PATH --output-dir ~/reports
@@ -254,7 +330,12 @@ python3 audit.py PATH --json
 ## Project Docs
 
 - [`NEXT.md`](NEXT.md): current solo-dev sprint note
+- [`docs/RELEASE.md`](docs/RELEASE.md): release checklist and clean install smoke tests
+- [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md): SQLite schema migration notes
+- [`docs/DEMO.md`](docs/DEMO.md): tiny committed demo library workflow
 - [`docs/PHASES.md`](docs/PHASES.md): roadmap, safety model, JSON contracts
+- [`docs/PRODUCT_DIRECTION.md`](docs/PRODUCT_DIRECTION.md): product positioning, GUI feature direction, and free/paid boundary
+- [`docs/APP_UI_DIRECTION.md`](docs/APP_UI_DIRECTION.md): app/TUI visual and review-workbench direction
 - [`docs/UCS.md`](docs/UCS.md): UCS data and category integration plan
 - [`docs/METADATA_TAGGING.md`](docs/METADATA_TAGGING.md): metadata writing and audio-suggestion plan
 - [`docs/REAL_LIBRARY_SLICES.md`](docs/REAL_LIBRARY_SLICES.md): copied real-library validation slices
@@ -280,4 +361,4 @@ uv run --extra dev poe check
 
 ## License
 
-wavwarden is licensed under the MIT License. See [`LICENSE`](LICENSE).
+sfxworkbench is licensed under the MIT License. See [`LICENSE`](LICENSE).

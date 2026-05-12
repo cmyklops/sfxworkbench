@@ -1,19 +1,19 @@
 # NEXT
 
-Solo-dev working note for the current wavwarden sprint. Keep this short; move
+Solo-dev working note for the current sfxworkbench sprint. Keep this short; move
 durable decisions into `docs/PHASES.md` only when they survive real-library use.
 
 ## Now
 
 - Work from real library findings into reusable, tested CLI workflows.
 - Keep filesystem-changing commands plan-first, quarantine-first, or undoable.
-- Keep `sfx` as the user-facing command for now; `wavwarden` is the project/package name.
+- Keep `sfx` as the user-facing command for now; `sfxworkbench` is the project/package name.
 - Use `uv run --extra dev poe check` before every commit.
 
 ## Current Library State
 
 - Test copy root: `/Users/mattwesdock/CommercialLibraries`
-- Index: `/Users/mattwesdock/.wavwarden/index.db`
+- Index: `/Users/mattwesdock/.sfxworkbench/index.db`
 - Exact file duplicates: quarantined.
 - Safe filename/path cleanup: applied.
 - Portable filename/path cleanup: applied.
@@ -72,7 +72,7 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
 - UCS catalog import implemented (`sfx ucs import/info/categories`). Imported
   the official UCS v8.2.1 Soundminer CSV: 753 entries, 100 unique CatShort
   prefixes across 82 long-form categories. Cached at
-  `/Users/mattwesdock/.wavwarden/ucs_catalog.json` with full provenance.
+  `/Users/mattwesdock/.sfxworkbench/ucs_catalog.json` with full provenance.
 - UCS catalog-aware tag suggestions implemented. `sfx tag suggest --use-ucs-catalog`
   or `--ucs-catalog PATH` boosts verified `(CatShort, SubCategory)` matches
   from 0.75 heuristic confidence to 0.95 catalog-backed confidence.
@@ -80,7 +80,7 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
   `ucs_subcategory`. They record the filename/catalog claim, not a final
   semantic tag, because terms such as `FIRE/BURST` can mean real fire, guns, or
   magic depending on context.
-- UCS validation implemented: `sfx ucs validate [PATH] --db ~/.wavwarden/index.db`
+- UCS validation implemented: `sfx ucs validate [PATH] --db ~/.sfxworkbench/index.db`
   counts indexed files whose UCS-looking stem matches or misses the catalog.
 - UCS validation run on the copied library:
   `/Users/mattwesdock/reports/ucs_validation_20260508.json`. It considered
@@ -135,13 +135,13 @@ durable decisions into `docs/PHASES.md` only when they survive real-library use.
   candidate rule: exact UCS pairs and primary subcategory terms can open
   candidates; category terms only corroborate.
 - BWF missing-metadata real-library slice defined and run:
-  `/private/tmp/wavwarden_bwf_slice_20260509_113309/missing_bext_library`.
+  `/private/tmp/sfxworkbench_bwf_slice_20260509_113309/missing_bext_library`.
   Four copied WAV files with no BEXT/iXML were given reviewed `description`
   tags in a slice-only DB, then plan/review/preview/fixture-write/readback/apply
   and undo were exercised successfully. Details are in
   `docs/REAL_LIBRARY_SLICES.md`.
 - Existing-BWF originator fill slice defined and run:
-  `/private/tmp/wavwarden_bwf_originator_slice_20260509_214926/library`.
+  `/private/tmp/sfxworkbench_bwf_originator_slice_20260509_214926/library`.
   Four copied MAFX WAV files with populated BEXT descriptions and empty
   originator fields were given reviewed `description`, `originator`, and
   `originator_reference` tags in a slice-only DB. Planning skipped all existing
@@ -210,9 +210,9 @@ Internal Beta Baseline validation:
   - `uv run --extra dev poe json-smoke` passed: 26 tests.
 - Real-library beta audit:
   - Output dir:
-    `/private/tmp/wavwarden_beta_audit_sprint_20260510`.
+    `/private/tmp/sfxworkbench_beta_audit_sprint_20260510`.
   - Command:
-    `uv run --extra dev poe beta-audit /Users/mattwesdock/CommercialLibraries --output-dir /private/tmp/wavwarden_beta_audit_sprint_20260510`
+    `uv run --extra dev poe beta-audit /Users/mattwesdock/CommercialLibraries --output-dir /private/tmp/sfxworkbench_beta_audit_sprint_20260510`
   - Summary: 120,716 files scanned; 0 scan errors; 0 filename issues; 22,412
     missing metadata rows; 2,854 unusual sample-rate files; 15,331 related
     groups; 0 pack overlap candidates; pack apply dry-run planned 0 moves.
@@ -239,7 +239,7 @@ Tag proposal calibration:
 - New report:
   `/private/tmp/tag_proposals_precision_20260510.json`.
 - Command:
-  `uv run sfx tag propose /Users/mattwesdock/CommercialLibraries --db /Users/mattwesdock/.wavwarden/index.db --catalog /Users/mattwesdock/.wavwarden/ucs_catalog.json --min-confidence 0.6 --limit 500 --output /private/tmp/tag_proposals_precision_20260510.json --json`
+  `uv run sfx tag propose /Users/mattwesdock/CommercialLibraries --db /Users/mattwesdock/.sfxworkbench/index.db --catalog /Users/mattwesdock/.sfxworkbench/ucs_catalog.json --min-confidence 0.6 --limit 500 --output /private/tmp/tag_proposals_precision_20260510.json --json`
 - Before: 178,400 proposals across 46,756 files; 16,791 strong and 161,609
   review.
 - After: 79,674 proposals across 41,699 files; 13,201 strong and 66,473 review.
@@ -261,24 +261,140 @@ Validation:
 - `uv run pytest tests/test_audio.py tests/test_metadata_backends.py tests/test_metadata_write.py -v`
   passed: 38 tests.
 
-Next sprint: 0/5 complete.
+Metadata Write Proof sprint: 4/4 complete.
 
-1. Calibrate remaining broad proposal terms: `tone`, `room`, `walla`, `sea`,
-   `loop`, and high-volume material terms.
-2. Add proposal summary diagnostics for top opening tokens and fan-out counts,
-   so noisy terms are visible without manual JSON spelunking.
-3. Design shared safe-folder config across dedupe, packs, organize, rename, and
-   metadata workflows.
-4. Decide whether similarity validation should run as an overnight automation
-   or a manual beta-audit option.
-5. Review CI runtime after the metadata-extras job lands on GitHub.
+1. Done: make Mutagen embedded-write planning container-specific instead of
+   assuming every easy tag key works for every tagged format.
+2. Done: add existing Mutagen target-value checks so non-empty fields default
+   to `skip_existing`, with explicit `replace_tag` entries only under
+   `--replace-existing`.
+3. Done: add generated real-format fixture coverage for FLAC, Ogg/Vorbis,
+   Ogg/Opus, MP3, M4A when local encoders are available, plus AIFF/AIF
+   unsupported-plan coverage.
+4. Done: add a real FLAC apply/readback/undo test with pre/post MD5 anchors.
+
+Validation:
+
+- `uv run pytest tests/test_metadata_write.py -v` passed: 29 tests.
+- `uv run --extra dev poe json-smoke` passed: 27 tests.
+- `uv run --extra dev poe check` passed: 325 tests plus lint/format.
+
+Tag Proposal Diagnostics sprint: 5/5 complete.
+
+1. Done: calibrate remaining broad proposal terms: `tone`, `room`, `walla`,
+   `sea`, `loop`, and high-volume material terms now require category context
+   before opening UCS candidates from filename/path/semantic evidence.
+2. Done: add proposal summary diagnostics for top opening tokens and fan-out
+   counts, plus prune newly visible low-value tokens: `general`, `sample`,
+   `of`, and `by`.
+3. Done: design and start shared safe-folder config across dedupe, packs,
+   organize, rename, and metadata workflows. Dedupe and packs now accept
+   `--config PATH` and merge config-backed safe folders with CLI overrides;
+   organize, rename, and metadata-write remain the next rollout surfaces.
+4. Done: decide similarity validation should run as a manual beta-audit option
+   for now, not as overnight automation by default.
+5. Done: review CI runtime after the metadata-extras job lands on GitHub, and
+   fix the Linux-only similarity feedback test ordering assumption found during
+   that review.
+
+CI runtime review:
+
+- Latest inspected run: GitHub Actions run `25620643129`, "Prove metadata write
+  format support", created `2026-05-10T05:19:51Z`.
+- `metadata-extras` succeeded. Total job wall time was about 14 seconds; the
+  metadata test step itself ran in about 4 seconds after
+  `uv sync --extra metadata --extra dev`.
+- The main `pytest (3.11)` job failed after about 28 seconds, not because of
+  metadata extras. Failure was
+  `tests/test_similarity.py::test_similarity_feedback_tracks_segment_relationships`.
+- Root cause: similarity feedback intentionally canonicalizes pair ordering so
+  `A/B` and `B/A` are a single relationship, but the test expected input
+  left/right segment orientation. Linux scan/order exposed the assumption.
+- Fixed the test to assert the stored segment relationship as a set of
+  `(path, segment_index)` pairs instead of incidental left/right orientation.
+
+Validation:
+
+- `uv run pytest tests/test_similarity.py::test_similarity_feedback_tracks_segment_relationships -v`
+  passed: 1 test.
+- `uv run pytest tests/test_audio.py tests/test_metadata_backends.py tests/test_metadata_write.py -v`
+  passed: 42 tests.
+- `uv run --extra dev poe check` passed: 335 tests plus lint/format.
+- `uv run --extra dev poe json-smoke` passed: 27 tests.
+
+Similarity validation decision:
+
+- Added `--similarity-validation` to the internal beta-audit harness as the
+  explicit validation entrypoint; `--include-similarity` remains supported.
+- Beta-audit manifests now record `similarity_validation_mode:
+  manual_beta_audit` and `similarity_automation_recommendation:
+  defer_overnight_automation_until_manual_validation_passes`.
+- Documented the decision in `docs/SIMILARITY.md`: collect manual real-library
+  runtime, cache-size, segment-count, and false-positive evidence before adding
+  scheduled overnight automation.
+
+Validation:
+
+- `uv run pytest tests/test_internal_beta_audit.py -v` passed: 4 tests.
+- `uv run --extra dev poe check` passed: 335 tests plus lint/format.
+- `uv run --extra dev poe json-smoke` passed: 27 tests.
+
+Safe-folder config slice:
+
+- Added shared preservation config loading in `sfxworkbench/preservation.py`.
+- Supported JSON shape:
+  `{"safe_folders": ["~/CommercialLibraries/Master"], "preservation": {"prefer_folders": [], "prefer_extensions": ["wav"]}}`.
+- Wired config rules into `sfx dedupe --config`, `sfx dedupe --apply --config`,
+  `sfx packs plan --config`, and `sfx packs apply --config`.
+- Pack planning intentionally ignores config extension preferences because pack
+  decisions are folder-level.
+- Completed the shared safe-folder rollout for remaining beta mutation
+  surfaces: `sfx organize audit/apply`, `sfx organize nesting-plan/nesting-apply`,
+  `sfx rename`, and `sfx metadata write-apply` now accept `--config` and block
+  protected move/rename/flatten/write entries. Apply paths re-check config-backed
+  safe folders so older reports and plans cannot mutate protected audio.
+
+Validation:
+
+- `uv run pytest tests/test_preservation.py tests/test_dedupe.py tests/test_packs.py tests/test_json_contracts.py -v`
+  passed: 64 tests.
+- `uv run --extra dev pytest tests/test_preservation.py tests/test_rename.py tests/test_organize.py tests/test_metadata_write.py -v`
+  passed: 85 tests, 3 skipped.
+- `uv run --extra dev poe check` passed: 344 tests plus lint/format.
+- `uv run --extra dev poe json-smoke` passed: 30 tests.
+
+Proposal diagnostics calibration:
+
+- Previous report:
+  `/private/tmp/tag_proposals_precision_20260510.json`.
+- New report:
+  `/private/tmp/tag_proposals_broad_token_sprint_final_20260510.json`.
+- Command:
+  `uv run sfx tag propose /Users/mattwesdock/CommercialLibraries --db /Users/mattwesdock/.sfxworkbench/index.db --catalog /Users/mattwesdock/.sfxworkbench/ucs_catalog.json --min-confidence 0.6 --limit 500 --output /private/tmp/tag_proposals_broad_token_sprint_final_20260510.json --json`
+- Before: 79,674 proposals across 41,699 files; 13,201 strong and 66,473
+  review.
+- After: 75,974 proposals across 40,744 files; 12,982 strong and 62,992
+  review.
+- Delta: -3,700 total proposals, -3,481 review proposals, -219 strong
+  proposals, and -955 files with proposals.
+- New diagnostics show the next calibration hotspots without manual JSON
+  spelunking: `whoosh` from filename/path, `construction` from path, and
+  high-fanout `impact`/`movement` candidates that are now partly blocked but
+  still worth reviewing.
+
+Validation:
+
+- `uv run pytest tests/test_tag_propose.py tests/test_json_contracts.py -v`
+  passed: 24 tests.
+- `uv run --extra dev poe check` passed: 327 tests plus lint/format.
+- `uv run --extra dev poe json-smoke` passed: 27 tests.
 
 Terminal-test calibration:
 
 - Report:
   `/Users/mattwesdock/reports/tag_proposals_embedded_20260509_232710.json`.
 - Command:
-  `uv run sfx tag propose /Users/mattwesdock/CommercialLibraries --db /Users/mattwesdock/.wavwarden/index.db --catalog /Users/mattwesdock/.wavwarden/ucs_catalog.json --min-confidence 0.6 --limit 500 --output /Users/mattwesdock/reports/tag_proposals_embedded_20260509_232710.json`
+  `uv run sfx tag propose /Users/mattwesdock/CommercialLibraries --db /Users/mattwesdock/.sfxworkbench/index.db --catalog /Users/mattwesdock/.sfxworkbench/ucs_catalog.json --min-confidence 0.6 --limit 500 --output /Users/mattwesdock/reports/tag_proposals_embedded_20260509_232710.json`
 - Summary: 120,716 files considered; 178,400 proposals across 46,756 files;
   16,791 strong and 161,609 review.
 - Compared with the pre-embedded report
@@ -294,12 +410,347 @@ Terminal-test calibration:
   (`--min-confidence 0.8`) and treat the broad `review` bucket as diagnostic
   until candidate opening is tightened further.
 
+Textual TUI Alpha 0:
+
+- Added optional `tui` extra with Textual.
+- Added `sfx tui` as a read-only alpha review workbench.
+- Added `sfxworkbench/tui_data.py` adapters for dashboard signals, review queue
+  counts, indexed-file rows, safe-folder firewall visibility, and JSON
+  report/plan/log summaries.
+- Added `sfxworkbench/tui_app.py` with Dashboard, Queues, Files, Plans, and
+  Firewall tabs.
+- Current scope is intentionally read-only; approve/apply/undo workflows should
+  wait until the review model has been tested against real indexed libraries.
+
+Validation:
+
+- `uv run --extra tui --extra dev pytest tests/test_tui_data.py -v` passed: 4 tests.
+- `uv run --extra tui --extra dev sfx tui --help` passed.
+- `uv run --extra tui --extra dev python -c "from sfxworkbench.tui_app import run_tui; from sfxworkbench.tui_data import dashboard_metrics; print(run_tui.__name__, len(dashboard_metrics()))"` passed.
+- `uv run --extra tui --extra dev poe check` passed: 348 tests plus lint/format.
+- `uv run --extra tui --extra dev poe json-smoke` passed: 30 tests.
+
+Textual TUI Alpha 1:
+
+- Added file search to the Files tab with FTS search and literal path fallback.
+- Added a selected-file detail pane with indexed facts, filename issues,
+  accepted DB-only tags, duplicate count, and similarity segment count.
+- Added queue item browsing for scan errors, filename issues, long paths,
+  Unicode normalization, missing metadata, unusual sample rates, duplicate
+  groups, UCS-looking filenames, DB-only tags, and similarity feedback.
+- Added plan-detail rows beneath JSON report/plan/log summaries for entries,
+  groups, errors, and candidates.
+- Kept the TUI read-only; queue item selection only pivots the file browser to
+  the selected path.
+
+Validation:
+
+- `uv run --extra tui --extra dev pytest tests/test_tui_data.py -v` passed: 7 tests.
+- `uv run --extra tui --extra dev poe check` passed: 351 tests plus lint/format.
+
+Textual TUI Alpha 2:
+
+- Added queue-item filtering on the selected queue, with queue-specific helper
+  text for metadata gaps, duplicates, tags, and similarity feedback.
+- Expanded metadata queue rows with sample rate, bit depth, channel count, and
+  duration so missing-metadata triage has useful context before opening detail.
+- Added keyboard shortcuts for file search, queue filter, reset filters, and
+  focusing the queues/items/files/plans panes.
+- Compacted long paths in file, queue, and plan tables while keeping full paths
+  in the underlying selected rows and detail pane.
+- Kept the TUI read-only; no approve/apply/undo controls were added.
+
+Validation:
+
+- `uv run --extra tui --extra dev pytest tests/test_tui_data.py -v` passed: 8 tests.
+- `uv run --extra tui --extra dev poe check` passed: 352 tests plus lint/format.
+
+Textual TUI visual identity audit:
+
+- Standardized the alpha TUI on Textual's default dark theme with explicit
+  sfxworkbench dark surface, border, and foreground colors.
+- Restyled table headers, alternating rows, hover state, and selected-row cursor
+  for high contrast during dense review sessions.
+- Restyled inputs, detail panes, notes, and pane titles so search/filter states
+  remain legible against the dark background.
+- Restyled the footer keybind HUD explicitly so changing theme state does not
+  make shortcut labels disappear.
+
+Validation:
+
+- `uv run --extra tui --extra dev pytest tests/test_tui_data.py -v` passed: 8 tests.
+- `uv run --extra tui --extra dev poe check` passed: 352 tests plus lint/format.
+
+Textual TUI first-run information architecture pass:
+
+- Added a `Start` tab that turns library state into a suggested first-pass
+  order: import health, exact duplicates, metadata gaps, UCS provenance,
+  accepted tags, then generated reports/logs.
+- Renamed top-level surfaces from internal implementation language to user
+  tasks: `Dashboard` -> `Start`, `Queues` -> `Review`, `Plans` -> `Reports`.
+- Consolidated the old `Firewall` page into `Start` as `Protected Folders`,
+  since it is a guardrail users should see early rather than a separate place
+  to operate.
+- Renamed review-table labels from `Queue`/`Queue Items` to `Review List` and
+  `Items to Inspect`.
+
+Validation:
+
+- `uv run --extra tui --extra dev pytest tests/test_tui_data.py -v` passed: 9 tests.
+- `uv run --extra tui --extra dev poe check` passed: 353 tests plus lint/format.
+
+Textual TUI guided workbench pass:
+
+- Start rows are now actionable: selecting a first-pass step jumps to the
+  relevant Review list or to Reports.
+- Review lists now carry lifecycle lanes: Health, Cleanup, Metadata, Naming,
+  and Decisions.
+- Selecting a Review item now opens that file in Files and seeds Reports with
+  the selected filename as context.
+- Reports can filter JSON reports/plans/logs by context text, and reset filters
+  restores the full report list.
+- Clear/empty Review states now explain what a zero means instead of showing a
+  generic empty row.
+- The Start table receives initial keyboard focus so a first-time user can move
+  directly from the suggested order into the workbench.
+
+Validation:
+
+- `uv run --extra tui --extra dev pytest tests/test_tui_data.py -v` passed: 9 tests.
+- `uv run --extra tui --extra dev poe check` passed: 353 tests plus lint/format.
+- Real-library TUI launch smoke passed against
+  `/Users/mattwesdock/reports/sfxworkbench_beta_audit/index.db`.
+
+Textual TUI payoff ranking pass:
+
+- Reframed the Start tab as a payoff-ranked worklist instead of a procedural
+  checklist.
+- Added explicit payoff levels and "why it matters" text so users can start
+  with the highest-impact review/change lanes: import health, exact duplicates,
+  metadata gaps, UCS provenance, accepted tags, then reports/logs.
+- Kept the TUI read-only; selecting a row still jumps to the relevant review
+  surface without creating a hidden mutation path.
+
+Validation:
+
+- `.venv/bin/python -m pytest tests/test_tui_data.py -v` passed: 9 tests.
+- `.venv/bin/python -m ruff check sfxworkbench/tui_data.py sfxworkbench/tui_app.py tests/test_tui_data.py` passed.
+- `.venv/bin/python -m ruff format --check sfxworkbench/tui_data.py sfxworkbench/tui_app.py tests/test_tui_data.py` passed.
+
+Textual TUI actionable workbench pass:
+
+- Added CLI next actions to the payoff-ranked Start rows, so each first-pass
+  item points to the exact command or report path to create next.
+- Added queue-specific next steps to the Review table for scan errors,
+  filename cleanup, duplicates, metadata gaps, UCS validation, accepted tags,
+  and similarity decisions.
+- Split JSON summaries in Reports into `Report`, `Plan`, and `Log` categories.
+- Expanded file detail with stem/extension facts and file-specific next actions
+  for scan errors, unsafe names, duplicates, metadata gaps, UCS-looking names,
+  and accepted DB-only tags.
+- Kept the TUI read-only; no approve/apply/undo controls were added.
+
+Validation:
+
+- `uv run --extra tui --extra dev pytest tests/test_tui_data.py -v` passed: 9 tests.
+- `uv run --extra dev poe json-smoke` passed: 30 tests.
+- `uv run --extra dev poe check` passed: 350 tests plus lint/format.
+
+sfxworkbench packaging/install validation:
+
+- Replaced deprecated `typer[all]` dependency with explicit `typer>=0.12` and
+  `rich>=13.0`, removing the Typer extra warning during editable installs.
+- Refreshed `uv.lock` after the dependency declaration change.
+- Validated core, TUI, and metadata install paths after the rename.
+- Confirmed the `sfx` console entry point resolves to `sfxworkbench.cli`.
+
+Validation:
+
+- `uv sync --extra dev` passed.
+- `uv sync --extra tui --extra dev` passed.
+- `uv sync --extra metadata --extra dev` passed.
+- `uv run sfx --version` returned `sfxworkbench 0.1.0`.
+- `uv run --extra dev python - <<'PY' ...` imported `sfxworkbench` and loaded
+  the Typer app named `sfx`.
+- `uv run --extra dev poe json-smoke` passed: 30 tests.
+- `uv run --extra dev poe check` passed: 350 tests plus lint/format.
+
+Textual TUI Alpha 3:
+
+- Added built-in queue-specific saved views to the Review tab, so common real
+  library slices such as WAV metadata gaps, 48k/96k WAV gaps, duplicate WAVs,
+  UCS provenance tags, and similarity decision states can be applied without
+  retyping filters.
+- Expanded selected-file detail into grouped sections: Identity, Audio,
+  Embedded Metadata, and Review State. The detail pane now exposes ADM, cue
+  marker, sampler, and metadata-source flags alongside the existing BEXT/iXML,
+  duplicate, segment, issue, tag, and next-action context.
+- Kept the TUI read-only; saved views only set queue filters and do not create
+  approve/apply/undo paths.
+
+Validation:
+
+- `uv run --extra tui --extra dev pytest tests/test_tui_data.py -v` passed:
+  10 tests.
+- `uv run --extra dev poe json-smoke` passed: 30 tests.
+- `uv run --extra tui --extra dev poe check` passed: 354 tests plus
+  lint/format.
+
+Textual TUI Alpha 4:
+
+- Added built-in saved views to the Reports tab for Everything, Reports,
+  Plans, Logs, Protected, Conflicts, Metadata, and Dedupe evidence.
+- Added category-aware JSON discovery so report browsing can filter by
+  `Report`, `Plan`, or `Log` without relying only on text matches.
+- Kept report browsing read-only; saved views only filter discovered JSON
+  summaries and detail rows.
+
+Validation:
+
+- `uv run --extra tui --extra dev pytest tests/test_tui_data.py -v` passed:
+  11 tests.
+- `uv run ruff check sfxworkbench/tui_data.py sfxworkbench/tui_app.py tests/test_tui_data.py`
+  passed.
+- `uv run ruff format --check sfxworkbench/tui_data.py sfxworkbench/tui_app.py tests/test_tui_data.py`
+  passed.
+
+Textual TUI Alpha 5:
+
+- Report detail rows now include top-level JSON `summary` metrics, so generated
+  reports with sparse or empty entry lists still show useful counts in the
+  Reports tab.
+- Kept summary display read-only; it only renders existing JSON evidence.
+
+Validation:
+
+- `uv run --extra tui --extra dev pytest tests/test_tui_data.py -v` passed:
+  11 tests.
+- `uv run ruff check sfxworkbench/tui_data.py tests/test_tui_data.py` passed.
+- `uv run ruff format --check sfxworkbench/tui_data.py tests/test_tui_data.py`
+  passed.
+
+Textual TUI alpha iteration closeout:
+
+- Milestone complete for this pass: real-library terminal smoke, queue saved
+  views, report saved views, richer file detail sections, summary report rows,
+  and dense read-only review polish are in place.
+- Read-only real-library data smoke passed against
+  `/Users/mattwesdock/.sfxworkbench/index.db` and `/Users/mattwesdock/reports`:
+  dashboard metrics, start steps, review queues, missing-metadata queue items,
+  report presets, and plan discovery all loaded without error.
+
+Validation:
+
+- `uv run --extra tui --extra dev sfx tui --help` passed.
+- `uv run --extra tui --extra dev python -c '...'` real-library adapter smoke
+  passed.
+- `uv run --extra dev poe json-smoke` passed: 30 tests.
+- `uv run --extra tui --extra dev poe check` passed: 355 tests plus
+  lint/format.
+
+M0/M1/M2/M6 mini closeout:
+
+- Mini milestone complete: all known unfinished stabilization, beta-freeze,
+  current-scope metadata writing, and read-only TUI baseline work has been
+  gathered into `docs/FINISH_PLAN.md` and closed.
+- Full-library force-rescan similarity-validation attempt was stopped after
+  755.56s before report generation. Treat this as performance evidence for M5:
+  whole-library similarity validation needs job controls/resume clarity before
+  it becomes a default path.
+- Bounded copied real-library slice:
+  `/private/tmp/sfxworkbench_mini_closeout_slice_20260511/library`, 200 copied
+  audio files.
+- Similarity-validation beta audit:
+  `/private/tmp/sfxworkbench_mini_closeout_slice_20260511/audit`.
+  Summary: 200 files scanned; 0 scan errors; 0 filename issues; 109 missing
+  metadata rows; 0 unusual sample-rate files; 0 related groups; 0 pack overlap
+  candidates; 200 similarity descriptors; 689 detected segments; 2 file-scope
+  similarity groups; 11 segment-scope similarity groups. Full audit elapsed:
+  7.55s.
+- Performance captures on the same slice:
+  - scan with hashes: 1.61s for 200 files.
+  - pack audit: 0.17s.
+  - metadata write-plan: 0.18s, with no accepted tags in the slice DB.
+  - tag propose: 0.29s using a temporary mini UCS catalog.
+  - similarity crawl: 5.74s for 200 descriptors and 689 segments.
+- Mutation trust-language review completed across CLI/help and implementation
+  surfaces. Current beta mutation paths surface dry-run/apply, reviewed plans,
+  backup, quarantine, safe-folder refusal, collision refusal, readback, and undo
+  language; no wording patch was needed.
+- `docs/FINISH_PLAN.md` now marks M0, M1, M2 current scope, and the read-only
+  M6 baseline complete, and moves the near-term sprint to M5 similarity
+  expansion.
+
+M4 closeout:
+
+- Reconciled `docs/FINISH_PLAN.md` with the implemented advanced-maintenance
+  surface: safe-folder guarded advanced workflows, preservation score
+  explanations, exact-hash import comparison, processed-file reports, reviewed
+  permanent-delete plans, and copy-output dual-mono conversion are now described
+  as closed beta scope.
+- Current M4 validation: `uv run pytest tests/test_m4_advanced.py -v` passed
+  with 11 tests.
+- Remaining advanced items are explicitly framed as post-M4 product polish, not
+  active beta blockers.
+
+M5 closeout:
+
+- Added bounded similarity crawl job controls with `--max-files` and
+  `--throttle-ms`; partial runs record `status=partial`,
+  `stop_reason=max_files`, and pending/stale counts so the next crawl can
+  resume stale work cleanly.
+- Added backend/version/parameter anchoring to similarity analysis runs,
+  descriptors, segments, and crawl JSON, plus a reserved `audio_embeddings`
+  schema for future optional embedding backends.
+- Added `sfx similarity backends` to report the available deterministic backend
+  and explicitly deferred fingerprint/embedding backends.
+- `sfx tag propose` now includes cached deterministic descriptor evidence as
+  review-only support on existing proposals; it does not use descriptors as
+  semantic proof.
+- Updated `docs/FINISH_PLAN.md`, `docs/SIMILARITY.md`, and `README.md` so M5 is
+  closed for the deterministic/report-only beta scope.
+- Validation: `uv run pytest tests/test_similarity.py tests/test_tag_propose.py tests/test_cli_json.py::test_similarity_cli_json_smoke -v`
+  passed with 25 tests.
+
+M7 closeout:
+
+- Added public release readiness docs: `docs/RELEASE.md`,
+  `docs/MIGRATIONS.md`, and `docs/DEMO.md`.
+- Updated README install guidance for GitHub release wheels, future PyPI,
+  GitHub source installs, optional extras, and demo workflow references.
+- Expanded `CHANGELOG.md`, `SECURITY.md`, and `SUPPORT.md` for public beta
+  use, commercial-library privacy, generated SQLite/JSON artifacts, and
+  optional analysis boundaries.
+- Updated package metadata description and documentation URL.
+- Built release artifacts with `uv build`: `dist/sfxworkbench-0.1.0.tar.gz`
+  and `dist/sfxworkbench-0.1.0-py3-none-any.whl`.
+- Verified a clean Python 3.11 wheel install in
+  `/private/tmp/sfxworkbench_m7_smoke`, then ran installed `sfx --help`,
+  `sfx scan tests/fixtures/library_basic --db /private/tmp/sfxworkbench_m7_smoke/index.db --json`,
+  and `sfx audit --db /private/tmp/sfxworkbench_m7_smoke/index.db --json`.
+- Validation: `uv sync --extra dev`, `uv sync --extra metadata --extra dev`,
+  `uv run sfx --help`, and `uv run --extra dev poe check` passed.
+
+M8 planned:
+
+- New milestone: local validation and TUI improvement.
+- Goal: run finished beta workflows against copied local data while improving
+  the read-only Textual review surface around the friction found during those
+  runs.
+- Scope: local validation workspace, end-to-end report/review/apply/undo smoke
+  paths, usability notes, TUI start checklist, report discovery, plan/log
+  summaries, file detail, queue filtering, similarity feedback visibility,
+  protected-folder visibility, and command copy/run affordances.
+- Guardrail: keep TUI mutation actions out of scope until read-only review
+  workflows are reliable and every action maps cleanly to existing CLI JSON
+  plans/logs.
+- Validation target: `uv run --extra tui --extra dev sfx tui --help`,
+  targeted `tests/test_tui_data.py`, and `uv run --extra tui --extra dev poe check`.
+
 ## Later
 
 - similarity-assisted tag proposals after the crawler has more real-library
   validation
-- Textual TUI after CLI JSON contracts feel boring, using
-  `docs/APP_UI_DIRECTION.md` and the local mockup in `docs/assets/`
 
 ## Solo Workflow
 

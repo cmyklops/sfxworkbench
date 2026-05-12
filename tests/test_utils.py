@@ -1,6 +1,6 @@
-"""Tests for wavwarden.utils."""
+"""Tests for sfxworkbench.utils."""
 
-from wavwarden.utils import fmt_bytes
+from sfxworkbench.utils import fmt_bytes
 
 
 def test_fmt_bytes_b() -> None:

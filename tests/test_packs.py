@@ -4,8 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 
-from wavwarden.db import get_connection
-from wavwarden.packs import (
+from sfxworkbench.db import get_connection
+from sfxworkbench.packs import (
     apply_pack_plan,
     audit_packs,
     build_pack_plan,
@@ -304,6 +304,30 @@ def test_pack_plan_prefers_safe_folder_keep_and_ignores_protected_sources(tmp_pa
     assert protected_entry.reason.startswith("source folder is inside safe folder")
 
 
+def test_pack_plan_uses_config_safe_folder(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    safe = root / "Protected"
+    protected_keep = safe / "A Pack"
+    duplicate = root / "Imports" / "B Pack"
+    files = [
+        {"path": protected_keep / "one.wav", "md5": "A", "size": 10},
+        {"path": duplicate / "one.wav", "md5": "A", "size": 10},
+    ]
+    _write_pack_files(files)
+    _seed_files(tmp_db, files)
+    report_path = tmp_path / "pack_report.json"
+    config_path = tmp_path / "sfxworkbench.json"
+    config_path.write_text(json.dumps({"safe_folders": [str(safe)]}))
+    write_pack_audit_report(audit_packs(root, tmp_db, min_files=1), report_path, quiet=True)
+
+    plan = build_pack_plan(report_path, config_path=config_path, quiet=True)
+
+    assert plan.safe_folders == [str(safe.resolve())]
+    assert plan.entries[0].folder_path == str(duplicate)
+    assert plan.entries[0].keep_folder_path == str(protected_keep)
+    assert plan.entries[0].keep_protected_by == str(safe.resolve())
+
+
 def test_pack_plan_uses_preferred_folder_for_exact_duplicate_keep(tmp_path: Path, tmp_db: Path) -> None:
     root = tmp_path / "library"
     preferred = root / "Preferred"
@@ -379,6 +403,33 @@ def test_pack_apply_refuses_cli_safe_folder_even_for_old_plan(tmp_path: Path, tm
             "error": "source folder is protected by safe folder",
         }
     ]
+
+
+def test_pack_apply_refuses_config_safe_folder_even_for_old_plan(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    keep = root / "A Pack"
+    duplicate = root / "B Pack"
+    files = [
+        {"path": keep / "one.wav", "md5": "A", "size": 10},
+        {"path": duplicate / "one.wav", "md5": "A", "size": 10},
+    ]
+    plan_path = _pack_plan_for_files(tmp_path, tmp_db, root, files)
+    config_path = tmp_path / "sfxworkbench.json"
+    config_path.write_text(json.dumps({"safe_folders": [str(duplicate)]}))
+    review_pack_plan(plan_path, approve_all=True, quiet=True)
+
+    result = apply_pack_plan(
+        plan_path,
+        db_path=tmp_db,
+        config_path=config_path,
+        require_reviewed=True,
+        dry_run=False,
+        quiet=True,
+    )
+
+    assert result.quarantined == 0
+    assert duplicate.exists()
+    assert result.errors[0]["safe_folder"] == str(duplicate.resolve())
 
 
 def test_pack_apply_rejects_changed_size_before_quarantine(tmp_path: Path, tmp_db: Path) -> None:

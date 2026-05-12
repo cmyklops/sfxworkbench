@@ -1,6 +1,61 @@
+import json
 from pathlib import Path
 
-from wavwarden.preservation import build_preservation_rules, evidence, priority_key, protected_by
+from sfxworkbench.preservation import (
+    build_preservation_rules,
+    evidence,
+    load_preservation_config,
+    priority_key,
+    protected_by,
+)
+
+
+def test_load_preservation_config_supports_top_level_and_nested_rules(tmp_path: Path) -> None:
+    safe = tmp_path / "Master"
+    nested_safe = tmp_path / "Archive"
+    preferred = tmp_path / "Preferred"
+    config_path = tmp_path / "sfxworkbench.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "safe_folders": [str(safe)],
+                "preservation": {
+                    "safe_folders": [str(nested_safe)],
+                    "prefer_folders": [str(preferred)],
+                    "prefer_extensions": ["wav"],
+                },
+            }
+        )
+    )
+
+    rules = load_preservation_config(config_path)
+
+    assert rules.safe_folders == (str(safe.resolve()), str(nested_safe.resolve()))
+    assert rules.prefer_folders == (str(preferred.resolve()),)
+    assert rules.prefer_extensions == (".wav",)
+
+
+def test_load_preservation_config_rejects_scalar_lists(tmp_path: Path) -> None:
+    config_path = tmp_path / "sfxworkbench.json"
+    config_path.write_text(json.dumps({"safe_folders": str(tmp_path / "Master")}))
+
+    try:
+        load_preservation_config(config_path)
+    except ValueError as exc:
+        assert "safe_folders must be a list" in str(exc)
+    else:
+        raise AssertionError("scalar safe_folders should be rejected")
+
+
+def test_build_preservation_rules_merges_config_before_cli_overrides(tmp_path: Path) -> None:
+    config_safe = tmp_path / "Master"
+    cli_safe = tmp_path / "Session"
+    config_path = tmp_path / "sfxworkbench.json"
+    config_path.write_text(json.dumps({"safe_folders": [str(config_safe)]}))
+
+    rules = build_preservation_rules(config_path=config_path, safe_folders=[cli_safe])
+
+    assert rules.safe_folders == (str(config_safe.resolve()), str(cli_safe.resolve()))
 
 
 def test_preservation_rules_keep_user_priority_order(tmp_path: Path) -> None:

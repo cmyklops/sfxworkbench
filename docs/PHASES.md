@@ -1,6 +1,6 @@
-# wavwarden — Internal Studio Beta Roadmap
+# sfxworkbench — Internal Studio Beta Roadmap
 
-wavwarden manages commercial sound-library hygiene: audit, junk cleanup,
+sfxworkbench manages commercial sound-library hygiene: audit, junk cleanup,
 indexing, duplicate review, search/export, and reversible renaming. The product
 target is an **Internal Studio Beta** before public v1.0.
 
@@ -12,14 +12,14 @@ target is an **Internal Studio Beta** before public v1.0.
 - Audio-content mutation is high risk and stays experimental until proven.
 - Permanent disk deletion is advanced-only and should first operate on reviewed
   quarantine plans, not live libraries.
-- `sfx` stays the user-facing command for the Internal Studio Beta. `wavwarden`
-  remains the project/package name; no `wavwarden` CLI alias is planned before
+- `sfx` stays the user-facing command for the Internal Studio Beta. `sfxworkbench`
+  remains the project/package name; no `sfxworkbench` CLI alias is planned before
   beta unless user testing shows confusion.
 
 ## Product Lessons From SMDB Companion
 
 SMDB Companion is a useful reference point for professional duplicate-heavy
-Soundminer workflows. wavwarden should learn from its practical trust controls
+Soundminer workflows. sfxworkbench should learn from its practical trust controls
 without copying its product shape. The main lessons to adopt are:
 
 - safe folders that block automated cleanup plans
@@ -31,14 +31,14 @@ without copying its product shape. The main lessons to adopt are:
 - advanced dual-mono detection/conversion
 - permanent disk deletion for already-reviewed quarantine content
 
-The wavwarden version of these features should remain filesystem-first,
+The sfxworkbench version of these features should remain filesystem-first,
 JSON-first, and review-first. See `docs/ADVANCED_OPERATIONS.md` for the detailed
 plan.
 
 ## Product Lessons From Sononym
 
 Sononym is a useful reference for sample discovery, descriptor-driven browsing,
-similarity search, duplicate review, and tagging. wavwarden should not copy its
+similarity search, duplicate review, and tagging. sfxworkbench should not copy its
 browser-first product shape, but several ideas fit the CLI roadmap:
 
 - duplicate keep choices should support prefer-folder and prefer-extension
@@ -61,7 +61,7 @@ more CLI-friendly implementation pattern. The useful idea is not the exact UI;
 it is the offline crawler that precomputes audio-content evidence into a small,
 resumable cache.
 
-wavwarden should adopt that architecture for future similarity work:
+sfxworkbench should adopt that architecture for future similarity work:
 
 - keep `sfx scan` fast and metadata-oriented
 - add a separate optional `sfx similarity crawl` command for heavier analysis
@@ -83,8 +83,9 @@ Implemented commands:
 uv run sfx clean PATH
 uv run sfx scan PATH
 uv run sfx audit
+uv run sfx audit-bundle PATH --db ~/.sfxworkbench/index.db --output-dir ~/reports/sfxworkbench_audit --json
 uv run sfx metadata audit --output ~/reports/metadata_report.json
-uv run sfx metadata view QUERY --db ~/.wavwarden/index.db
+uv run sfx metadata view QUERY --db ~/.sfxworkbench/index.db
 uv run sfx metadata backends --json
 uv run sfx metadata write-plan ~/reports/metadata_write_plan.json --path PATH --bwfmetaedit /path/to/bwfmetaedit
 uv run sfx metadata write-review ~/reports/metadata_write_plan.json --approve-all
@@ -93,24 +94,25 @@ uv run sfx metadata write-fixtures ~/reports/metadata_write_plan.json ~/reports/
 uv run sfx metadata write-fixtures ~/reports/metadata_write_plan.json ~/reports/metadata_fixtures --write-fixture-metadata
 uv run sfx metadata write-readback ~/reports/metadata_fixtures --json
 uv run sfx metadata write-apply ~/reports/metadata_write_plan.json --require-reviewed
-uv run sfx metadata write-apply ~/reports/metadata_write_plan.json --require-reviewed --apply --log ~/reports/metadata_write_apply_log.json
-uv run sfx metadata write-undo ~/reports/metadata_write_apply_log.json
-uv run sfx metadata write-undo ~/reports/metadata_write_apply_log.json --apply
+uv run sfx metadata write-apply ~/reports/metadata_write_plan.json --config ~/sfxworkbench.json --require-reviewed
+uv run sfx metadata write-apply ~/reports/metadata_write_plan.json --require-reviewed --apply --log ~/reports/apply_logs/metadata_write_apply_log.json
+uv run sfx metadata write-undo ~/reports/apply_logs/metadata_write_apply_log.json
+uv run sfx metadata write-undo ~/reports/apply_logs/metadata_write_apply_log.json --apply
 uv run sfx groups audit PATH --output ~/reports/related_groups_report.json
 uv run sfx format audit PATH --output ~/reports/format_report.json
 uv run sfx scan-errors --output ~/reports/scan_error_plan.json
 uv run sfx scan-errors --apply ~/reports/scan_error_plan.json
 uv run sfx search QUERY
 uv run sfx export --output library.csv
-uv run sfx similarity crawl PATH --db ~/.wavwarden/index.db --cache ~/.wavwarden/similarity
-uv run sfx similarity segments PATH --db ~/.wavwarden/index.db --limit 200 --json
-uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --limit 20 --json
-uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --scope segment --limit 20 --json
-uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --threshold 0.92 --output ~/reports/similarity_audit.json
-uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --scope segment --threshold 0.95 --json
-uv run sfx similarity feedback set --left one.wav --right two.wav --state ignored --db ~/.wavwarden/index.db
-uv run sfx similarity feedback list --db ~/.wavwarden/index.db --state ignored --json
-uv run sfx similarity feedback clear --left one.wav --right two.wav --db ~/.wavwarden/index.db
+uv run sfx similarity crawl PATH --db ~/.sfxworkbench/index.db --cache ~/.sfxworkbench/similarity
+uv run sfx similarity segments PATH --db ~/.sfxworkbench/index.db --limit 200 --json
+uv run sfx similarity search --file query.wav --db ~/.sfxworkbench/index.db --limit 20 --json
+uv run sfx similarity search --file query.wav --db ~/.sfxworkbench/index.db --scope segment --limit 20 --json
+uv run sfx similarity audit PATH --db ~/.sfxworkbench/index.db --threshold 0.92 --output ~/reports/similarity_audit.json
+uv run sfx similarity audit PATH --db ~/.sfxworkbench/index.db --scope segment --threshold 0.95 --json
+uv run sfx similarity feedback set --left one.wav --right two.wav --state ignored --db ~/.sfxworkbench/index.db
+uv run sfx similarity feedback list --db ~/.sfxworkbench/index.db --state ignored --json
+uv run sfx similarity feedback clear --left one.wav --right two.wav --db ~/.sfxworkbench/index.db
 uv run sfx dedupe --summary-only
 uv run sfx dedupe --output ~/reports/dedupe_plan.json
 uv run sfx dedupe --output ~/reports/dedupe_plan.json --safe-folder ~/CommercialLibraries/Master
@@ -125,9 +127,10 @@ uv run sfx packs plan --report ~/reports/pack_overlap_report.json --prefer-folde
 uv run sfx packs review ~/reports/pack_consolidation_plan.json --approve-all
 uv run sfx packs apply ~/reports/pack_consolidation_plan.json --require-reviewed
 uv run sfx packs apply ~/reports/pack_consolidation_plan.json --safe-folder ~/CommercialLibraries/Master --require-reviewed
-uv run sfx packs apply ~/reports/pack_consolidation_plan.json --apply --require-reviewed --log pack_quarantine_log.json
-uv run sfx packs undo pack_quarantine_log.json --apply
+uv run sfx packs apply ~/reports/pack_consolidation_plan.json --apply --require-reviewed --log ~/reports/apply_logs/pack_quarantine_log.json
+uv run sfx packs undo ~/reports/apply_logs/pack_quarantine_log.json --apply
 uv run sfx organize audit PATH --depth 1 --output ~/reports/organize_report.json
+uv run sfx organize audit PATH --depth 1 --config ~/sfxworkbench.json --output ~/reports/organize_report.json
 uv run sfx organize audit PATH --pattern vendor-product-folders --output ~/reports/vendor_folders.json
 uv run sfx organize audit PATH --pattern common-prefix-folders --output ~/reports/common_prefix_folders.json
 uv run sfx organize audit PATH --pattern numeric-series-folders --output ~/reports/numeric_series_folders.json
@@ -137,33 +140,35 @@ uv run sfx organize nesting-plan ~/reports/nesting_report.json --kind single_chi
 uv run sfx organize nesting-plan ~/reports/nesting_report.json --kind low_value_wrapper --output ~/reports/wrapper_plan.json
 uv run sfx organize review ~/reports/nesting_plan.json --approve-all
 uv run sfx organize nesting-apply ~/reports/nesting_plan.json --require-reviewed
-uv run sfx organize nesting-apply ~/reports/nesting_plan.json --apply --require-reviewed --log nesting_log.json
-uv run sfx organize nesting-undo nesting_log.json --apply
+uv run sfx organize nesting-apply ~/reports/nesting_plan.json --apply --require-reviewed --log ~/reports/apply_logs/nesting_log.json
+uv run sfx organize nesting-undo ~/reports/apply_logs/nesting_log.json --apply
 uv run sfx organize review organize_report.json --approve-all
-uv run sfx organize apply organize_report.json --require-reviewed --log organize_log.json
-uv run sfx organize undo organize_log.json --apply
+uv run sfx organize apply organize_report.json --require-reviewed --log ~/reports/apply_logs/organize_log.json
+uv run sfx organize apply organize_report.json --config ~/sfxworkbench.json --require-reviewed --log ~/reports/apply_logs/organize_log.json
+uv run sfx organize undo ~/reports/apply_logs/organize_log.json --apply
 uv run sfx rename PATH --pattern ucs
 uv run sfx rename PATH --pattern safe
 uv run sfx rename PATH --pattern portable
-uv run sfx rename PATH --pattern ucs --apply --log rename_log.json
-uv run sfx rename PATH --pattern safe --apply --allow-partial --log safe_rename_log.json
-uv run sfx rename PATH --pattern portable --apply --log portable_rename_log.json
-uv run sfx rename --undo rename_log.json --apply
-uv run sfx tag propose PATH --db ~/.wavwarden/index.db --min-confidence 0.6 --output ~/reports/tag_proposals.json
-uv run sfx tag suggest PATH --db ~/.wavwarden/index.db --output ~/reports/tag_suggestions.json
-uv run sfx tag suggest PATH --db ~/.wavwarden/index.db --use-ucs-catalog --min-confidence 0.8 --source ucs_catalog --field ucs_category --field ucs_subcategory --json
-uv run sfx tag plan PATH --db ~/.wavwarden/index.db --from-suggestions ~/reports/tag_suggestions.json --source ucs_catalog --field ucs_category --field ucs_subcategory --output ~/reports/tag_plan.json
+uv run sfx rename PATH --pattern portable --config ~/sfxworkbench.json
+uv run sfx rename PATH --pattern ucs --apply --log ~/reports/apply_logs/rename_log.json
+uv run sfx rename PATH --pattern safe --apply --allow-partial --log ~/reports/apply_logs/safe_rename_log.json
+uv run sfx rename PATH --pattern portable --apply --log ~/reports/apply_logs/portable_rename_log.json
+uv run sfx rename --undo ~/reports/apply_logs/rename_log.json --apply
+uv run sfx tag propose PATH --db ~/.sfxworkbench/index.db --min-confidence 0.6 --output ~/reports/tag_proposals.json
+uv run sfx tag suggest PATH --db ~/.sfxworkbench/index.db --output ~/reports/tag_suggestions.json
+uv run sfx tag suggest PATH --db ~/.sfxworkbench/index.db --use-ucs-catalog --min-confidence 0.8 --source ucs_catalog --field ucs_category --field ucs_subcategory --json
+uv run sfx tag plan PATH --db ~/.sfxworkbench/index.db --from-suggestions ~/reports/tag_suggestions.json --source ucs_catalog --field ucs_category --field ucs_subcategory --output ~/reports/tag_plan.json
 uv run sfx tag summarize ~/reports/tag_plan.json --value-limit 20
 uv run sfx tag review ~/reports/tag_plan.json --approve-field ucs_category --only-status pending
 uv run sfx tag review ~/reports/tag_plan.json --approve-all
-uv run sfx tag apply ~/reports/tag_plan.json --db ~/.wavwarden/index.db --require-reviewed
-uv run sfx tag apply ~/reports/tag_plan.json --db ~/.wavwarden/index.db --require-reviewed --apply --log ~/reports/tag_apply_log.json
-uv run sfx tag sidecar-export ~/reports/accepted_tags.sidecar.json --db ~/.wavwarden/index.db --path PATH
-uv run sfx tag sidecar-import ~/reports/accepted_tags.sidecar.json --db ~/.wavwarden/index.db
+uv run sfx tag apply ~/reports/tag_plan.json --db ~/.sfxworkbench/index.db --require-reviewed
+uv run sfx tag apply ~/reports/tag_plan.json --db ~/.sfxworkbench/index.db --require-reviewed --apply --log ~/reports/apply_logs/tag_apply_log.json
+uv run sfx tag sidecar-export ~/reports/accepted_tags.sidecar.json --db ~/.sfxworkbench/index.db --path PATH
+uv run sfx tag sidecar-import ~/reports/accepted_tags.sidecar.json --db ~/.sfxworkbench/index.db
 uv run sfx ucs import ~/Desktop/_categorylist.csv --release-version v8.2.1
 uv run sfx ucs info
 uv run sfx ucs categories --cat-short AMB
-uv run sfx ucs validate PATH --db ~/.wavwarden/index.db --json
+uv run sfx ucs validate PATH --db ~/.sfxworkbench/index.db --json
 ```
 
 Core command families support `--json` for automation and future UI work.
@@ -195,10 +200,12 @@ python3 audit.py ~/CommercialLibraries --json
   copied fixtures, and compares BEXT, RIFF INFO, or Mutagen readback without
   modifying original audio.
 - `metadata write-apply`: dry-run by default; with `--apply`, writes reviewed
-  Mutagen-backed tags to original AIFF, MP3, FLAC, Ogg/Vorbis, Opus, and M4A
-  files plus BWF MetaEdit-backed `bext` and RIFF INFO `IKEY` fields to original
-  WAV/RF64 files after creating backups, then verifies readback and refreshes
-  the index.
+  Mutagen-backed tags for proven fields in original FLAC, Ogg/Vorbis, Opus,
+  MP3, and M4A files plus BWF MetaEdit-backed `bext` and RIFF INFO `IKEY`
+  fields to original WAV/RF64 files after creating backups, then verifies
+  readback and refreshes the index. `--config` safe folders block original-audio
+  writes. AIFF/AIF and unsupported field/container combinations stay visible as
+  unsupported plan entries.
 - `metadata write-undo`: dry-run by default; with `--apply`, restores originals
   from a metadata write apply log's backups and refreshes indexed anchors.
 - `groups audit`: report-only related sound groups inferred from numbered takes
@@ -235,14 +242,14 @@ python3 audit.py ~/CommercialLibraries --json
   file anchors, writes `tag_apply_log`, and never mutates audio.
 - `tag sidecar-export/import`: portable JSON sidecars for accepted DB-only tags.
 - `dedupe --summary-only`: finds exact MD5 duplicate groups and prints counts without writing a plan.
-- `dedupe --output PLAN.json`: writes a reviewed duplicate plan to an explicit path. Repeated `--safe-folder PATH` options prefer protected duplicate files as keep copies and mark protected extra copies as ignored. Repeated `--prefer-folder PATH` and `--prefer-extension EXT` options store preservation-priority evidence and choose keep copies accordingly.
+- `dedupe --output PLAN.json`: writes a reviewed duplicate plan to an explicit path. Repeated `--safe-folder PATH` options and `--config CONFIG.json` safe folders prefer protected duplicate files as keep copies and mark protected extra copies as ignored. Repeated `--prefer-folder PATH` / `--prefer-extension EXT` options and matching config rules store preservation-priority evidence and choose keep copies accordingly.
 - `dedupe --review PLAN.json`: stamps all or selected duplicate groups as approved.
-- `dedupe --apply`: validates size/hash and quarantines by default; use `--require-reviewed` to refuse unapproved plans. Plan-recorded and CLI safe folders are re-checked before quarantine or deletion.
+- `dedupe --apply`: validates size/hash and quarantines by default; use `--require-reviewed` to refuse unapproved plans. Plan-recorded, CLI, and `--config` safe folders are re-checked before quarantine or deletion.
 - `packs audit`: report-only exact duplicate folder and pack-overlap detection; no filesystem or SQLite mutation.
 - `organize audit/review/apply/undo`: safe folder-structure cleanup with review gate, SQLite path updates, and undo log.
 - `organize audit --pattern redundant-nesting`: report-only folder-structure review for repeated names, one-child chains, and low-value wrappers.
 - `organize nesting-plan/apply/undo`: reviewed flatten workflow for repeated folder names, non-generic single-child chains, and strict leaf wrappers; dry-run by default and never overwrites.
-- `rename`: previews UCS-oriented, safe, or portable filename/path changes, refuses collisions, applies with undo log. `--pattern portable` fixes Unicode normalization, risky cross-platform characters, non-ASCII names, and conservative long paths. `--allow-partial` can apply valid entries while keeping unresolved collisions visible in the result.
+- `rename`: previews UCS-oriented, safe, or portable filename/path changes, refuses collisions, applies with undo log. `--config` safe folders block protected rename entries during preview and apply validation. `--pattern portable` fixes Unicode normalization, risky cross-platform characters, non-ASCII names, and conservative long paths. `--allow-partial` can apply valid entries while keeping unresolved collisions visible in the result.
 
 ## Phase 2 — Cleanup Tooling
 
@@ -343,7 +350,7 @@ category parents:
 
 Unknown numeric folders remain review candidates instead of being moved. Future
 versions should load a user-editable series catalog so studios can add
-proprietary or legacy library number mappings without changing wavwarden code.
+proprietary or legacy library number mappings without changing sfxworkbench code.
 
 The next organization audit is implemented as report-only:
 `sfx organize audit PATH --pattern redundant-nesting --depth 8`, flagging:
@@ -400,14 +407,15 @@ uv run sfx workflow apply workflow_plan.json --require-reviewed
 ```
 
 Each workflow step must preserve its own report, plan, quarantine, or undo log
-so large batch runs remain explainable and recoverable.
+so large batch runs remain explainable and recoverable. Default apply and undo
+logs are grouped under `apply_logs/` beside the source report or plan.
 
 A developer-facing dry-run harness now exercises the current beta-safe audit
 path without modifying the library:
 
 ```bash
-uv run --extra dev poe beta-audit ~/CommercialLibraries --output-dir ~/reports/wavwarden_beta_audit
-python scripts/internal_beta_audit.py ~/CommercialLibraries --output-dir ~/reports/wavwarden_beta_audit
+uv run --extra dev poe beta-audit ~/CommercialLibraries --output-dir ~/reports/sfxworkbench_beta_audit
+python scripts/internal_beta_audit.py ~/CommercialLibraries --output-dir ~/reports/sfxworkbench_beta_audit
 ```
 
 The harness runs `scan`, `audit`, `metadata audit`, `groups audit`,
@@ -435,7 +443,8 @@ hand-rolled binary mutation.
 
 Advanced operations planned after the beta-safe workflows stabilize:
 
-- safe-folder configuration shared by all cleanup planners
+- expand shared preservation config beyond safe folders into richer
+  workflow-specific controls
 - preservation-priority scoring for duplicate keep recommendations
 - database/import compare workflows
 - processed-file detection for rendered/plugin variants
@@ -456,14 +465,14 @@ the optional audio-analysis lane. This lane should remain CLI-first and
 JSON-first:
 
 ```bash
-uv run sfx similarity crawl PATH --db ~/.wavwarden/index.db --cache ~/.wavwarden/similarity
-uv run sfx similarity segments PATH --db ~/.wavwarden/index.db --limit 200 --json
-uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --limit 50 --json
-uv run sfx similarity search --file query.wav --db ~/.wavwarden/index.db --scope segment --limit 50 --json
-uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --threshold 0.92 --output similarity_report.json
-uv run sfx similarity audit PATH --db ~/.wavwarden/index.db --scope segment --threshold 0.95 --json
-uv run sfx similarity feedback set --left one.wav --right two.wav --state favorite --db ~/.wavwarden/index.db
-uv run sfx similarity feedback list --db ~/.wavwarden/index.db --json
+uv run sfx similarity crawl PATH --db ~/.sfxworkbench/index.db --cache ~/.sfxworkbench/similarity
+uv run sfx similarity segments PATH --db ~/.sfxworkbench/index.db --limit 200 --json
+uv run sfx similarity search --file query.wav --db ~/.sfxworkbench/index.db --limit 50 --json
+uv run sfx similarity search --file query.wav --db ~/.sfxworkbench/index.db --scope segment --limit 50 --json
+uv run sfx similarity audit PATH --db ~/.sfxworkbench/index.db --threshold 0.92 --output similarity_report.json
+uv run sfx similarity audit PATH --db ~/.sfxworkbench/index.db --scope segment --threshold 0.95 --json
+uv run sfx similarity feedback set --left one.wav --right two.wav --state favorite --db ~/.sfxworkbench/index.db
+uv run sfx similarity feedback list --db ~/.sfxworkbench/index.db --json
 ```
 
 First useful slice:
@@ -486,10 +495,10 @@ suggestions, and discovery views.
 
 ### Directly Useful Open-Source Tools
 
-These projects are strong candidates for supporting wavwarden's planned feature
+These projects are strong candidates for supporting sfxworkbench's planned feature
 set without copying unclear or incompatible code into the repo:
 
-| Tool | License posture | wavwarden use |
+| Tool | License posture | sfxworkbench use |
 | --- | --- | --- |
 | `wavinfo` | MIT | Richer WAV/RF64/BWF/iXML metadata reads for `scan`, `audit`, and tag planning. |
 | BWF MetaEdit | Public domain project | Reference behavior or external backend for BWF metadata validation/writing. |
@@ -513,20 +522,38 @@ preservation priority, dual-mono conversion, disk deletion, import compare, and
 other advanced workflows.
 
 Audio format conversion and loudness normalization are not part of the beta
-roadmap because wavwarden should preserve original audio content.
+roadmap because sfxworkbench should preserve original audio content.
 
 ## Phase 3 — Review UI
 
-Build a Textual TUI before Tauri. The first TUI should focus on:
+Build a Textual TUI before Tauri. The current alpha exists behind `sfx tui` as
+a full-feature operations workbench with Scan, Files, Clean, Dedupe, Organize,
+Metadata, Similarity, and Advanced pages. It uses the same CLI/package workflow
+functions as the command line and keeps guarded operations visible without
+creating hidden mutation paths. The product direction is captured in
+[`PRODUCT_DIRECTION.md`](PRODUCT_DIRECTION.md); the visual/workbench direction
+is captured in [`APP_UI_DIRECTION.md`](APP_UI_DIRECTION.md).
 
-- duplicate review
-- pack overlap/consolidation review
-- rename preview/apply/undo
-- audit drilldown
-- safe-folder and preservation-priority controls
+The TUI should continue to focus on:
+
+- dashboard signals for indexed files, duplicates, missing metadata, filename
+  issues, UCS issues, pack overlaps, pending review actions, and protected
+  folders
+- decision queues for unsafe filenames, long paths, Unicode normalization,
+  missing metadata, UCS validation failures, obvious duplicates, possible
+  duplicates, pack overlaps, format inconsistencies, tag proposals, and embedded
+  metadata conflicts
+- before/after cleanup plan viewing for rename, organize, dedupe, packs,
+  metadata write, tag apply, sidecar, and later pack-intake plans
+- metadata gap report drilldown
+- safe-folder firewall and preservation-priority controls
+- duplicate and pack overlap/consolidation review
+- UCS migration review
+- similarity group review
+- apply/undo log review
 - quarantine age and permanent-delete eligibility review
-- dual-mono candidate review
-- team-friendly approval workflows
+- future dual-mono candidate review
+- future team-friendly approval workflows
 
 Tauri remains a later option after CLI JSON contracts are stable.
 
@@ -639,16 +666,18 @@ Local and CI validation should use the same Poe tasks:
 uv run --extra dev poe check
 uv run --extra dev poe json-smoke
 uv run --extra dev poe bench-scan --files 1000 --no-hash
-uv run --extra dev poe beta-audit PATH --output-dir ~/reports/wavwarden_beta_audit
-uv run --extra dev poe beta-audit PATH --output-dir ~/reports/wavwarden_beta_audit --include-similarity
+uv run --extra dev poe beta-audit PATH --output-dir ~/reports/sfxworkbench_beta_audit
+uv run --extra dev poe beta-audit PATH --output-dir ~/reports/sfxworkbench_beta_audit --similarity-validation
 ```
 
 The JSON automation surface is documented below. Synthetic scan benchmarking
 lives in `scripts/bench_large_library.py`; real-library sampling lives in
 `scripts/bench_scan.py`. The report-only Internal Studio Beta audit harness
-lives in `scripts/internal_beta_audit.py`; use `--include-similarity` when
-validating crawler runtime, cache size, segment counts, and audit thresholds on
-a copied or read-only real library.
+lives in `scripts/internal_beta_audit.py`; use `--similarity-validation` when
+manually validating crawler runtime, cache size, segment counts, and audit
+thresholds on a copied or read-only real library. `--include-similarity` remains
+supported as the older spelling, but overnight automation is deferred until
+manual validation passes on representative libraries.
 
 ## JSON Contracts
 
