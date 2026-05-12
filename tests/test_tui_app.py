@@ -7,6 +7,7 @@ from pathlib import Path
 
 from sfxworkbench.tui_app import (
     _ACTION_BUTTON_IDS,
+    _desktop_open_command,
     _finding_status,
     _latest_quarantine_dir_from_reports,
     _state_token,
@@ -67,6 +68,40 @@ def test_tui_zero_count_review_states_display_clear() -> None:
     assert _finding_status("warning", 0) == "clear"
     assert _finding_status("review", 2) == "review"
     assert _finding_status("info", 0) == "info"
+
+
+def test_desktop_open_command_uses_windows_explorer() -> None:
+    target = Path("C:/Users/Matt/Sounds/hit.wav")
+
+    assert _desktop_open_command(target, platform="win32") == ["explorer", str(target)]
+    assert _desktop_open_command(target, reveal=True, platform="win32") == ["explorer", f"/select,{target}"]
+
+
+def test_desktop_open_command_uses_macos_open() -> None:
+    target = Path("/Users/matt/Sounds/hit.wav")
+
+    assert _desktop_open_command(target, platform="darwin") == ["open", str(target)]
+    assert _desktop_open_command(target, reveal=True, platform="darwin") == ["open", "-R", str(target)]
+
+
+def test_desktop_open_command_uses_xdg_open_when_available() -> None:
+    target = Path("/home/matt/Sounds/hit.wav")
+
+    def fake_which(name: str) -> str | None:
+        assert name == "xdg-open"
+        return "/usr/bin/xdg-open"
+
+    assert _desktop_open_command(target, platform="linux", which=fake_which) == ["/usr/bin/xdg-open", str(target)]
+    assert _desktop_open_command(target, reveal=True, platform="linux", which=fake_which) == [
+        "/usr/bin/xdg-open",
+        str(target.parent),
+    ]
+
+
+def test_desktop_open_command_reports_no_linux_opener() -> None:
+    target = Path("/home/matt/Sounds/hit.wav")
+
+    assert _desktop_open_command(target, platform="linux", which=lambda _: None) == []
 
 
 def test_tui_quarantine_reveal_finds_legacy_quarantine_folder(tmp_path: Path) -> None:

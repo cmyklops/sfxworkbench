@@ -61,6 +61,7 @@ from sfxworkbench.tui_data import (
     library_root,
     list_files,
     metadata_findings,
+    metadata_tag_change_rows,
     metadata_workbench_rows,
     plan_detail_rows,
     preferred_library_path,
@@ -177,6 +178,25 @@ def _short_path(path: str | Path, *, width: int = 64) -> str:
     return _clip_middle(text, width=width)
 
 
+def _desktop_open_command(
+    target: Path,
+    *,
+    reveal: bool = False,
+    platform: str = sys.platform,
+    which: Callable[[str], str | None] = shutil.which,
+) -> list[str]:
+    """Return a best-effort desktop file-browser command for the current OS."""
+    if platform == "darwin":
+        return ["open", "-R", str(target)] if reveal else ["open", str(target)]
+    if platform == "win32":
+        return ["explorer", f"/select,{target}"] if reveal else ["explorer", str(target)]
+
+    opener = which("xdg-open")
+    if opener is None:
+        return []
+    return [opener, str(target.parent if reveal else target)]
+
+
 def _state_token(state: str) -> Text:
     tokens = {
         "clear": ("✓ clear", "green"),
@@ -184,7 +204,9 @@ def _state_token(state: str) -> Text:
         "ok": ("✓ ok", "green"),
         "dry_run": ("· preview", "cyan"),
         "applied": ("✓ applied", "bold cyan"),
+        "approved": ("✓ approved", "bold blue"),
         "accepted": ("✓ accepted", "bold blue"),
+        "rejected": ("x rejected", "red"),
         "info": ("· info", "dim"),
         "pending": ("! pending", "yellow"),
         "needs review": ("! review", "yellow"),
@@ -206,6 +228,52 @@ def _finding_status(status: str, count: object) -> str:
     if isinstance(count, int) and count == 0:
         return "clear"
     return status
+
+
+_TAG_FIELD_STYLES = {
+    "description": "cyan",
+    "icmt": "cyan",
+    "keywords": "magenta",
+    "ikey": "magenta",
+    "category": "green",
+    "ignr": "green",
+    "subcategory": "blue",
+    "ucs_category": "yellow",
+    "ucs_subcategory": "yellow",
+    "title": "white",
+    "inam": "white",
+    "comment": "dim cyan",
+    "isbj": "blue",
+}
+
+
+def _tag_text(value: str, field: str, *, status: str = "", source: str = "") -> Text:
+    style = _TAG_FIELD_STYLES.get(field.lower(), "white")
+    if status == "pending":
+        style = f"bold {style}"
+    text = Text(value, style=style)
+    suffix_parts = [part for part in (status if status not in {"", "approved"} else "", source) if part]
+    if suffix_parts:
+        text.append(f" [{' / '.join(suffix_parts)}]", style="dim")
+    return text
+
+
+def _tags_cell(row) -> Text:
+    if not row.tag_items:
+        return Text("No searchable tags found", style="dim")
+    text = Text()
+    for index, item in enumerate(row.tag_items):
+        if index:
+            text.append("  |  ", style="dim")
+        text.append_text(
+            _tag_text(
+                item.value,
+                item.field,
+                status=item.status if item.source == "plan" else "",
+                source=item.evidence_source if item.source == "plan" else "",
+            )
+        )
+    return text
 
 
 def _feature_query(feature: str) -> str:
@@ -261,21 +329,29 @@ def run_tui(
         from textual import events
         from textual.app import App, ComposeResult
         from textual.containers import Horizontal, Vertical, VerticalScroll
-        from textual.drivers.linux_driver import LinuxDriver
         from textual.screen import ModalScreen
         from textual.widgets import Button, ContentSwitcher, DataTable, Input, Static, Tab, Tabs
         from textual.worker import Worker, WorkerState
+
+        if sys.platform == "win32":
+            LinuxDriver = None
+        else:
+            from textual.drivers.linux_driver import LinuxDriver
     except ImportError as e:
         raise RuntimeError("Textual is not installed. Install with: uv sync --extra tui --extra dev") from e
 
-    class SfxworkbenchDriver(LinuxDriver):
-        """Avoid startup capability probes that some terminals render as a stray 'p'."""
+    if LinuxDriver is None:
+        SfxworkbenchDriver = None
+    else:
 
-        def _query_in_band_window_resize(self) -> None:
-            return
+        class SfxworkbenchDriver(LinuxDriver):
+            """Avoid startup capability probes that some terminals render as a stray 'p'."""
 
-        def _request_terminal_sync_mode_support(self) -> None:
-            return
+            def _query_in_band_window_resize(self) -> None:
+                return
+
+            def _request_terminal_sync_mode_support(self) -> None:
+                return
 
     class ConfirmActionScreen(ModalScreen[bool]):
         CSS = """
@@ -407,8 +483,14 @@ def run_tui(
             margin-bottom: 1;
             border: solid #263647;
         }
-        #files-table, #metadata-rows-table, #dedupe-groups-table {
+        #files-table, #dedupe-groups-table {
             height: 16;
+        }
+        #metadata-rows-table {
+            height: 14;
+        }
+        #metadata-tag-changes-table {
+            height: 12;
         }
         .pane-title {
             text-style: bold;
@@ -527,7 +609,7 @@ def run_tui(
                 yield Button("Clear Search", id="files-clear-search")
                 yield Button("Scan Library", id="files-scan-library")
                 yield Button("Audition", id="files-open-file")
-                yield Button("Reveal in Finder", id="files-reveal-file")
+                yield Button("Reveal in Files", id="files-reveal-file")
             yield DataTable(id="files-table")
             yield Static("", id="file-detail", classes="detail")
 
@@ -587,19 +669,21 @@ def run_tui(
                 yield Button("Apply DB Tags", id="metadata-apply", variant="warning")
                 yield Button("Export Sidecar", id="metadata-sidecar")
             yield Static(
-                "Read From File is existing embedded search text. Will Write is the reviewed DB tag plan, not an embedded audio write. Vet description, keywords, category/subcategory, title/name, and comments first.",
+                "Tags combines existing embedded search text, planned DB tags, and already accepted DB tags. DB tags are review state, not embedded audio writes.",
                 classes="note",
             )
             yield DataTable(id="metadata-findings-table")
             yield Static("Metadata Values - First 100 Prioritized Files", classes="pane-title")
             yield DataTable(id="metadata-rows-table")
+            yield Static("Tag Changes - Active Plan", classes="pane-title")
+            yield DataTable(id="metadata-tag-changes-table")
             yield Static("Indexed Files", classes="pane-title")
             yield Input(placeholder="Search indexed files", id="file-search")
             with Horizontal(classes="button-row"):
                 yield Button("Clear Search", id="files-clear-search")
                 yield Button("Scan Library", id="files-scan-library")
                 yield Button("Audition", id="files-open-file")
-                yield Button("Reveal in Finder", id="files-reveal-file")
+                yield Button("Reveal in Files", id="files-reveal-file")
             yield DataTable(id="files-table")
             yield Static("", id="file-detail", classes="detail")
             yield Static("History", classes="pane-title")
@@ -1101,11 +1185,7 @@ def run_tui(
                 self._fill_action_result()
                 return
 
-            if sys.platform == "darwin":
-                command = ["open", "-R", str(selected)] if reveal else ["open", str(selected)]
-            else:
-                opener = shutil.which("xdg-open")
-                command = [opener, str(selected.parent if reveal else selected)] if opener else []
+            command = _desktop_open_command(selected, reveal=reveal)
 
             if not command:
                 self._last_action = ActionResult(
@@ -1150,11 +1230,7 @@ def run_tui(
                     message="No quarantine folder found in the active report paths.",
                 )
             else:
-                if sys.platform == "darwin":
-                    command = ["open", str(selected)]
-                else:
-                    opener = shutil.which("xdg-open")
-                    command = [opener, str(selected)] if opener else []
+                command = _desktop_open_command(selected)
                 if not command:
                     self._last_action = ActionResult(
                         action="quarantine_reveal",
@@ -1263,10 +1339,18 @@ def run_tui(
             active = self.query_one("#feature-tabs", Tabs).active
             return str(active or "scan")
 
-        def _reset_table(self, table_id: str, columns: tuple[str | tuple[str, str], ...]) -> DataTable:
+        def _reset_table(
+            self, table_id: str, columns: tuple[str | tuple[str, str] | tuple[str, str, int], ...]
+        ) -> DataTable:
             table = self.query_one(f"#{table_id}", DataTable)
             table.clear(columns=True)
-            table.add_columns(*columns)
+            for column in columns:
+                if isinstance(column, tuple):
+                    label, key, *rest = column
+                    width = rest[0] if rest else None
+                    table.add_column(label, key=key, width=width)
+                else:
+                    table.add_column(column)
             table.cursor_type = "row"
             table.fixed_columns = 1 if len(columns) > 1 else 0
             return table
@@ -1440,11 +1524,9 @@ def run_tui(
             table = self._reset_table(
                 "metadata-rows-table",
                 (
-                    ("State", "state"),
-                    ("Will Write - DB Tags", "will_write"),
-                    ("Read From File - Search Fields", "read_from_file"),
-                    ("Already Applied - DB Tags", "applied_tags"),
-                    ("Filename", "filename"),
+                    ("State", "state", 12),
+                    ("Tags", "tags", 180),
+                    ("Filename", "filename", 56),
                 ),
             )
             rows = metadata_workbench_rows(db_path=db_path, plan_path=plan_path, limit=100)
@@ -1453,21 +1535,41 @@ def run_tui(
                 rows,
                 {
                     "state": lambda row: _sort_text(row.status),
-                    "will_write": lambda row: _sort_text(row.pending_summary),
-                    "read_from_file": lambda row: _sort_text(row.embedded_summary),
-                    "applied_tags": lambda row: _sort_text(row.accepted_summary),
+                    "tags": lambda row: _sort_text(row.tags_summary),
                     "filename": lambda row: _sort_text(row.filename),
                 },
             )
             if not rows:
-                table.add_row(_state_token("info"), "", "", "", "No indexed files")
+                table.add_row(_state_token("info"), "", "No indexed files")
+                self._fill_metadata_tag_changes(plan_path)
                 return
             for row in rows:
                 table.add_row(
                     _state_token(row.status),
-                    _clip_middle(row.pending_summary or "No proposed DB tag writes", width=96),
-                    _clip_middle(row.embedded_summary or "No search-field metadata found", width=96),
-                    _clip_middle(row.accepted_summary or f"{row.accepted_tags:,} accepted tag(s)", width=72),
+                    _tags_cell(row),
+                    row.filename,
+                )
+            self._fill_metadata_tag_changes(plan_path)
+
+        def _fill_metadata_tag_changes(self, plan_path: Path) -> None:
+            table = self._reset_table(
+                "metadata-tag-changes-table",
+                (
+                    ("State", "state", 12),
+                    ("Tag", "tag", 110),
+                    ("Source", "source", 22),
+                    ("Filename", "filename", 56),
+                ),
+            )
+            rows = metadata_tag_change_rows(plan_path, limit=500)
+            if not rows:
+                table.add_row(_state_token("info"), "No active metadata_tag_plan.json changes found.", "", "")
+                return
+            for row in rows:
+                table.add_row(
+                    _state_token(row.status),
+                    _tag_text(row.value, row.field),
+                    _clip_middle(row.source, width=22),
                     row.filename,
                 )
 

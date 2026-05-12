@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -176,6 +177,25 @@ class DuplicateGroupRow:
 
 
 @dataclass(frozen=True)
+class TagDisplayItem:
+    source: str
+    field: str
+    value: str
+    status: str = ""
+    evidence_source: str = ""
+
+
+@dataclass(frozen=True)
+class TagChangeRow:
+    filename: str
+    path: str
+    status: str
+    field: str
+    value: str
+    source: str = ""
+
+
+@dataclass(frozen=True)
 class MetadataWorkbenchRow:
     path: str
     filename: str
@@ -187,6 +207,8 @@ class MetadataWorkbenchRow:
     embedded_summary: str = ""
     accepted_summary: str = ""
     pending_summary: str = ""
+    tags_summary: str = ""
+    tag_items: tuple[TagDisplayItem, ...] = ()
     sources: str = ""
     status: str = "info"
 
@@ -219,6 +241,23 @@ _SEARCH_TAG_FIELDS: dict[str, int] = {
     "title": 6,
     "comment": 7,
 }
+
+
+def _clean_tag_value(value: object) -> str:
+    text = str(value or "")
+    text = text.replace("\u2010", "-").replace("\u2011", "-").replace("\u2012", "-")
+    text = text.replace("\u2013", "-").replace("\u2014", "-").replace("\u2212", "-")
+    text = text.replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+-\s+|\s+-|-\s+", " - ", text)
+    text = re.sub(r"\s*[,;]\s*", ", ", text)
+    text = re.sub(r"\s+([.!?:])", r"\1", text)
+    text = re.sub(r"([.!?]){2,}", r"\1", text)
+    return text.strip(" ,;")
+
+
+def _combined_tags_summary(items: tuple[TagDisplayItem, ...]) -> str:
+    return " | ".join(item.value for item in items[:8])
 
 
 def _metadata_key_rank(namespace: str, key: str) -> int:
@@ -632,7 +671,7 @@ def metadata_workbench_rows(
     limit: int = 100,
 ) -> list[MetadataWorkbenchRow]:
     """Return current/pending metadata state for the metadata workbench."""
-    pending_by_path: dict[str, dict[str, int | set[str] | list[str]]] = {}
+    pending_by_path: dict[str, dict[str, int | set[str] | list[str] | list[TagDisplayItem]]] = {}
     if plan_path is not None and plan_path.exists():
         try:
             payload = json.loads(plan_path.read_text())
@@ -644,19 +683,30 @@ def metadata_workbench_rows(
                 continue
             state = pending_by_path.setdefault(
                 path,
-                {"pending": 0, "approved": 0, "rejected": 0, "sources": set(), "values": []},
+                {"pending": 0, "approved": 0, "rejected": 0, "sources": set(), "values": [], "items": []},
             )
             status = str(entry.get("review_status", "pending"))
             if status in {"pending", "approved", "rejected"}:
                 state[status] = int(state[status]) + 1
             field = str(entry.get("field", "")).strip()
-            proposed = str(entry.get("proposed_value", "")).strip()
+            proposed = _clean_tag_value(entry.get("proposed_value", ""))
             if field and proposed:
                 values = state["values"]
                 assert isinstance(values, list)
                 source = str(entry.get("source", "")).strip()
                 source_suffix = f" [{source}]" if source else ""
                 values.append(f"{status.upper()} {_tag_label(field)}: {proposed}{source_suffix}")
+                items = state["items"]
+                assert isinstance(items, list)
+                items.append(
+                    TagDisplayItem(
+                        source="plan",
+                        field=field,
+                        value=proposed,
+                        status=status,
+                        evidence_source=source,
+                    )
+                )
             source = str(entry.get("source", "")).strip()
             if source:
                 cast_sources = state["sources"]
@@ -746,7 +796,7 @@ def metadata_workbench_rows(
                 )
                 GROUP BY file_id
             )
-            SELECT f.path, f.filename,
+            SELECT f.id, f.path, f.filename,
                    (SELECT COUNT(*) FROM metadata_fields mf WHERE mf.file_id = f.id) AS embedded_fields,
                    COALESCE(e.embedded_summary, '') AS embedded_summary,
                    (SELECT COUNT(*) FROM accepted_tags t WHERE t.file_id = f.id) AS accepted_tags,
@@ -767,22 +817,103 @@ def metadata_workbench_rows(
             """,
             params + tuple(pending_by_path.keys()) + (limit,),
         ).fetchall()
+        file_ids = tuple(int(row["id"]) for row in rows)
+        embedded_items_by_id: dict[int, list[TagDisplayItem]] = {file_id: [] for file_id in file_ids}
+        accepted_items_by_id: dict[int, list[TagDisplayItem]] = {file_id: [] for file_id in file_ids}
+        if file_ids:
+            placeholders = ",".join("?" for _ in file_ids)
+            for item in conn.execute(
+                f"""
+                SELECT file_id, namespace, key, value
+                FROM metadata_fields
+                WHERE file_id IN ({placeholders})
+                  AND value IS NOT NULL AND TRIM(value) != ''
+                  AND (
+                      lower(key) IN ('description', 'comment', 'keywords', 'title', 'category', 'subcategory')
+                      OR key IN ('ICMT', 'IKEY', 'INAM', 'IGNR', 'ISBJ')
+                  )
+                ORDER BY
+                    CASE
+                        WHEN lower(key) = 'description' THEN 0
+                        WHEN key IN ('IKEY', 'ICMT') THEN 1
+                        WHEN key IN ('INAM', 'ISBJ', 'IGNR') THEN 2
+                        WHEN lower(key) IN ('title', 'comment', 'keywords', 'category', 'subcategory') THEN 3
+                        ELSE 10
+                    END,
+                    namespace,
+                    key
+                """,
+                file_ids,
+            ):
+                embedded_items_by_id.setdefault(int(item["file_id"]), []).append(
+                    TagDisplayItem(
+                        source="file",
+                        field=str(item["key"]),
+                        value=_clean_tag_value(item["value"]),
+                    )
+                )
+            for item in conn.execute(
+                f"""
+                SELECT file_id, field, value, source
+                FROM accepted_tags
+                WHERE file_id IN ({placeholders})
+                  AND value IS NOT NULL AND TRIM(value) != ''
+                ORDER BY
+                    CASE lower(field)
+                        WHEN 'description' THEN 0
+                        WHEN 'keywords' THEN 1
+                        WHEN 'category' THEN 2
+                        WHEN 'subcategory' THEN 3
+                        WHEN 'ucs_category' THEN 4
+                        WHEN 'ucs_subcategory' THEN 5
+                        WHEN 'title' THEN 6
+                        WHEN 'comment' THEN 7
+                        ELSE 20
+                    END,
+                    field,
+                    value
+                """,
+                file_ids,
+            ):
+                accepted_items_by_id.setdefault(int(item["file_id"]), []).append(
+                    TagDisplayItem(
+                        source="db",
+                        field=str(item["field"]),
+                        value=_clean_tag_value(item["value"]),
+                        evidence_source=str(item["source"] or ""),
+                    )
+                )
     finally:
         conn.close()
 
     results: list[MetadataWorkbenchRow] = []
     for row in rows:
         pending = pending_by_path.get(
-            row["path"], {"pending": 0, "approved": 0, "rejected": 0, "sources": set(), "values": []}
+            row["path"], {"pending": 0, "approved": 0, "rejected": 0, "sources": set(), "values": [], "items": []}
         )
         sources = pending["sources"]
         assert isinstance(sources, set)
         values = pending["values"]
         assert isinstance(values, list)
+        pending_items = pending["items"]
+        assert isinstance(pending_items, list)
         pending_count = int(pending["pending"])
         approved_count = int(pending["approved"])
         rejected_count = int(pending["rejected"])
         status = "pending" if pending_count or approved_count else ("accepted" if row["accepted_tags"] else "info")
+        embedded_summary = str(row["embedded_summary"] or "")
+        accepted_summary = str(row["accepted_summary"] or "")
+        pending_summary = " | ".join(values[:4])
+        file_id = int(row["id"])
+        tag_items = tuple(
+            item
+            for item in (
+                *embedded_items_by_id.get(file_id, [])[:4],
+                *pending_items[:8],
+                *accepted_items_by_id.get(file_id, [])[:4],
+            )
+            if item.value
+        )
         results.append(
             MetadataWorkbenchRow(
                 path=row["path"],
@@ -792,9 +923,11 @@ def metadata_workbench_rows(
                 pending_changes=pending_count,
                 approved_changes=approved_count,
                 rejected_changes=rejected_count,
-                embedded_summary=str(row["embedded_summary"] or ""),
-                accepted_summary=str(row["accepted_summary"] or ""),
-                pending_summary=" | ".join(values[:4]),
+                embedded_summary=embedded_summary,
+                accepted_summary=accepted_summary,
+                pending_summary=pending_summary,
+                tags_summary=_combined_tags_summary(tag_items),
+                tag_items=tag_items,
                 sources=", ".join(sorted(sources)),
                 status=status,
             )
@@ -814,6 +947,50 @@ def metadata_findings(db_path: Path = DEFAULT_DB_PATH, *, plan_path: Path | None
         FeatureFinding("metadata", "Approved tag changes", approved, "accepted" if approved else "clear"),
         FeatureFinding("metadata", queues["db_only_tags"].label, queues["db_only_tags"].count, "accepted"),
     ]
+
+
+def metadata_tag_change_rows(
+    plan_path: Path,
+    *,
+    query: str = "",
+    limit: int = 500,
+) -> list[TagChangeRow]:
+    """Return planned DB tag changes from the active metadata plan."""
+    if not plan_path.exists():
+        return []
+    try:
+        payload = json.loads(plan_path.read_text())
+    except json.JSONDecodeError:
+        return []
+
+    needle = query.casefold().strip()
+    rows: list[TagChangeRow] = []
+    for entry in payload.get("entries", []):
+        path = str(entry.get("path", "")).strip()
+        filename = str(entry.get("filename", "")).strip() or (Path(path).name if path else "")
+        field = str(entry.get("field", "")).strip()
+        value = _clean_tag_value(entry.get("proposed_value", ""))
+        status = str(entry.get("review_status", "pending")).strip() or "pending"
+        source = str(entry.get("source", "")).strip()
+        if not field or not value:
+            continue
+        haystack = " ".join((filename, path, field, value, status, source)).casefold()
+        if needle and needle not in haystack:
+            continue
+        rows.append(
+            TagChangeRow(
+                filename=filename,
+                path=path,
+                status=status,
+                field=field,
+                value=value,
+                source=source,
+            )
+        )
+    rows.sort(
+        key=lambda row: (row.status != "pending", row.status, row.filename, _tag_field_rank(row.field), row.value)
+    )
+    return rows[:limit]
 
 
 def similarity_findings(db_path: Path = DEFAULT_DB_PATH) -> list[FeatureFinding]:
@@ -1673,7 +1850,7 @@ def file_detail(
     sections = (
         FileDetailSection("Searchable Metadata To Vet", search_note_rows),
         FileDetailSection("Read From File - Search Fields", search_embedded_rows),
-        FileDetailSection("Will Write - Proposed DB Tags", tuple(proposed_rows)),
+        FileDetailSection("Planned DB Tags", tuple(proposed_rows)),
         FileDetailSection("Already Applied - DB Tags", accepted_tag_rows),
         FileDetailSection("Read From File - Provenance/Technical", context_embedded_rows),
         FileDetailSection("Audio", audio_rows),

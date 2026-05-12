@@ -21,6 +21,7 @@ from sfxworkbench.tui_data import (
     list_files,
     list_queue_items,
     metadata_findings,
+    metadata_tag_change_rows,
     metadata_workbench_rows,
     plan_detail_rows,
     preferred_library_path,
@@ -125,7 +126,7 @@ def test_tui_file_detail_includes_facts_and_issues(tmp_library: Path, tmp_db: Pa
     assert [section.title for section in detail.sections] == [
         "Searchable Metadata To Vet",
         "Read From File - Search Fields",
-        "Will Write - Proposed DB Tags",
+        "Planned DB Tags",
         "Already Applied - DB Tags",
         "Read From File - Provenance/Technical",
         "Audio",
@@ -181,7 +182,7 @@ def test_tui_metadata_rows_hide_provenance_fields_from_main_review_table(tmp_lib
             VALUES (?, ?, ?, ?, ?, ?)
             """,
             [
-                (file_id, "bext", "description", "Steady rain", "test", "2026-05-11T00:00:00"),
+                (file_id, "bext", "description", "Steady   rain\n tail", "test", "2026-05-11T00:00:00"),
                 (
                     file_id,
                     "bext",
@@ -198,7 +199,10 @@ def test_tui_metadata_rows_hide_provenance_fields_from_main_review_table(tmp_lib
 
     rows = metadata_workbench_rows(tmp_db, query="AMB_RAIN")
 
-    assert "Description: Steady rain" in rows[0].embedded_summary
+    assert "Description: Steady   rain  tail" in rows[0].embedded_summary
+    assert "Steady rain tail" in rows[0].tags_summary
+    assert rows[0].tag_items[0].source == "file"
+    assert rows[0].tag_items[0].field == "description"
     assert "OriginatorReference" not in rows[0].embedded_summary
     assert "vendor.example" not in rows[0].embedded_summary
 
@@ -311,12 +315,16 @@ def test_tui_dedupe_rows_and_metadata_rows_surface_review_state(
                     {
                         "path": str(target),
                         "filename": target.name,
+                        "field": "description",
+                        "proposed_value": "Steady rain",
                         "source": "ucs_catalog",
                         "review_status": "pending",
                     },
                     {
                         "path": str(target),
                         "filename": target.name,
+                        "field": "keywords",
+                        "proposed_value": "rain ;  exterior",
                         "source": "synonym",
                         "review_status": "approved",
                     },
@@ -331,6 +339,14 @@ def test_tui_dedupe_rows_and_metadata_rows_surface_review_state(
     assert metadata[0].pending_changes == 1
     assert metadata[0].approved_changes == 1
     assert metadata[0].sources == "synonym, ucs_catalog"
+    assert "Steady rain" in metadata[0].tags_summary
+    assert "rain, exterior" in metadata[0].tags_summary
+    assert [item.source for item in metadata[0].tag_items] == ["plan", "plan"]
+    assert [item.status for item in metadata[0].tag_items] == ["pending", "approved"]
+
+    changes = metadata_tag_change_rows(plan_path)
+    assert [change.status for change in changes] == ["pending", "approved"]
+    assert changes[1].value == "rain, exterior"
     assert isinstance(dedupe_group_rows(tmp_db), list)
 
 
