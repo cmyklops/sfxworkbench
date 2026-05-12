@@ -15,7 +15,7 @@ from rich.table import Table
 
 from sfxworkbench import __version__
 from sfxworkbench.apply_logs import default_apply_log_path_for_plan
-from sfxworkbench.db import get_connection
+from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params
 from sfxworkbench.models import (
     PackApplyResult,
     PackAuditReport,
@@ -96,13 +96,13 @@ def _iter_folder_chain(file_path: Path, root: Path) -> list[Path]:
 def _load_folder_stats(root: Path, db_path: Path) -> tuple[dict[Path, _FolderStats], int, int]:
     conn = get_connection(db_path)
     rows = conn.execute(
-        """
+        f"""
         SELECT path, md5, size_bytes
         FROM files
-        WHERE (path = ? OR path LIKE ?)
+        WHERE {path_scope_filter()}
         ORDER BY path
         """,
-        (str(root), str(root) + "/%"),
+        path_scope_params(root),
     ).fetchall()
     conn.close()
 
@@ -362,13 +362,13 @@ def _quarantine_target(path: Path, quarantine_dir: Path) -> Path:
 def _folder_files(db_path: Path, folder: Path) -> list[PackPlanFile]:
     conn = get_connection(db_path)
     rows = conn.execute(
-        """
+        f"""
         SELECT path, md5, size_bytes
         FROM files
-        WHERE path = ? OR path LIKE ?
+        WHERE {path_scope_filter()}
         ORDER BY path
         """,
-        (str(folder), str(folder) + "/%"),
+        path_scope_params(folder),
     ).fetchall()
     conn.close()
     files: list[PackPlanFile] = []
@@ -629,13 +629,13 @@ def _validate_plan_file(file: PackPlanFile) -> str | None:
 def _indexed_folder_paths(db_path: Path, folder: Path) -> set[str]:
     conn = get_connection(db_path)
     rows = conn.execute(
-        """
+        f"""
         SELECT path
         FROM files
-        WHERE path = ? OR path LIKE ?
+        WHERE {path_scope_filter()}
         ORDER BY path
         """,
-        (str(folder), str(folder) + "/%"),
+        path_scope_params(folder),
     ).fetchall()
     conn.close()
     return {row["path"] for row in rows}

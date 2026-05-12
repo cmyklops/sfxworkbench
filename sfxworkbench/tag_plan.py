@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,7 +13,7 @@ from rich.table import Table
 
 from sfxworkbench import __version__
 from sfxworkbench.apply_logs import default_apply_log_path_for_plan
-from sfxworkbench.db import DEFAULT_DB_PATH, get_connection
+from sfxworkbench.db import DEFAULT_DB_PATH, get_connection, path_scope_filter, path_scope_params
 from sfxworkbench.models import (
     TagApplyResult,
     TagPlan,
@@ -35,6 +36,17 @@ _MULTIVALUE_FIELDS = {"keyword", "keywords"}
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _md5(path: Path, block: int = 65536) -> str | None:
+    h = hashlib.md5()
+    try:
+        with open(path, "rb") as handle:
+            while chunk := handle.read(block):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
 
 
 def _default_plan_path() -> Path:
@@ -181,14 +193,14 @@ def _load_indexed_file_lookup(
     rows = [
         dict(row)
         for row in conn.execute(
-            """
+            f"""
             SELECT id, path, filename, stem, size_bytes, mtime, md5
             FROM files
-            WHERE (path = ? OR path LIKE ?)
+            WHERE {path_scope_filter()}
               AND scan_error IS NULL
             ORDER BY path
             """,
-            (str(root), str(root) + "/%"),
+            path_scope_params(root),
         ).fetchall()
     ]
     conn.close()
@@ -564,8 +576,21 @@ def _validate_plan_entry(conn, entry: TagPlanEntry) -> str | None:
         return "mtime changed"
     if entry.md5 is not None and row["md5"] != entry.md5:
         return "md5 changed"
-    if not Path(entry.path).exists():
+    path = Path(entry.path)
+    if not path.exists():
         return "file does not exist"
+    try:
+        stat = path.stat()
+    except OSError as e:
+        return str(e)
+    if entry.size_bytes is not None and stat.st_size != entry.size_bytes:
+        return f"file size changed: expected {entry.size_bytes}, got {stat.st_size}"
+    if entry.mtime is not None and stat.st_mtime != entry.mtime:
+        return "file mtime changed"
+    if entry.md5 is not None and len(entry.md5) == 32:
+        current_md5 = _md5(path)
+        if current_md5 != entry.md5:
+            return "file md5 changed"
     return None
 
 

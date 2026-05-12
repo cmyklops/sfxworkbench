@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from sfxworkbench import __version__
-from sfxworkbench.db import DEFAULT_DB_PATH, get_connection
+from sfxworkbench.db import DEFAULT_DB_PATH, get_connection, path_scope_filter, path_scope_params
 from sfxworkbench.models import ProcessedFileEntry, ProcessedFileReport, ProcessedFileSummary
 from sfxworkbench.utils import json_dumps
 
@@ -61,14 +61,14 @@ def _base_key(stem: str, processed_tokens: set[str]) -> str:
 def _load_rows(root: Path, db_path: Path):
     conn = get_connection(db_path)
     rows = conn.execute(
-        """
+        f"""
         SELECT id, path, filename, stem, size_bytes, mtime, md5
         FROM files
-        WHERE (path = ? OR path LIKE ?)
+        WHERE {path_scope_filter()}
           AND scan_error IS NULL
         ORDER BY path
         """,
-        (str(root), str(root) + "/%"),
+        path_scope_params(root),
     ).fetchall()
     conn.close()
     return rows

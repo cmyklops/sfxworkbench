@@ -1,9 +1,12 @@
 """SQLite connection management and schema for sfxworkbench."""
 
+import re
 import sqlite3
 from pathlib import Path
 
 DEFAULT_DB_PATH = Path.home() / ".sfxworkbench" / "index.db"
+_SQL_COLUMN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
+_LIKE_ESCAPE = "\\"
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS files (
@@ -275,6 +278,28 @@ _ANALYSIS_RUNS_COLUMN_MIGRATIONS = {
     "force": "INTEGER DEFAULT 0",
     "status_reason": "TEXT",
 }
+
+
+def escape_like_pattern(value: str) -> str:
+    """Escape text used inside a SQLite LIKE pattern."""
+    return (
+        value.replace(_LIKE_ESCAPE, _LIKE_ESCAPE + _LIKE_ESCAPE)
+        .replace("%", _LIKE_ESCAPE + "%")
+        .replace("_", _LIKE_ESCAPE + "_")
+    )
+
+
+def path_scope_filter(column: str = "path") -> str:
+    """Return SQL for matching one path or descendants without wildcard leaks."""
+    if not _SQL_COLUMN_RE.match(column):
+        raise ValueError(f"unsupported SQL path column: {column}")
+    return f"({column} = ? OR {column} LIKE ? ESCAPE '{_LIKE_ESCAPE}')"
+
+
+def path_scope_params(root: Path | str) -> tuple[str, str]:
+    """Return parameters for :func:`path_scope_filter`."""
+    root_text = str(root)
+    return root_text, escape_like_pattern(root_text) + "/%"
 
 
 def apply_schema(conn: sqlite3.Connection) -> None:

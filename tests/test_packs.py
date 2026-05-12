@@ -129,6 +129,46 @@ def test_pack_audit_counts_hashless_files_and_ignores_them(tmp_path: Path, tmp_d
     assert report.summary.files_without_hash == 1
 
 
+def test_pack_audit_escapes_sql_like_wildcards_in_root(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "lib_a"
+    sibling = tmp_path / "libXa"
+    root.mkdir()
+    sibling.mkdir()
+    _seed_files(
+        tmp_db,
+        [
+            {"path": root / "one.wav", "md5": "A"},
+            {"path": sibling / "two.wav", "md5": "B"},
+        ],
+    )
+
+    report = audit_packs(root, tmp_db, min_files=1)
+
+    assert report.summary.indexed_files_considered == 1
+
+
+def test_pack_plan_escapes_sql_like_wildcards_when_loading_folder_files(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    keep = root / "A Pack"
+    source = root / "B_Pack"
+    wildcard_sibling = root / "BXPack"
+    _seed_files(
+        tmp_db,
+        [
+            {"path": keep / "one.wav", "md5": "A"},
+            {"path": source / "one.wav", "md5": "A"},
+            {"path": wildcard_sibling / "extra.wav", "md5": "C"},
+        ],
+    )
+    report_path = tmp_path / "pack_report.json"
+    write_pack_audit_report(audit_packs(root, tmp_db, min_files=1), report_path, quiet=True)
+
+    plan = build_pack_plan(report_path, quiet=True)
+
+    entry = next(entry for entry in plan.entries if entry.folder_path == str(source))
+    assert [file.path for file in entry.files] == [str(source / "one.wav")]
+
+
 def test_pack_audit_is_deterministic_except_timestamp(tmp_path: Path, tmp_db: Path) -> None:
     root = tmp_path / "library"
     root.mkdir()

@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.table import Table
 
 from sfxworkbench import __version__
-from sfxworkbench.db import get_connection
+from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params
 from sfxworkbench.models import RelatedGroupsReport, RelatedGroupsSummary, RelatedSoundFile, RelatedSoundGroup
 
 console = Console()
@@ -77,14 +77,14 @@ def _infer_related_key(stem: str) -> tuple[str, str, str, str] | None:
 def _load_rows(root: Path, db_path: Path):
     conn = get_connection(db_path)
     rows = conn.execute(
-        """
+        f"""
         SELECT path, filename, stem, sample_rate, bit_depth, channels, duration_s, md5
         FROM files
-        WHERE (path = ? OR path LIKE ?)
+        WHERE {path_scope_filter()}
           AND scan_error IS NULL
         ORDER BY path
         """,
-        (str(root), str(root) + "/%"),
+        path_scope_params(root),
     ).fetchall()
     conn.close()
     return rows

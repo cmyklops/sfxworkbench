@@ -14,7 +14,7 @@ from rich.table import Table
 
 from sfxworkbench import health, junk
 from sfxworkbench.apply_logs import default_apply_log_path
-from sfxworkbench.db import get_connection
+from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params
 from sfxworkbench.models import RenameEntry, RenamePlan, RenameResult
 from sfxworkbench.preservation import PreservationRules, build_preservation_rules, move_protected_by
 from sfxworkbench.ucs import looks_ucs_casefold, normalize_stem
@@ -297,18 +297,19 @@ def _update_file_row(conn, old: Path, new: Path, root: Path) -> None:
 
 
 def _update_directory_rows(conn, old: Path, new: Path, root: Path) -> None:
-    old_prefix = str(old)
-    new_prefix = str(new)
     rows = conn.execute(
-        "SELECT id, path FROM files WHERE path = ? OR path LIKE ?",
-        (old_prefix, old_prefix + "/%"),
+        f"SELECT id, path FROM files WHERE {path_scope_filter()}",
+        path_scope_params(old),
     ).fetchall()
     updates: list[tuple[str, str, str, str, int]] = []
     refreshed: list[tuple[int, Path]] = []
     for row in rows:
         old_file = Path(row["path"])
-        suffix = str(old_file)[len(old_prefix) :]
-        new_file = Path(new_prefix + suffix)
+        try:
+            relative = old_file.relative_to(old)
+        except ValueError:
+            continue
+        new_file = new / relative
         updates.append((str(new_file), new_file.name, new_file.stem, new_file.suffix.lower(), row["id"]))
         refreshed.append((row["id"], new_file))
     conn.executemany(
@@ -321,6 +322,20 @@ def _update_directory_rows(conn, old: Path, new: Path, root: Path) -> None:
     )
     for file_id, path in refreshed:
         _refresh_fn_issues(conn, file_id, path, root)
+
+
+def _indexed_target_conflict(conn, old: Path, new: Path) -> str | None:
+    if old.is_dir():
+        rows = conn.execute(
+            f"SELECT path FROM files WHERE {path_scope_filter()} LIMIT 1",
+            path_scope_params(new),
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT path FROM files WHERE path = ? LIMIT 1", (str(new),)).fetchall()
+    for row in rows:
+        if row["path"] != str(old):
+            return row["path"]
+    return None
 
 
 def apply_rename_plan(
@@ -375,6 +390,16 @@ def apply_rename_plan(
             continue
         if new.exists():
             result.errors.append({"path": str(old), "target": str(new), "error": "target exists"})
+            continue
+        if conn is not None and (conflict := _indexed_target_conflict(conn, old, new)) is not None:
+            result.errors.append(
+                {
+                    "path": str(old),
+                    "target": str(new),
+                    "indexed_path": conflict,
+                    "error": "target already exists in index",
+                }
+            )
             continue
         try:
             if "create_parent_folder" in entry.issue_fixes and not new.parent.exists():

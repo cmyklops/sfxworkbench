@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,17 @@ console = Console()
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _md5(path: Path, block: int = 65536) -> str | None:
+    h = hashlib.md5()
+    try:
+        with open(path, "rb") as handle:
+            while chunk := handle.read(block):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
 
 
 def _is_relative_to(path: Path, parent: Path) -> bool:
@@ -128,8 +140,21 @@ def _validate_sidecar_entry(row, entry: TagSidecarEntry) -> str | None:
         return "mtime changed"
     if entry.md5 is not None and row["md5"] != entry.md5:
         return "md5 changed"
-    if not Path(entry.path).exists():
+    path = Path(entry.path)
+    if not path.exists():
         return "file does not exist"
+    try:
+        stat = path.stat()
+    except OSError as e:
+        return str(e)
+    if entry.size_bytes is not None and stat.st_size != entry.size_bytes:
+        return f"file size changed: expected {entry.size_bytes}, got {stat.st_size}"
+    if entry.mtime is not None and stat.st_mtime != entry.mtime:
+        return "file mtime changed"
+    if entry.md5 is not None and len(entry.md5) == 32:
+        current_md5 = _md5(path)
+        if current_md5 != entry.md5:
+            return "file md5 changed"
     return None
 
 

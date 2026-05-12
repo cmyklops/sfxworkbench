@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -247,6 +248,9 @@ def _seed_files(tmp_db: Path, files: list[dict]) -> None:
     conn = get_connection(tmp_db)
     for item in files:
         path = Path(item["path"])
+        mtime = item.get("mtime")
+        if mtime is None:
+            mtime = path.stat().st_mtime if path.exists() else 0.0
         conn.execute(
             """
             INSERT INTO files (
@@ -261,7 +265,7 @@ def _seed_files(tmp_db: Path, files: list[dict]) -> None:
                 path.stem,
                 path.suffix.lower(),
                 item.get("size", 100),
-                0.0,
+                mtime,
                 item.get("md5"),
                 item.get("sample_rate", 48000),
                 item.get("bit_depth", 24),
@@ -536,6 +540,41 @@ def test_tag_plan_review_and_db_apply(tmp_path: Path, tmp_db: Path) -> None:
     assert second.skipped == plan.summary.candidate_entries
 
 
+def test_tag_apply_rejects_file_changed_after_plan(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "Impacts"
+    folder.mkdir(parents=True)
+    audio = folder / "SFX_HIT_01.wav"
+    original = b"not really audio"
+    audio.write_bytes(original)
+    _seed_files(
+        tmp_db,
+        [
+            {
+                "path": audio,
+                "md5": hashlib.md5(original).hexdigest(),
+                "size": len(original),
+            }
+        ],
+    )
+    plan = build_tag_plan(root, db_path=tmp_db, min_confidence=0.7)
+    plan_path = tmp_path / "tag_plan.json"
+    write_tag_plan(plan, plan_path, quiet=True)
+    review_tag_plan(plan_path, approve_all=True, quiet=True)
+
+    audio.write_bytes(b"changed audio bytes")
+    result = apply_tag_plan(plan_path, db_path=tmp_db, dry_run=False, require_reviewed=True, quiet=True)
+
+    assert result.applied == 0
+    assert result.errors
+    assert "changed" in result.errors[0]["error"]
+    conn = get_connection(tmp_db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM accepted_tags").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
 def test_synonym_keywords_can_flow_through_tag_plan_to_accepted_tags(tmp_path: Path, tmp_db: Path) -> None:
     root = tmp_path / "library"
     folder = root / "Vehicles"
@@ -762,6 +801,45 @@ def test_tag_sidecar_export_and_import_round_trip(tmp_path: Path, tmp_db: Path) 
     rows = conn.execute("SELECT field, value FROM accepted_tags ORDER BY field, value").fetchall()
     conn.close()
     assert ("ucs_category", "SFX") in [(row["field"], row["value"]) for row in rows]
+
+
+def test_tag_sidecar_import_rejects_file_changed_after_export(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "Impacts"
+    folder.mkdir(parents=True)
+    audio = folder / "SFX_HIT_01.wav"
+    original = b"not really audio"
+    audio.write_bytes(original)
+    _seed_files(
+        tmp_db,
+        [
+            {
+                "path": audio,
+                "md5": hashlib.md5(original).hexdigest(),
+                "size": len(original),
+            }
+        ],
+    )
+    plan = build_tag_plan(root, db_path=tmp_db, min_confidence=0.7)
+    plan_path = tmp_path / "tag_plan.json"
+    write_tag_plan(plan, plan_path, quiet=True)
+    review_tag_plan(plan_path, approve_all=True, quiet=True)
+    apply_tag_plan(plan_path, db_path=tmp_db, dry_run=False, require_reviewed=True, quiet=True)
+
+    sidecar = build_tag_sidecar_report(tmp_db, root=root)
+    sidecar_path = tmp_path / "tags.sidecar.json"
+    write_tag_sidecar_report(sidecar, sidecar_path, quiet=True)
+    conn = get_connection(tmp_db)
+    conn.execute("DELETE FROM accepted_tags")
+    conn.commit()
+    conn.close()
+
+    audio.write_bytes(b"changed audio bytes")
+    imported = import_tag_sidecar(sidecar_path, db_path=tmp_db, dry_run=False, quiet=True)
+
+    assert imported.imported == 0
+    assert imported.errors
+    assert "changed" in imported.errors[0]["error"]
 
 
 def test_summary_confidence_buckets_are_sorted(tmp_path: Path, tmp_db: Path) -> None:

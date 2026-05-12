@@ -12,7 +12,7 @@ from rich.table import Table
 
 from sfxworkbench import __version__
 from sfxworkbench.apply_logs import default_apply_log_path_for_plan
-from sfxworkbench.db import DEFAULT_DB_PATH, get_connection
+from sfxworkbench.db import DEFAULT_DB_PATH, get_connection, path_scope_filter, path_scope_params
 from sfxworkbench.models import (
     DualMonoApplyResult,
     DualMonoEntry,
@@ -55,16 +55,16 @@ def _load_stereo(path: Path):
 def _load_indexed_stereo_rows(root: Path, db_path: Path):
     conn = get_connection(db_path)
     rows = conn.execute(
-        """
+        f"""
         SELECT id, path, filename, size_bytes, mtime, md5, sample_rate, bit_depth,
                duration_s, channels
         FROM files
-        WHERE (path = ? OR path LIKE ?)
+        WHERE {path_scope_filter()}
           AND channels = 2
           AND scan_error IS NULL
         ORDER BY path
         """,
-        (str(root), str(root) + "/%"),
+        path_scope_params(root),
     ).fetchall()
     conn.close()
     return rows

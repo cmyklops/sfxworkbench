@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from sfxworkbench import __version__
-from sfxworkbench.db import get_connection
+from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params
 from sfxworkbench.models import UcsValidationIssue, UcsValidationReport, UcsValidationSummary
 from sfxworkbench.ucs import normalize_stem, parse_ucs_stem
 from sfxworkbench.ucs_catalog import load_catalog, lookup_entry, resolve_catalog_path
@@ -36,14 +36,14 @@ def _load_indexed_files(db_path: Path, root: Path | None):
     else:
         root = root.resolve()
         rows = conn.execute(
-            """
+            f"""
             SELECT id, path, filename, stem
             FROM files
-            WHERE (path = ? OR path LIKE ?)
+            WHERE {path_scope_filter()}
               AND scan_error IS NULL
             ORDER BY path
             """,
-            (str(root), str(root) + "/%"),
+            path_scope_params(root),
         ).fetchall()
     conn.close()
     return rows

@@ -15,7 +15,7 @@ from rich.console import Console
 from rich.table import Table
 
 from sfxworkbench import __version__
-from sfxworkbench.db import DEFAULT_DB_PATH, get_connection
+from sfxworkbench.db import DEFAULT_DB_PATH, get_connection, path_scope_filter, path_scope_params
 from sfxworkbench.metadata_write import read_bwfmetaedit_fields
 from sfxworkbench.models import (
     TagProposal,
@@ -151,48 +151,48 @@ def _build_term_index(catalog: UcsCatalog) -> tuple[dict[str, list[UcsEntry]], d
 def _load_rows(db_path: Path, root: Path):
     conn = get_connection(db_path)
     rows = conn.execute(
-        """
+        f"""
         SELECT id, path, filename, stem, extension, size_bytes, mtime, md5,
                has_bext, has_riff_info
         FROM files
-        WHERE (path = ? OR path LIKE ?)
+        WHERE {path_scope_filter()}
           AND scan_error IS NULL
         ORDER BY path
         """,
-        (str(root), str(root) + "/%"),
+        path_scope_params(root),
     ).fetchall()
     tags = conn.execute(
-        """
+        f"""
         SELECT t.file_id, t.field, t.value, t.source
         FROM accepted_tags t
         JOIN files f ON f.id = t.file_id
-        WHERE (f.path = ? OR f.path LIKE ?)
+        WHERE {path_scope_filter("f.path")}
         ORDER BY t.field, t.value
         """,
-        (str(root), str(root) + "/%"),
+        path_scope_params(root),
     ).fetchall()
     fields = conn.execute(
-        """
+        f"""
         SELECT mf.file_id, mf.namespace, mf.key, mf.value, mf.source
         FROM metadata_fields mf
         JOIN files f ON f.id = mf.file_id
-        WHERE (f.path = ? OR f.path LIKE ?)
+        WHERE {path_scope_filter("f.path")}
         ORDER BY mf.namespace, mf.key, mf.value
         """,
-        (str(root), str(root) + "/%"),
+        path_scope_params(root),
     ).fetchall()
     descriptors = conn.execute(
-        """
+        f"""
         SELECT d.file_id, d.backend, d.backend_version, d.parameters_hash,
                d.duration_bucket, d.segment_count, d.spectral_centroid,
                d.spectral_rolloff, d.transient_density, d.error
         FROM audio_descriptors d
         JOIN files f ON f.id = d.file_id
-        WHERE (f.path = ? OR f.path LIKE ?)
+        WHERE {path_scope_filter("f.path")}
           AND d.error IS NULL
         ORDER BY d.generated_at DESC
         """,
-        (str(root), str(root) + "/%"),
+        path_scope_params(root),
     ).fetchall()
     conn.close()
 

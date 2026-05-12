@@ -63,6 +63,33 @@ def test_rename_refuses_collision(tmp_path: Path) -> None:
     assert plan.errors[0]["error"] == "target exists"
 
 
+def test_rename_apply_refuses_stale_index_target_before_moving(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "lib"
+    root.mkdir()
+    source = root / "bad:name.wav"
+    source.write_bytes(b"audio")
+    plan = build_rename_plan(root)
+    entry = plan.entries[0]
+
+    conn = get_connection(tmp_db)
+    stat = source.stat()
+    for path in (Path(entry.old_path), Path(entry.new_path)):
+        conn.execute(
+            """INSERT INTO files (path, filename, stem, extension, size_bytes, mtime, md5, scanned_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (str(path), path.name, path.stem, path.suffix.lower(), stat.st_size, stat.st_mtime, None, "2026"),
+        )
+    conn.commit()
+    conn.close()
+
+    result = apply_rename_plan(plan, db_path=tmp_db, dry_run=False, quiet=True)
+
+    assert result.renamed == 0
+    assert result.errors[0]["error"] == "target already exists in index"
+    assert source.exists()
+    assert not Path(entry.new_path).exists()
+
+
 def test_safe_rename_plan_preserves_names_without_ucs_prefix(tmp_path: Path) -> None:
     root = tmp_path / "lib"
     root.mkdir()

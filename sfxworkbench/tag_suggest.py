@@ -24,7 +24,7 @@ from rich.console import Console
 from rich.table import Table
 
 from sfxworkbench import __version__
-from sfxworkbench.db import get_connection
+from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params
 from sfxworkbench.groups import audit_related_groups
 from sfxworkbench.models import (
     RelatedSoundFile,
@@ -552,14 +552,14 @@ def _build_group_index(root: Path, db_path: Path) -> _GroupIndex:
 def _load_files(root: Path, db_path: Path):
     conn = get_connection(db_path)
     rows = conn.execute(
-        """
+        f"""
         SELECT id, path, filename, stem, size_bytes, mtime, md5
         FROM files
-        WHERE (path = ? OR path LIKE ?)
+        WHERE {path_scope_filter()}
           AND scan_error IS NULL
         ORDER BY path
         """,
-        (str(root), str(root) + "/%"),
+        path_scope_params(root),
     ).fetchall()
     conn.close()
     return rows
