@@ -7,6 +7,15 @@ versioning once public releases begin.
 
 ## Unreleased
 
+### Tier 5.14 — Lazy Tab Fill
+
+- **`_refresh` no longer fills every tab eagerly.** It marks all six tabs
+  dirty and fills only the active one; switching tabs drains the dirty flag.
+  A user who only opens Scan and Files in a session skips the per-refresh
+  build of Clean/Dedupe/Metadata/Advanced entirely. Per-tab widget
+  composition stays eager (cheap); the deferred work is the expensive
+  data-side fill — e.g. ``_fill_files_impl`` on a 50k-row library.
+
 ### Follow-Up Round 2: Tightening The Safety + Config Stories
 
 - **`--no-backup` now requires `--yes` to confirm the safety bypass.**

@@ -565,6 +565,11 @@ def run_tui(
             # Tier 5.13: handle to the pending file-search debounce timer, so a
             # second keystroke cancels the first scheduled refill.
             self._file_search_debounce = None
+            # Tier 5.14: tabs whose data is stale and need a fill before the user
+            # next sees them. ``_refresh()`` marks all six; activation drains a
+            # tab's dirty flag by filling it. Tabs the user never opens stay
+            # dirty and skip the work entirely.
+            self._dirty_tabs: set[str] = set()
             # Declarative button → handler mapping built once. Replaces the
             # 250-line ``on_button_pressed`` elif chain. Each handler is a
             # zero-arg callable bound to ``self`` so it sees current state
@@ -764,11 +769,13 @@ def run_tui(
                 key = "clean"
             self.query_one("#feature-tabs", Tabs).active = key
             self.query_one("#feature-pages", ContentSwitcher).current = f"{key}-page"
+            self._ensure_tab_filled(key)
 
         def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
             tab_id = event.tab.id or "scan"
             self.query_one("#feature-pages", ContentSwitcher).current = f"{tab_id}-page"
             self._refresh_reports(tab_id)
+            self._ensure_tab_filled(tab_id)
 
         def on_input_changed(self, event: Input.Changed) -> None:
             if event.input.id == "file-search":
@@ -1384,20 +1391,56 @@ def run_tui(
             self._fill_action_result()
 
         def _refresh(self) -> None:
+            # Tier 5.14: only the strips and the active tab are filled eagerly.
+            # The other tabs are marked dirty so their fill runs the first time
+            # the user opens them — sparing the cost of a 50k-row Files build
+            # or a Metadata refresh that may never be looked at.
             self._fill_status_strip()
             self._fill_operation_strip()
-            self._fill_scan()
-            self._fill_files()
-            self._fill_clean()
-            self._fill_dedupe()
-            self._fill_metadata()
-            self._fill_advanced()
-            self._refresh_reports(self._active_feature())
             self._fill_action_result()
+            self._invalidate_all_tabs()
+            active = self._active_feature()
+            self._refresh_reports(active)
+            self._ensure_tab_filled(active)
 
         def _active_feature(self) -> str:
             active = self.query_one("#feature-tabs", Tabs).active
             return str(active or "scan")
+
+        def _invalidate_all_tabs(self) -> None:
+            """Mark every tab dirty so each gets re-filled on its next view."""
+            from sfxworkbench.tui_screens._tabs import TAB_REGISTRY
+
+            self._dirty_tabs = {spec.key for spec in TAB_REGISTRY}
+
+        def _ensure_tab_filled(self, key: str) -> None:
+            """Fill the tab named ``key`` if it is currently marked dirty.
+
+            Called from the activation paths so opening a tab drains its dirty
+            flag. Already-clean tabs are a no-op.
+            """
+            if key not in self._dirty_tabs:
+                return
+            self._fill_tab(key)
+
+        def _fill_tab(self, key: str) -> None:
+            """Dispatch to the right ``_fill_<key>()`` method.
+
+            Each per-tab fill method discards ``key`` from ``_dirty_tabs`` after
+            it runs, so callers can invoke ``_fill_tab`` (or the named methods
+            directly) without bookkeeping.
+            """
+            method_name = {
+                "scan": "_fill_scan",
+                "files": "_fill_files",
+                "clean": "_fill_clean",
+                "dedupe": "_fill_dedupe",
+                "metadata": "_fill_metadata",
+                "advanced": "_fill_advanced",
+            }.get(key)
+            if method_name is None:
+                return
+            getattr(self, method_name)()
 
         def _reset_table(
             self, table_id: str, columns: tuple[str | tuple[str, str] | tuple[str, str, int], ...]
@@ -1517,11 +1560,13 @@ def run_tui(
             from sfxworkbench.tui_screens import scan_tab
 
             scan_tab.fill(self)
+            self._dirty_tabs.discard("scan")
 
         def _fill_clean(self) -> None:
             from sfxworkbench.tui_screens import clean_tab
 
             clean_tab.fill(self)
+            self._dirty_tabs.discard("clean")
 
         def _fill_clean_items(self) -> None:
             table = self._reset_table("clean-items-table", ("Type", "Path"))
@@ -1558,22 +1603,26 @@ def run_tui(
             from sfxworkbench.tui_screens import dedupe_tab
 
             dedupe_tab.fill(self)
+            self._dirty_tabs.discard("dedupe")
 
         def _fill_metadata(self) -> None:
             from sfxworkbench.tui_screens import metadata_tab
 
             metadata_tab.fill(self)
+            self._dirty_tabs.discard("metadata")
 
         def _fill_advanced(self) -> None:
             from sfxworkbench.tui_screens import advanced_tab
 
             advanced_tab.fill(self)
+            self._dirty_tabs.discard("advanced")
 
         def _fill_files(self) -> None:
             """Delegate hook for the Files tab fill. See ``_fill_files_impl`` for the body."""
             from sfxworkbench.tui_screens import files_tab
 
             files_tab.fill(self)
+            self._dirty_tabs.discard("files")
 
         def _fill_files_impl(self) -> None:
             columns = (
