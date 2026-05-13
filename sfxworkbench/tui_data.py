@@ -1038,32 +1038,41 @@ def metadata_tag_change_rows(
         if paths:
             conn = get_connection(db_path)
             try:
-                placeholders = ",".join("?" for _ in paths)
+                # Same overflow pattern as ``metadata_workbench_rows``: large
+                # plans (140k entries observed in real libraries) blew past
+                # SQLite's variable-binding limit when one ``?`` is emitted
+                # per path. Bulk-load into a temp table and JOIN instead.
+                conn.execute("CREATE TEMP TABLE IF NOT EXISTS _change_paths (path TEXT PRIMARY KEY)")
+                conn.execute("DELETE FROM _change_paths")
+                conn.executemany("INSERT OR IGNORE INTO _change_paths (path) VALUES (?)", ((p,) for p in paths))
                 file_rows = conn.execute(
-                    f"""
-                    SELECT id, path
-                    FROM files
-                    WHERE path IN ({placeholders})
-                    """,
-                    paths,
+                    """
+                    SELECT f.id, f.path
+                    FROM files f
+                    JOIN _change_paths cp ON cp.path = f.path
+                    """
                 ).fetchall()
                 path_by_id = {int(row["id"]): str(row["path"]) for row in file_rows}
                 existing_lists: dict[str, list[TagDisplayItem]] = {path: [] for path in path_by_id.values()}
                 file_ids = tuple(path_by_id)
                 if file_ids:
-                    file_placeholders = ",".join("?" for _ in file_ids)
+                    conn.execute("CREATE TEMP TABLE IF NOT EXISTS _change_file_ids (file_id INTEGER PRIMARY KEY)")
+                    conn.execute("DELETE FROM _change_file_ids")
+                    conn.executemany(
+                        "INSERT OR IGNORE INTO _change_file_ids (file_id) VALUES (?)",
+                        ((fid,) for fid in file_ids),
+                    )
                     for item in conn.execute(
-                        f"""
-                        SELECT file_id, namespace, key, value
-                        FROM metadata_fields
-                        WHERE file_id IN ({file_placeholders})
-                          AND value IS NOT NULL AND TRIM(value) != ''
+                        """
+                        SELECT mf.file_id, mf.namespace, mf.key, mf.value
+                        FROM metadata_fields mf
+                        JOIN _change_file_ids cf ON cf.file_id = mf.file_id
+                        WHERE mf.value IS NOT NULL AND TRIM(mf.value) != ''
                           AND (
-                              lower(key) IN ('description', 'comment', 'keywords', 'title', 'category', 'subcategory')
-                              OR key IN ('ICMT', 'IKEY', 'INAM', 'IGNR', 'ISBJ')
+                              lower(mf.key) IN ('description', 'comment', 'keywords', 'title', 'category', 'subcategory')
+                              OR mf.key IN ('ICMT', 'IKEY', 'INAM', 'IGNR', 'ISBJ')
                           )
-                        """,
-                        file_ids,
+                        """
                     ):
                         existing_lists.setdefault(path_by_id[int(item["file_id"])], []).append(
                             TagDisplayItem(
@@ -1073,13 +1082,12 @@ def metadata_tag_change_rows(
                             )
                         )
                     for item in conn.execute(
-                        f"""
-                        SELECT file_id, field, value, source
-                        FROM accepted_tags
-                        WHERE file_id IN ({file_placeholders})
-                          AND value IS NOT NULL AND TRIM(value) != ''
-                        """,
-                        file_ids,
+                        """
+                        SELECT t.file_id, t.field, t.value, t.source
+                        FROM accepted_tags t
+                        JOIN _change_file_ids cf ON cf.file_id = t.file_id
+                        WHERE t.value IS NOT NULL AND TRIM(t.value) != ''
+                        """
                     ):
                         existing_lists.setdefault(path_by_id[int(item["file_id"])], []).append(
                             TagDisplayItem(
