@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.table import Table
 
 from sfxworkbench import __version__
-from sfxworkbench.apply_logs import default_apply_log_path_for_plan
+from sfxworkbench.apply_logs import apply_session, mark_entries_reviewed
 from sfxworkbench.models import DeleteApplyResult, DeletePlan, DeletePlanEntry, DeletePlanSummary, DeleteReviewResult
 from sfxworkbench.preservation import build_preservation_rules, protected_by
 from sfxworkbench.utils import atomic_write_json
@@ -23,10 +23,6 @@ _VALID_REVIEW_STATES = {"approved", "rejected", "pending"}
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _default_delete_log_path(plan_path: Path) -> Path:
-    return default_apply_log_path_for_plan(plan_path, "delete_apply_log")
 
 
 def _md5(path: Path, block: int = 65536) -> str | None:
@@ -141,15 +137,7 @@ def review_delete_plan(
 ) -> DeleteReviewResult:
     plan = load_delete_plan(plan_path)
     by_id = {entry.entry_id: entry for entry in plan.entries}
-    approve = set(entries or [])
-    reject = set(reject_entries or [])
-    if approve_all:
-        approve.update(by_id)
-    invalid = sorted((approve | reject) - set(by_id))
-    for entry_id in sorted(approve - set(invalid)):
-        by_id[entry_id].review_status = "approved"
-    for entry_id in sorted(reject - set(invalid)):
-        by_id[entry_id].review_status = "rejected"
+    invalid = mark_entries_reviewed(by_id, approve=entries, reject=reject_entries, approve_all=approve_all)
     plan.summary = _summarize(plan)
     output = output_path or plan_path
     atomic_write_json(output, plan)
@@ -212,55 +200,51 @@ def apply_delete_plan(
         safe_folders=[Path(folder) for folder in plan.safe_folders] + list(safe_folders or []),
     )
     deleted_entries: list[dict] = []
-    for entry in plan.entries:
-        if selection is not None and entry.path not in selection:
-            result.skipped += 1
-            continue
-        if require_reviewed and entry.review_status != "approved":
-            result.skipped += 1
-            continue
-        if entry.review_status == "rejected":
-            result.skipped += 1
-            continue
-        protected_match = protected_by(Path(entry.path), rules)
-        if protected_match is not None:
-            result.errors.append(
-                {"path": entry.path, "safe_folder": protected_match, "error": "protected by safe folder"}
-            )
-            continue
-        validation_error = _validate_entry(entry)
-        if validation_error is not None:
-            result.errors.append({"path": entry.path, "error": validation_error})
-            continue
-        result.bytes_deleted += entry.size_bytes or 0
-        if dry_run:
-            result.deleted += 1
-            continue
-        path = Path(entry.path)
-        try:
-            if path.is_dir():
-                shutil.rmtree(path)
-            else:
-                path.unlink()
-            result.deleted += 1
-            deleted_entries.append(entry.model_dump())
-        except OSError as e:
-            result.errors.append({"path": entry.path, "error": str(e)})
-    if log_path is None and not dry_run:
-        log_path = _default_delete_log_path(plan_path)
-    if log_path is not None:
-        result.log_path = str(log_path)
-    if log_path is not None and not dry_run:
-        payload = {
-            "schema_version": 1,
-            "generated_at": _now_iso(),
-            "tool": "sfxworkbench",
-            "tool_version": __version__,
-            "plan_path": str(plan_path),
-            "deleted": deleted_entries,
-            "result": result,
-        }
-        atomic_write_json(log_path, payload)
+    with apply_session(
+        plan_path=plan_path,
+        dry_run=dry_run,
+        log_path=log_path,
+        log_prefix="delete_apply_log",
+        tool_version=__version__,
+        result=result,
+        extra_factory=lambda: {"deleted": deleted_entries},
+    ) as resolved_log_path:
+        if resolved_log_path is not None:
+            result.log_path = str(resolved_log_path)
+        for entry in plan.entries:
+            if selection is not None and entry.path not in selection:
+                result.skipped += 1
+                continue
+            if require_reviewed and entry.review_status != "approved":
+                result.skipped += 1
+                continue
+            if entry.review_status == "rejected":
+                result.skipped += 1
+                continue
+            protected_match = protected_by(Path(entry.path), rules)
+            if protected_match is not None:
+                result.errors.append(
+                    {"path": entry.path, "safe_folder": protected_match, "error": "protected by safe folder"}
+                )
+                continue
+            validation_error = _validate_entry(entry)
+            if validation_error is not None:
+                result.errors.append({"path": entry.path, "error": validation_error})
+                continue
+            result.bytes_deleted += entry.size_bytes or 0
+            if dry_run:
+                result.deleted += 1
+                continue
+            path = Path(entry.path)
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+                result.deleted += 1
+                deleted_entries.append(entry.model_dump())
+            except OSError as e:
+                result.errors.append({"path": entry.path, "error": str(e)})
     if not quiet:
         show_delete_apply_result(result)
     return result

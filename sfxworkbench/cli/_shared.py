@@ -65,3 +65,28 @@ def resolve_library_root(ctx: typer.Context, cli_value: Path | None) -> Path | N
     if config is not None:
         return config.library_root
     return None
+
+
+def require_file(path: Path, *, kind: str = "file") -> None:
+    """Print a red error and exit 1 when ``path`` does not exist.
+
+    Used to collapse the ``if not X.exists(): console.print(red); raise Exit(1)``
+    triplet that opens nearly every CLI subcommand.
+    """
+    import typer
+    from rich.console import Console
+
+    if not path.exists():
+        Console().print(f"[red]Error: {kind} not found: {path}[/red]")
+        raise typer.Exit(1)
+
+
+def print_json_result(command: str, **payload) -> None:
+    """Emit a stable ``{schema_version, command, ...}`` JSON envelope to stdout.
+
+    All commands wrap their machine-readable output the same way; this helper
+    keeps the schema version + envelope shape pinned in one place.
+    """
+    from sfxworkbench.utils import json_dumps
+
+    print(json_dumps({"schema_version": 1, "command": command, **payload}))

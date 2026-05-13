@@ -12,8 +12,8 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
+from sfxworkbench.cli._shared import print_json_result, require_file
 from sfxworkbench.db import DEFAULT_DB_PATH
-from sfxworkbench.utils import json_dumps
 
 console = Console()
 
@@ -52,9 +52,7 @@ def cmd_organize_audit(
     """Preview safe folder-structure organization without changing files."""
     from sfxworkbench.organize import audit_organization, show_organize_audit_report, write_organize_audit_report
 
-    if not path.exists():
-        console.print(f"[red]Error: path not found: {path}[/red]")
-        raise typer.Exit(1)
+    require_file(path, kind="path")
     if depth < 1:
         console.print("[red]Error: --depth must be at least 1.[/red]")
         raise typer.Exit(1)
@@ -70,17 +68,7 @@ def cmd_organize_audit(
     elif not json_output:
         show_organize_audit_report(report)
     if json_output:
-        print(
-            json_dumps(
-                {
-                    "schema_version": 1,
-                    "command": "organize_audit",
-                    "root": path,
-                    "report_path": output,
-                    "report": report,
-                }
-            )
-        )
+        print_json_result("organize_audit", root=path, report_path=output, report=report)
 
 
 @organize_app.command("review")
@@ -94,9 +82,7 @@ def cmd_organize_review(
     """Mark organization preview entries as reviewed/approved."""
     from sfxworkbench.organize import review_organize_report
 
-    if not report.exists():
-        console.print(f"[red]Error: report file not found: {report}[/red]")
-        raise typer.Exit(1)
+    require_file(report, kind="report file")
     if not approve_all and not entry:
         console.print("[red]Error: pass --approve-all or at least one --entry.[/red]")
         raise typer.Exit(1)
@@ -105,7 +91,7 @@ def cmd_organize_review(
         report, output_path=output, approve_all=approve_all, entries=entry, quiet=json_output
     )
     if json_output:
-        print(json_dumps({"schema_version": 1, "command": "organize_review", "result": result}))
+        print_json_result("organize_review", result=result)
 
 
 @organize_app.command("nesting-plan")
@@ -130,25 +116,13 @@ def cmd_organize_nesting_plan(
     """Create a safe flatten plan from repeated-folder-name candidates."""
     from sfxworkbench.organize import build_nesting_plan_from_report, show_nesting_plan
 
-    if not report.exists():
-        console.print(f"[red]Error: report file not found: {report}[/red]")
-        raise typer.Exit(1)
+    require_file(report, kind="report file")
 
     plan = build_nesting_plan_from_report(report, kind=kind, output_path=output, quiet=json_output, config_path=config)
     if not json_output:
         show_nesting_plan(plan)
     if json_output:
-        print(
-            json_dumps(
-                {
-                    "schema_version": 1,
-                    "command": "organize_nesting_plan",
-                    "report_path": report,
-                    "plan_path": output,
-                    "plan": plan,
-                }
-            )
-        )
+        print_json_result("organize_nesting_plan", report_path=report, plan_path=output, plan=plan)
 
 
 @organize_app.command("nesting-apply")
@@ -169,9 +143,7 @@ def cmd_organize_nesting_apply(
     """Apply a reviewed repeated-folder flatten plan."""
     from sfxworkbench.organize import apply_nesting_plan
 
-    if not plan.exists():
-        console.print(f"[red]Error: plan file not found: {plan}[/red]")
-        raise typer.Exit(1)
+    require_file(plan, kind="plan file")
 
     result = apply_nesting_plan(
         plan,
@@ -183,7 +155,7 @@ def cmd_organize_nesting_apply(
         config_path=config,
     )
     if json_output:
-        print(json_dumps({"schema_version": 1, "command": "organize_nesting_apply", "result": result}))
+        print_json_result("organize_nesting_apply", result=result)
 
 
 @organize_app.command("nesting-undo")
@@ -196,13 +168,11 @@ def cmd_organize_nesting_undo(
     """Undo a previously applied nesting flatten log."""
     from sfxworkbench.organize import undo_nesting_log
 
-    if not log.exists():
-        console.print(f"[red]Error: log file not found: {log}[/red]")
-        raise typer.Exit(1)
+    require_file(log, kind="log file")
 
     result = undo_nesting_log(log, db_path=db, dry_run=not apply, quiet=json_output)
     if json_output:
-        print(json_dumps({"schema_version": 1, "command": "organize_nesting_undo", "result": result}))
+        print_json_result("organize_nesting_undo", result=result)
 
 
 @organize_app.command("apply")
@@ -222,15 +192,13 @@ def cmd_organize_apply(
     """Apply approved folder organization entries and write an undo log."""
     from sfxworkbench.organize import apply_organize_report
 
-    if not report.exists():
-        console.print(f"[red]Error: report file not found: {report}[/red]")
-        raise typer.Exit(1)
+    require_file(report, kind="report file")
 
     result = apply_organize_report(
         report, db_path=db, log_path=log, require_reviewed=require_reviewed, quiet=json_output, config_path=config
     )
     if json_output:
-        print(json_dumps({"schema_version": 1, "command": "organize_apply", "result": result}))
+        print_json_result("organize_apply", result=result)
 
 
 @organize_app.command("undo")
@@ -243,10 +211,8 @@ def cmd_organize_undo(
     """Undo a previously applied folder organization log."""
     from sfxworkbench.organize import undo_organize_log
 
-    if not log.exists():
-        console.print(f"[red]Error: log file not found: {log}[/red]")
-        raise typer.Exit(1)
+    require_file(log, kind="log file")
 
     result = undo_organize_log(log, db_path=db, dry_run=not apply, quiet=json_output)
     if json_output:
-        print(json_dumps({"schema_version": 1, "command": "organize_undo", "result": result}))
+        print_json_result("organize_undo", result=result)

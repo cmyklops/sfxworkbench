@@ -12,8 +12,8 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
+from sfxworkbench.cli._shared import print_json_result, require_file
 from sfxworkbench.db import DEFAULT_DB_PATH
-from sfxworkbench.utils import json_dumps
 
 console = Console()
 
@@ -42,9 +42,7 @@ def cmd_packs_audit(
     """Report exact duplicate folders and high-overlap pack candidates."""
     from sfxworkbench.packs import audit_packs, show_pack_audit_report, write_pack_audit_report
 
-    if not path.exists():
-        console.print(f"[red]Error: path not found: {path}[/red]")
-        raise typer.Exit(1)
+    require_file(path, kind="path")
     if min_files < 1:
         console.print("[red]Error: --min-files must be at least 1.[/red]")
         raise typer.Exit(1)
@@ -64,18 +62,7 @@ def cmd_packs_audit(
     elif not json_output:
         show_pack_audit_report(report)
     if json_output:
-        print(
-            json_dumps(
-                {
-                    "schema_version": 1,
-                    "command": "packs_audit",
-                    "db_path": db,
-                    "root": path,
-                    "report_path": output,
-                    "report": report,
-                }
-            )
-        )
+        print_json_result("packs_audit", db_path=db, root=path, report_path=output, report=report)
 
 
 @packs_app.command("plan")
@@ -102,9 +89,7 @@ def cmd_packs_plan(
     """Create a reviewed pack consolidation/quarantine plan from an audit report."""
     from sfxworkbench.packs import build_pack_plan, show_pack_plan
 
-    if not report.exists():
-        console.print(f"[red]Error: report file not found: {report}[/red]")
-        raise typer.Exit(1)
+    require_file(report, kind="report file")
 
     plan = build_pack_plan(
         report,
@@ -117,17 +102,7 @@ def cmd_packs_plan(
     if not json_output:
         show_pack_plan(plan)
     if json_output:
-        print(
-            json_dumps(
-                {
-                    "schema_version": 1,
-                    "command": "packs_plan",
-                    "report_path": report,
-                    "plan_path": output,
-                    "plan": plan,
-                }
-            )
-        )
+        print_json_result("packs_plan", report_path=report, plan_path=output, plan=plan)
 
 
 @packs_app.command("review")
@@ -143,16 +118,14 @@ def cmd_packs_review(
     """Mark pack plan groups as reviewed/approved."""
     from sfxworkbench.packs import review_pack_plan
 
-    if not plan.exists():
-        console.print(f"[red]Error: plan file not found: {plan}[/red]")
-        raise typer.Exit(1)
+    require_file(plan, kind="plan file")
     if not approve_all and not group:
         console.print("[red]Error: pass --approve-all or at least one --approve-group.[/red]")
         raise typer.Exit(1)
 
     result = review_pack_plan(plan, output_path=output, approve_all=approve_all, groups=group, quiet=json_output)
     if json_output:
-        print(json_dumps({"schema_version": 1, "command": "packs_review", "result": result}))
+        print_json_result("packs_review", result=result)
 
 
 @packs_app.command("apply")
@@ -180,9 +153,7 @@ def cmd_packs_apply(
     """Apply a reviewed pack plan by quarantining redundant folders."""
     from sfxworkbench.packs import apply_pack_plan
 
-    if not plan.exists():
-        console.print(f"[red]Error: plan file not found: {plan}[/red]")
-        raise typer.Exit(1)
+    require_file(plan, kind="plan file")
 
     result = apply_pack_plan(
         plan,
@@ -196,7 +167,7 @@ def cmd_packs_apply(
         safe_folders=safe_folder,
     )
     if json_output:
-        print(json_dumps({"schema_version": 1, "command": "packs_apply", "result": result}))
+        print_json_result("packs_apply", result=result)
 
 
 @packs_app.command("undo")
@@ -209,10 +180,8 @@ def cmd_packs_undo(
     """Undo a previously applied pack quarantine log."""
     from sfxworkbench.packs import undo_pack_log
 
-    if not log.exists():
-        console.print(f"[red]Error: log file not found: {log}[/red]")
-        raise typer.Exit(1)
+    require_file(log, kind="log file")
 
     result = undo_pack_log(log, db_path=db, dry_run=not apply, quiet=json_output)
     if json_output:
-        print(json_dumps({"schema_version": 1, "command": "packs_undo", "result": result}))
+        print_json_result("packs_undo", result=result)

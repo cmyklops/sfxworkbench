@@ -12,7 +12,13 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
-from sfxworkbench.cli._shared import resolve_db_path, resolve_library_root, resolve_ucs_catalog_path
+from sfxworkbench.cli._shared import (
+    print_json_result,
+    require_file,
+    resolve_db_path,
+    resolve_library_root,
+    resolve_ucs_catalog_path,
+)
 from sfxworkbench.db import DEFAULT_DB_PATH
 from sfxworkbench.utils import atomic_write_json, json_dumps
 
@@ -116,9 +122,7 @@ def cmd_tag_suggest(
             'Either pass PATH or add `library_root = "..."` to your config file.[/red]'
         )
         raise typer.Exit(1)
-    if not path.exists():
-        console.print(f"[red]Error: path not found: {path}[/red]")
-        raise typer.Exit(1)
+    require_file(path, kind="path")
     effective_db = resolve_db_path(ctx, db)
     effective_catalog = resolve_ucs_catalog_path(ctx, ucs_catalog)
     # Plumb Config.confidence so user-set TOML overrides actually affect output.
@@ -181,9 +185,7 @@ def cmd_tag_propose(
     """Propose UCS tags from combined evidence. No writes."""
     from sfxworkbench.tag_propose import build_tag_proposal_report, show_tag_proposal_report
 
-    if not path.exists():
-        console.print(f"[red]Error: path not found: {path}[/red]")
-        raise typer.Exit(1)
+    require_file(path, kind="path")
     try:
         report = build_tag_proposal_report(
             path,
@@ -281,9 +283,7 @@ def cmd_tag_plan(
     """Build a reviewed DB-only metadata tag plan. No writes."""
     from sfxworkbench.tag_plan import build_tag_plan, show_tag_plan, write_tag_plan
 
-    if not path.exists():
-        console.print(f"[red]Error: path not found: {path}[/red]")
-        raise typer.Exit(1)
+    require_file(path, kind="path")
     if source_report is not None and not source_report.exists():
         console.print(f"[red]Error: suggestion report not found: {source_report}[/red]")
         raise typer.Exit(1)
@@ -356,9 +356,7 @@ def cmd_tag_summarize(
     """Summarize a tag plan for batch review."""
     from sfxworkbench.tag_plan import show_tag_plan_summary, summarize_tag_plan
 
-    if not plan.exists():
-        console.print(f"[red]Error: plan file not found: {plan}[/red]")
-        raise typer.Exit(1)
+    require_file(plan, kind="plan file")
     try:
         report = summarize_tag_plan(
             plan,
@@ -375,7 +373,7 @@ def cmd_tag_summarize(
     if not json_output:
         show_tag_plan_summary(report)
     if json_output:
-        print(json_dumps({"schema_version": 1, "command": "tag_summarize", "plan_path": plan, "report": report}))
+        print_json_result("tag_summarize", plan_path=plan, report=report)
 
 
 @tag_app.command("review")
@@ -422,9 +420,7 @@ def cmd_tag_review(
     """Mark tag plan entries as approved or rejected."""
     from sfxworkbench.tag_plan import review_tag_plan
 
-    if not plan.exists():
-        console.print(f"[red]Error: plan file not found: {plan}[/red]")
-        raise typer.Exit(1)
+    require_file(plan, kind="plan file")
     has_selector = any([approve_field, reject_field, approve_source, reject_source, approve_value, reject_value])
     if not approve_all and not entry and not reject_entry and not has_selector:
         console.print("[red]Error: pass --approve-all, --entry, --reject-entry, or a selector review option.[/red]")
@@ -480,9 +476,7 @@ def cmd_tag_apply(
     """Apply a reviewed tag plan into SQLite accepted_tags. No audio mutation."""
     from sfxworkbench.tag_plan import apply_tag_plan
 
-    if not plan.exists():
-        console.print(f"[red]Error: plan file not found: {plan}[/red]")
-        raise typer.Exit(1)
+    require_file(plan, kind="plan file")
     result = apply_tag_plan(
         plan,
         db_path=db,
@@ -549,9 +543,7 @@ def cmd_tag_sidecar_import(
     """Import a portable JSON sidecar into DB-only accepted tags."""
     from sfxworkbench.tag_sidecar import import_tag_sidecar
 
-    if not sidecar.exists():
-        console.print(f"[red]Error: sidecar file not found: {sidecar}[/red]")
-        raise typer.Exit(1)
+    require_file(sidecar, kind="sidecar file")
     try:
         result = import_tag_sidecar(sidecar, db_path=db, dry_run=not apply, quiet=json_output)
     except ValueError as e:

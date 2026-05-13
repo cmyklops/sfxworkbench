@@ -14,7 +14,11 @@ from rich.table import Table
 
 from sfxworkbench import __version__
 from sfxworkbench import audio as audio_mod
-from sfxworkbench.apply_logs import default_apply_log_path_for_plan
+from sfxworkbench.apply_logs import (
+    default_apply_log_path_for_plan,
+    mark_entries_reviewed,
+    write_apply_log,
+)
 from sfxworkbench.db import DEFAULT_DB_PATH, get_connection
 from sfxworkbench.metadata_backends import build_metadata_backends_report
 from sfxworkbench.metadata_fields import replace_metadata_fields
@@ -784,15 +788,7 @@ def review_metadata_write_plan(
     """Mark selected embedded-write plan entries as approved or rejected."""
     plan = load_metadata_write_plan(plan_path)
     by_id = {entry.entry_id: entry for entry in plan.entries}
-    requested_approve = set(entries or [])
-    requested_reject = set(reject_entries or [])
-    invalid = sorted((requested_approve | requested_reject) - set(by_id))
-    if approve_all:
-        requested_approve.update(by_id)
-    for entry_id in sorted(requested_approve - set(invalid)):
-        by_id[entry_id].review_status = "approved"
-    for entry_id in sorted(requested_reject - set(invalid)):
-        by_id[entry_id].review_status = "rejected"
+    invalid = mark_entries_reviewed(by_id, approve=entries, reject=reject_entries, approve_all=approve_all)
     plan.summary = _summarize_plan(plan)
 
     output = output_path or plan_path
@@ -1305,17 +1301,13 @@ def apply_metadata_write_plan(
         log_path = _default_apply_log_path(plan_path)
     if log_path is not None:
         result.log_path = str(log_path)
-        atomic_write_json(
+        write_apply_log(
             log_path,
-            {
-                "schema_version": PLAN_SCHEMA_VERSION,
-                "generated_at": _now_iso(),
-                "tool": "sfxworkbench",
-                "tool_version": __version__,
-                "plan_path": str(plan_path),
-                "db_path": str(effective_db),
-                "result": result,
-            },
+            plan_path=plan_path,
+            tool_version=__version__,
+            result=result,
+            schema_version=PLAN_SCHEMA_VERSION,
+            extra={"db_path": str(effective_db)},
         )
     if not quiet:
         show_metadata_write_apply_result(result)

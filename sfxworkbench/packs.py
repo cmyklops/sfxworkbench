@@ -14,7 +14,7 @@ from rich.console import Console
 from rich.table import Table
 
 from sfxworkbench import __version__
-from sfxworkbench.apply_logs import default_apply_log_path_for_plan
+from sfxworkbench.apply_logs import default_apply_log_path_for_plan, mark_groups_approved
 from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params
 from sfxworkbench.models import (
     PackApplyResult,
@@ -564,22 +564,13 @@ def review_pack_plan(
 ) -> PackReviewResult:
     """Stamp a pack plan with approved group indexes."""
     plan = json.loads(plan_path.read_text())
-    total = len(plan.get("entries", []))
-    requested = set(groups or [])
-    invalid = sorted(group for group in requested if group < 1 or group > total)
-    if approve_all:
-        approved = set(range(total))
-    else:
-        approved = {group - 1 for group in requested if 1 <= group <= total}
-
-    existing_review = plan.get("review", {})
-    approved.update(existing_review.get("approved_groups", []))
-    approved_groups = sorted(approved)
-    plan["review"] = {
-        "status": "approved" if len(approved_groups) == total and total else "partially_approved",
-        "approved_at": _now_iso(),
-        "approved_groups": approved_groups,
-    }
+    approved_groups, invalid, total = mark_groups_approved(
+        plan,
+        requested_1based=groups,
+        approve_all=approve_all,
+        items_key="entries",
+        approved_key="approved_groups",
+    )
 
     output = output_path or plan_path
     output.parent.mkdir(parents=True, exist_ok=True)

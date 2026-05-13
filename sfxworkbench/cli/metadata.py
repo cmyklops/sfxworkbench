@@ -14,8 +14,8 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
+from sfxworkbench.cli._shared import print_json_result, require_file
 from sfxworkbench.db import DEFAULT_DB_PATH
-from sfxworkbench.utils import json_dumps
 
 console = Console()
 
@@ -54,17 +54,7 @@ def cmd_metadata_audit(
     elif not json_output:
         show_metadata_audit_report(report)
     if json_output:
-        print(
-            json_dumps(
-                {
-                    "schema_version": 1,
-                    "command": "metadata_audit",
-                    "db_path": db,
-                    "report_path": output,
-                    "report": report,
-                }
-            )
-        )
+        print_json_result("metadata_audit", db_path=db, report_path=output, report=report)
 
 
 @metadata_app.command("view")
@@ -87,17 +77,7 @@ def cmd_metadata_view(
     if not json_output:
         show_metadata_view_report(report)
     if json_output:
-        print(
-            json_dumps(
-                {
-                    "schema_version": 1,
-                    "command": "metadata_view",
-                    "db_path": db,
-                    "query": query,
-                    "report": report,
-                }
-            )
-        )
+        print_json_result("metadata_view", db_path=db, query=query, report=report)
 
 
 @metadata_app.command("backends")
@@ -115,16 +95,7 @@ def cmd_metadata_backends(
     if not json_output:
         show_metadata_backends_report(report)
     if json_output:
-        print(
-            json_dumps(
-                {
-                    "schema_version": 1,
-                    "command": "metadata_backends",
-                    "bwfmetaedit": bwfmetaedit,
-                    "report": report,
-                }
-            )
-        )
+        print_json_result("metadata_backends", bwfmetaedit=bwfmetaedit, report=report)
 
 
 @metadata_app.command("write-plan")
@@ -175,18 +146,7 @@ def cmd_metadata_write_plan(
     if not json_output:
         show_metadata_write_plan(plan)
     if json_output:
-        print(
-            json_dumps(
-                {
-                    "schema_version": 1,
-                    "command": "metadata_write_plan",
-                    "db_path": db,
-                    "root": path,
-                    "plan_path": plan_path,
-                    "plan": plan,
-                }
-            )
-        )
+        print_json_result("metadata_write_plan", db_path=db, root=path, plan_path=plan_path, plan=plan)
 
 
 @metadata_app.command("write-review")
@@ -201,9 +161,7 @@ def cmd_metadata_write_review(
     """Mark embedded metadata write plan entries as approved or rejected."""
     from sfxworkbench.metadata_write import review_metadata_write_plan
 
-    if not plan.exists():
-        console.print(f"[red]Error: plan file not found: {plan}[/red]")
-        raise typer.Exit(1)
+    require_file(plan, kind="plan file")
     if not approve_all and not entry and not reject_entry:
         console.print("[red]Error: pass --approve-all, --entry, or --reject-entry.[/red]")
         raise typer.Exit(1)
@@ -218,17 +176,7 @@ def cmd_metadata_write_review(
     if result.invalid_entries:
         raise typer.Exit(1)
     if json_output:
-        print(
-            json_dumps(
-                {
-                    "schema_version": 1,
-                    "command": "metadata_write_review",
-                    "plan_path": plan,
-                    "output_path": output or plan,
-                    "result": result,
-                }
-            )
-        )
+        print_json_result("metadata_write_review", plan_path=plan, output_path=output or plan, result=result)
 
 
 @metadata_app.command("write-preview")
@@ -243,22 +191,10 @@ def cmd_metadata_write_preview(
     """Preview a reviewed embedded metadata write plan. No audio files are modified."""
     from sfxworkbench.metadata_write import preview_metadata_write_plan
 
-    if not plan.exists():
-        console.print(f"[red]Error: plan file not found: {plan}[/red]")
-        raise typer.Exit(1)
+    require_file(plan, kind="plan file")
     result = preview_metadata_write_plan(plan, db_path=db, require_reviewed=require_reviewed, quiet=json_output)
     if json_output:
-        print(
-            json_dumps(
-                {
-                    "schema_version": 1,
-                    "command": "metadata_write_preview",
-                    "plan_path": plan,
-                    "db_path": db,
-                    "result": result,
-                }
-            )
-        )
+        print_json_result("metadata_write_preview", plan_path=plan, db_path=db, result=result)
 
 
 @metadata_app.command("write-fixtures")
@@ -284,9 +220,7 @@ def cmd_metadata_write_fixtures(
     """Copy reviewed write targets to a fixture bundle. Original audio files are not modified."""
     from sfxworkbench.metadata_write import build_metadata_write_fixture_bundle
 
-    if not plan.exists():
-        console.print(f"[red]Error: plan file not found: {plan}[/red]")
-        raise typer.Exit(1)
+    require_file(plan, kind="plan file")
     bundle = build_metadata_write_fixture_bundle(
         plan,
         output_dir,
@@ -296,17 +230,12 @@ def cmd_metadata_write_fixtures(
         quiet=json_output,
     )
     if json_output:
-        print(
-            json_dumps(
-                {
-                    "schema_version": 1,
-                    "command": "metadata_write_fixtures",
-                    "plan_path": plan,
-                    "output_dir": output_dir,
-                    "write_fixture_metadata": write_fixture_metadata,
-                    "bundle": bundle,
-                }
-            )
+        print_json_result(
+            "metadata_write_fixtures",
+            plan_path=plan,
+            output_dir=output_dir,
+            write_fixture_metadata=write_fixture_metadata,
+            bundle=bundle,
         )
 
 
@@ -321,25 +250,14 @@ def cmd_metadata_write_readback(
     """Compare copied fixture metadata against the fixture manifest. No files are modified."""
     from sfxworkbench.metadata_write import compare_metadata_write_fixture_readback
 
-    if not manifest.exists():
-        console.print(f"[red]Error: fixture manifest or directory not found: {manifest}[/red]")
-        raise typer.Exit(1)
+    require_file(manifest, kind="fixture manifest or directory")
     try:
         report = compare_metadata_write_fixture_readback(manifest, quiet=json_output)
     except (FileNotFoundError, ValueError) as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
     if json_output:
-        print(
-            json_dumps(
-                {
-                    "schema_version": 1,
-                    "command": "metadata_write_readback",
-                    "manifest_path": manifest,
-                    "report": report,
-                }
-            )
-        )
+        print_json_result("metadata_write_readback", manifest_path=manifest, report=report)
 
 
 @metadata_app.command("write-apply")
@@ -390,9 +308,7 @@ def cmd_metadata_write_apply(
     """Apply reviewed Mutagen tag writes and BWF MetaEdit BEXT writes."""
     from sfxworkbench.metadata_write import apply_metadata_write_plan
 
-    if not plan.exists():
-        console.print(f"[red]Error: plan file not found: {plan}[/red]")
-        raise typer.Exit(1)
+    require_file(plan, kind="plan file")
     # Safety gate: combining --apply with --no-backup removes the readback-mismatch
     # rollback path. Require explicit --yes so the bypass is intentional, never a typo.
     if apply and no_backup and not yes:
@@ -412,17 +328,7 @@ def cmd_metadata_write_apply(
         config_path=config,
     )
     if json_output:
-        print(
-            json_dumps(
-                {
-                    "schema_version": 1,
-                    "command": "metadata_write_apply",
-                    "plan_path": plan,
-                    "db_path": db,
-                    "result": result,
-                }
-            )
-        )
+        print_json_result("metadata_write_apply", plan_path=plan, db_path=db, result=result)
 
 
 @metadata_app.command("write-undo")
@@ -437,19 +343,7 @@ def cmd_metadata_write_undo(
     """Restore files from a metadata write apply log."""
     from sfxworkbench.metadata_write import undo_metadata_write_apply_log
 
-    if not log.exists():
-        console.print(f"[red]Error: apply log not found: {log}[/red]")
-        raise typer.Exit(1)
+    require_file(log, kind="apply log")
     result = undo_metadata_write_apply_log(log, db_path=db, dry_run=not apply, quiet=json_output)
     if json_output:
-        print(
-            json_dumps(
-                {
-                    "schema_version": 1,
-                    "command": "metadata_write_undo",
-                    "log_path": log,
-                    "db_path": db,
-                    "result": result,
-                }
-            )
-        )
+        print_json_result("metadata_write_undo", log_path=log, db_path=db, result=result)

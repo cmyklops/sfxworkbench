@@ -11,7 +11,11 @@ from rich.console import Console
 from rich.table import Table
 
 from sfxworkbench import __version__
-from sfxworkbench.apply_logs import default_apply_log_path_for_plan
+from sfxworkbench.apply_logs import (
+    default_apply_log_path_for_plan,
+    mark_groups_approved,
+    write_apply_log,
+)
 from sfxworkbench.db import get_connection
 from sfxworkbench.models import DedupeApplyResult, DedupeGroup, DedupeReviewResult, DedupeSummary
 from sfxworkbench.preservation import build_preservation_rules, evidence, priority_key, protected_by
@@ -240,24 +244,13 @@ def review_dedupe_plan(
     metadata is 0-based so it remains stable for list indexing.
     """
     plan = json.loads(plan_path.read_text())
-    total = len(plan.get("groups", []))
-    requested = set(groups or [])
-    invalid = sorted(group for group in requested if group < 1 or group > total)
-    if approve_all:
-        approved = set(range(total))
-    else:
-        approved = {group - 1 for group in requested if 1 <= group <= total}
-
-    existing_review = plan.get("review", {})
-    existing_approved = set(existing_review.get("approved_groups", []))
-    approved.update(existing_approved)
-    approved_groups = sorted(approved)
-
-    plan["review"] = {
-        "status": "approved" if len(approved_groups) == total and total else "partially_approved",
-        "approved_at": datetime.now(UTC).isoformat(),
-        "approved_groups": approved_groups,
-    }
+    approved_groups, invalid, total = mark_groups_approved(
+        plan,
+        requested_1based=groups,
+        approve_all=approve_all,
+        items_key="groups",
+        approved_key="approved_groups",
+    )
 
     output = output_path or plan_path
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -446,18 +439,16 @@ def apply_dedupe_plan(
         if log_path is None:
             log_path = _default_dedupe_log_path(plan_path)
         result.log_path = str(log_path)
-        payload = {
-            "schema_version": 1,
-            "generated_at": datetime.now(UTC).isoformat(),
-            "tool": "sfxworkbench",
-            "tool_version": __version__,
-            "plan_path": str(plan_path),
-            "quarantine_dir": str(quarantine_dir) if quarantine_dir is not None else None,
-            "entries": log_entries,
-            "result": result.model_dump(),
-        }
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(json.dumps(payload, indent=2))
+        write_apply_log(
+            log_path,
+            plan_path=plan_path,
+            tool_version=__version__,
+            result=result,
+            extra={
+                "quarantine_dir": str(quarantine_dir) if quarantine_dir is not None else None,
+                "entries": log_entries,
+            },
+        )
         if not quiet:
             console.print(f"Dedupe quarantine log written to [cyan]{log_path}[/cyan]")
 

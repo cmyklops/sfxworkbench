@@ -12,7 +12,7 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
-from sfxworkbench.utils import json_dumps
+from sfxworkbench.cli._shared import print_json_result, require_file
 
 console = Console()
 
@@ -41,25 +41,13 @@ def cmd_delete_plan(
     """Build a reviewed permanent-delete plan from quarantine logs only."""
     from sfxworkbench.delete import build_delete_plan, show_delete_plan, write_delete_plan
 
-    if not quarantine_log.exists():
-        console.print(f"[red]Error: quarantine log not found: {quarantine_log}[/red]")
-        raise typer.Exit(1)
+    require_file(quarantine_log, kind="quarantine log")
     plan = build_delete_plan(quarantine_log, config_path=config, safe_folders=safe_folder)
     write_delete_plan(plan, output, quiet=json_output)
     if not json_output:
         show_delete_plan(plan)
     if json_output:
-        print(
-            json_dumps(
-                {
-                    "schema_version": 1,
-                    "command": "delete_plan",
-                    "source_log": quarantine_log,
-                    "plan_path": output,
-                    "plan": plan,
-                }
-            )
-        )
+        print_json_result("delete_plan", source_log=quarantine_log, plan_path=output, plan=plan)
 
 
 @delete_app.command("review")
@@ -74,9 +62,7 @@ def cmd_delete_review(
     """Mark permanent-delete entries as approved or rejected."""
     from sfxworkbench.delete import review_delete_plan
 
-    if not plan.exists():
-        console.print(f"[red]Error: plan file not found: {plan}[/red]")
-        raise typer.Exit(1)
+    require_file(plan, kind="plan file")
     if not approve_all and not entry and not reject_entry:
         console.print("[red]Error: pass --approve-all, --entry, or --reject-entry.[/red]")
         raise typer.Exit(1)
@@ -86,7 +72,7 @@ def cmd_delete_review(
     if result.invalid_entries:
         raise typer.Exit(1)
     if json_output:
-        print(json_dumps({"schema_version": 1, "command": "delete_review", "plan_path": plan, "result": result}))
+        print_json_result("delete_review", plan_path=plan, result=result)
 
 
 @delete_app.command("apply")
@@ -110,9 +96,7 @@ def cmd_delete_apply(
     """Apply a reviewed permanent-delete plan. Defaults to dry-run."""
     from sfxworkbench.delete import apply_delete_plan
 
-    if not plan.exists():
-        console.print(f"[red]Error: plan file not found: {plan}[/red]")
-        raise typer.Exit(1)
+    require_file(plan, kind="plan file")
     result = apply_delete_plan(
         plan,
         dry_run=not apply,
@@ -124,4 +108,4 @@ def cmd_delete_apply(
         quiet=json_output,
     )
     if json_output:
-        print(json_dumps({"schema_version": 1, "command": "delete_apply", "plan_path": plan, "result": result}))
+        print_json_result("delete_apply", plan_path=plan, result=result)

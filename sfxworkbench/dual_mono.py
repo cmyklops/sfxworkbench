@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.table import Table
 
 from sfxworkbench import __version__
-from sfxworkbench.apply_logs import default_apply_log_path_for_plan
+from sfxworkbench.apply_logs import apply_session, mark_entries_reviewed
 from sfxworkbench.db import DEFAULT_DB_PATH, get_connection, path_scope_filter, path_scope_params
 from sfxworkbench.models import (
     DualMonoApplyResult,
@@ -32,10 +32,6 @@ _VALID_REVIEW_STATES = {"approved", "rejected", "pending"}
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _default_log_path(plan_path: Path) -> Path:
-    return default_apply_log_path_for_plan(plan_path, "dual_mono_apply_log")
 
 
 def _md5_bytes(data: np.ndarray) -> str:
@@ -238,15 +234,7 @@ def review_dual_mono_plan(
 ) -> DualMonoReviewResult:
     plan = load_dual_mono_plan(plan_path)
     by_group = {entry.group_id: entry for entry in plan.entries}
-    approve = set(groups or [])
-    reject = set(reject_groups or [])
-    if approve_all:
-        approve.update(by_group)
-    invalid = sorted((approve | reject) - set(by_group))
-    for group_id in sorted(approve - set(invalid)):
-        by_group[group_id].review_status = "approved"
-    for group_id in sorted(reject - set(invalid)):
-        by_group[group_id].review_status = "rejected"
+    invalid = mark_entries_reviewed(by_group, approve=groups, reject=reject_groups, approve_all=approve_all)
     plan.summary = _summarize_plan(plan)
     output = output_path or plan_path
     atomic_write_json(output, plan)
@@ -308,59 +296,54 @@ def apply_dual_mono_plan(
         return result
     selection: frozenset[str] | None = frozenset(target_paths) if target_paths is not None else None
     written: list[dict] = []
-    for entry in plan.entries:
-        if selection is not None and entry.path not in selection:
-            result.skipped += 1
-            continue
-        if require_reviewed and entry.review_status != "approved":
-            result.skipped += 1
-            continue
-        if entry.review_status == "rejected":
-            result.skipped += 1
-            continue
-        protected_source = move_protected_by(Path(entry.path), rules)
-        if protected_source is not None:
-            result.errors.append(
-                {"path": entry.path, "safe_folder": protected_source, "error": "protected by safe folder"}
-            )
-            continue
-        validation_error = _validate_entry(entry)
-        if validation_error is not None:
-            result.errors.append({"path": entry.path, "error": validation_error})
-            continue
-        output_path = output_root / entry.output_relative_path
-        if output_path.exists():
-            result.errors.append({"path": str(output_path), "error": "output file already exists"})
-            continue
-        if dry_run:
-            result.written += 1
-            continue
-        try:
-            data, sample_rate, info = _load_stereo(Path(entry.path))
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            sf.write(str(output_path), data[:, 0], sample_rate, subtype=getattr(info, "subtype", None))
-            size = output_path.stat().st_size
-            result.written += 1
-            result.bytes_written += size
-            written.append({"source_path": entry.path, "output_path": str(output_path), "bytes_written": size})
-        except Exception as e:
-            result.errors.append({"path": entry.path, "error": str(e)})
-    if log_path is None and not dry_run:
-        log_path = _default_log_path(plan_path)
-    if log_path is not None:
-        result.log_path = str(log_path)
-    if log_path is not None and not dry_run:
-        payload = {
-            "schema_version": 1,
-            "generated_at": _now_iso(),
-            "tool": "sfxworkbench",
-            "tool_version": __version__,
-            "plan_path": str(plan_path),
-            "output_root": str(output_root),
-            "written": written,
-            "result": result,
-        }
-        atomic_write_json(log_path, payload)
+    with apply_session(
+        plan_path=plan_path,
+        dry_run=dry_run,
+        log_path=log_path,
+        log_prefix="dual_mono_apply_log",
+        tool_version=__version__,
+        result=result,
+        extra_factory=lambda: {"output_root": str(output_root), "written": written},
+    ) as resolved_log_path:
+        if resolved_log_path is not None:
+            result.log_path = str(resolved_log_path)
+        for entry in plan.entries:
+            if selection is not None and entry.path not in selection:
+                result.skipped += 1
+                continue
+            if require_reviewed and entry.review_status != "approved":
+                result.skipped += 1
+                continue
+            if entry.review_status == "rejected":
+                result.skipped += 1
+                continue
+            protected_source = move_protected_by(Path(entry.path), rules)
+            if protected_source is not None:
+                result.errors.append(
+                    {"path": entry.path, "safe_folder": protected_source, "error": "protected by safe folder"}
+                )
+                continue
+            validation_error = _validate_entry(entry)
+            if validation_error is not None:
+                result.errors.append({"path": entry.path, "error": validation_error})
+                continue
+            output_path = output_root / entry.output_relative_path
+            if output_path.exists():
+                result.errors.append({"path": str(output_path), "error": "output file already exists"})
+                continue
+            if dry_run:
+                result.written += 1
+                continue
+            try:
+                data, sample_rate, info = _load_stereo(Path(entry.path))
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                sf.write(str(output_path), data[:, 0], sample_rate, subtype=getattr(info, "subtype", None))
+                size = output_path.stat().st_size
+                result.written += 1
+                result.bytes_written += size
+                written.append({"source_path": entry.path, "output_path": str(output_path), "bytes_written": size})
+            except Exception as e:
+                result.errors.append({"path": entry.path, "error": str(e)})
     if not quiet:
         show_dual_mono_apply_result(result)
     return result

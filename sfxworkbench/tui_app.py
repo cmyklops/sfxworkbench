@@ -358,7 +358,6 @@ def run_tui(
         from textual.app import App, ComposeResult
         from textual.containers import Horizontal, Vertical, VerticalScroll
         from textual.css.query import NoMatches
-        from textual.screen import ModalScreen
         from textual.widgets import Button, ContentSwitcher, DataTable, Footer, Input, Static, Tab, Tabs
         from textual.worker import Worker, WorkerState
 
@@ -382,50 +381,7 @@ def run_tui(
             def _request_terminal_sync_mode_support(self) -> None:
                 return
 
-    class ConfirmActionScreen(ModalScreen[bool]):
-        CSS = """
-        ConfirmActionScreen {
-            align: center middle;
-        }
-        #confirm-dialog {
-            width: 72;
-            max-width: 90%;
-            height: auto;
-            border: heavy #d29922;
-            background: #101923;
-            padding: 1 2;
-        }
-        #confirm-title {
-            text-style: bold;
-            color: #f8fafc;
-            margin-bottom: 1;
-        }
-        #confirm-message {
-            color: #d7dee7;
-            margin-bottom: 1;
-        }
-        #confirm-actions {
-            height: auto;
-            margin-top: 1;
-        }
-        """
-
-        def __init__(self, title: str, message: str) -> None:
-            super().__init__()
-            self._title = title
-            self._message = message
-
-        def compose(self) -> ComposeResult:
-            with Vertical(id="confirm-dialog"):
-                yield Static(self._title, id="confirm-title")
-                yield Static(self._message, id="confirm-message")
-                with Horizontal(id="confirm-actions"):
-                    yield Button("Cancel", id="confirm-cancel")
-                    yield Button("Continue", id="confirm-continue", variant="warning")
-
-        def on_button_pressed(self, event: Button.Pressed) -> None:
-            event.stop()
-            self.dismiss(event.button.id == "confirm-continue")
+    from sfxworkbench.tui_screens.confirm_action import build_confirm_action_screen
 
     class SfxworkbenchTui(App):
         theme = "textual-dark"
@@ -1450,7 +1406,7 @@ def run_tui(
                 if confirmed:
                     self._start_action(action, label, run)
 
-            self.push_screen(ConfirmActionScreen(label, message), callback=after_confirm)
+            self.push_screen(build_confirm_action_screen(label, message), callback=after_confirm)
 
         def _cancel_running_action(self) -> None:
             if self._running_worker is None or self._running_worker.is_finished:
