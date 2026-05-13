@@ -1412,18 +1412,33 @@ def run_tui(
             )
             if self._report_dir.exists() and self._report_dir not in self._resolved_report_paths:
                 self._resolved_report_paths.insert(0, self._report_dir)
-            self._refresh()
+            # Tier 5.12: honor the action's declared refresh hints instead of
+            # blindly re-filling every tab. ``result.refresh`` is a tuple like
+            # ``("metadata", "reports")`` — only the named tabs are marked
+            # dirty, so a metadata audit while the user sits on Files no
+            # longer triggers a Files re-fill (and its underlying SQL).
+            self._refresh(result.refresh)
             self._fill_action_result()
 
-        def _refresh(self) -> None:
+        def _refresh(self, dirty: tuple[str, ...] | None = None) -> None:
             # Tier 5.14: only the strips and the active tab are filled eagerly.
             # The other tabs are marked dirty so their fill runs the first time
             # the user opens them — sparing the cost of a 50k-row Files build
             # or a Metadata refresh that may never be looked at.
+            #
+            # Tier 5.12 (smart invalidation): ``dirty`` is the ``refresh`` hint
+            # tuple declared by the completing action — e.g. a metadata audit
+            # passes ``("metadata", "reports")`` and we mark only the Metadata
+            # tab dirty. ``None`` preserves the conservative "everything dirty"
+            # behavior used by startup, resize, library-path change, and the
+            # manual refresh binding.
             self._fill_status_strip()
             self._fill_operation_strip()
             self._fill_action_result()
-            self._invalidate_all_tabs()
+            if dirty is None:
+                self._invalidate_all_tabs()
+            else:
+                self._invalidate_tabs(dirty)
             active = self._active_feature()
             self._refresh_reports(active)
             self._ensure_tab_filled(active)
@@ -1437,6 +1452,27 @@ def run_tui(
             from sfxworkbench.tui_screens._tabs import TAB_REGISTRY
 
             self._dirty_tabs = {spec.key for spec in TAB_REGISTRY}
+
+        def _invalidate_tabs(self, hints: tuple[str, ...]) -> None:
+            """Mark only the tabs named in ``hints`` dirty.
+
+            ``hints`` is an ``ActionResult.refresh`` tuple — it can include
+            non-tab keys (``status``, ``reports``) which we ignore. Unknown
+            keys are silently dropped so a typo in a refresh declaration
+            doesn't crash the App, just under-invalidates (caught by the
+            ``test_action_refresh_hints_are_known`` invariant test).
+
+            The Scan tab's findings are a dashboard view that pulls from
+            file inventory, metadata coverage, and dedupe state — i.e.
+            nearly every other tab. If anything substantive was dirtied,
+            mark Scan dirty too so the dashboard stays accurate.
+            """
+            from sfxworkbench.tui_screens._tabs import TAB_BY_KEY
+
+            keys = {hint for hint in hints if hint in TAB_BY_KEY}
+            if keys:
+                keys.add("scan")
+            self._dirty_tabs.update(keys)
 
         def _ensure_tab_filled(self, key: str) -> None:
             """Fill the tab named ``key`` if it is currently marked dirty.

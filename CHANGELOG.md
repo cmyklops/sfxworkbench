@@ -23,34 +23,59 @@ versioning once public releases begin.
   categorical *findings* tables (file counts by issue category, not file
   lists). Filtering would be low-value churn for tables of <20 rows.
 
-### Tier 3.8, 5.12 — Deferred With Concrete Design Notes
+### Tier 5.12 — Smart Tab Invalidation (Replaces Reactive Rewrite)
 
-Two items from the deferred list remain genuinely-needs-design and are not
-in scope for this round. Captured here so the next session can pick them
-up without re-deriving the analysis.
+The originally-specified Tier 5.12 was a reactive-partial-refresh rewrite
+to avoid rebuilding DataTables on every state change. On closer inspection
+the premise didn't hold: the visible tables cap at 100 rows, so re-rendering
+them is bounded — the real cost is the SQL underneath. A 3-5 day reactive
+rewrite would barely help.
 
-- **3.8 multi-select for bulk operations** — the action contract in
-  ``sfxworkbench.tui_actions`` takes plans (``RenamePlan``,
-  ``DeletePlan``), not file selections. Two paths to bridge:
-  - **Option (a):** add ``target_paths: tuple[Path, ...] | None`` to every
-    plan dataclass and gate executors on it. Mechanical but touches every
-    action.
-  - **Option (b):** introduce a ``SelectionAction`` wrapper that filters
-    the targets of an existing plan. Cleaner contract; needs a small
-    redesign session.
-  - **Product questions to answer first**: does selection persist across
-    tab switches? Across re-scans? Span pages of the Files table?
-- **5.12 reactive partial refresh** — today every ``_fill_<tab>()``
-  rebuilds the entire DataTable (``table.clear(); add_row`` per row). A
-  reactive variant would diff: ``add_row`` for new keys, ``remove_row``
-  for gone keys, ``update_cell`` for changed cells. Prerequisites:
-  - Every row needs a stable identity key (``file_id``? ``path``?).
-  - Sort and filter state must move into ``reactive()`` attributes so
-    Textual can recompute downstream.
-  - Every place that triggers a fill needs an audit: does the change
-    actually invalidate the table, or just touch one row?
-  Real cost: 3-5 days. Real risk: subtle staleness bugs. Worth doing
-  when a user complains about refresh cost; premature otherwise.
+What actually helped: **honor the ``ActionResult.refresh`` hints that every
+action already declares.**
+
+- Every action in ``sfxworkbench.tui_actions`` already returns a
+  ``refresh`` tuple like ``("metadata", "reports")`` to indicate what it
+  invalidates. Until this change the App ignored it — every action
+  blindly marked every tab dirty.
+- ``_refresh()`` gained an optional ``dirty: tuple[str, ...]`` argument.
+  ``_run_action`` now passes ``result.refresh`` so only the named tabs
+  get marked dirty. The ``None`` default preserves "everything dirty"
+  for startup, resize, library-path changes, and the manual refresh.
+- **Dependency rule:** the Scan tab's findings are a dashboard view
+  derived from file inventory, metadata coverage, and dedupe state. If
+  any tab gets dirtied, Scan does too — so the dashboard stays accurate
+  without editing 25 individual refresh declarations.
+- **New invariant test** ``test_action_refresh_hints_are_known`` scans
+  the action module's AST and asserts every ``refresh=(...)`` literal
+  uses a known hint key. Guards against typos that would silently
+  under-invalidate.
+
+**Concrete payoff per action:** a ``metadata_audit`` while sitting on the
+Files tab used to re-fill Files (50k-row SQL), Clean, Dedupe, and
+Advanced. Now it re-fills only Metadata + Scan. Same story for plan-only
+and audit-only actions across every tab.
+
+### Tier 3.8 — Multi-Select (Deferred, Awaiting Implementation)
+
+Selection should persist between tabs but invalidate on re-scan (user
+preference confirmed). The contract choice resolved to **Option (a)**:
+add ``target_paths: tuple[Path, ...] | None`` to every plan dataclass and
+filter candidates inside each executor. Reasons:
+
+- Plans already carry optional fields (``dry_run``, ``--no-backup``);
+  adding one more is consistent.
+- Executors already filter candidates by rule predicates; one more
+  filter step is the same pattern.
+- The "forgot to wire it" failure mode is loud (visible regression) vs.
+  the silent-failure mode in Option (b)'s implicit-scope alternative.
+- The TUI holds ``_selected_paths: set[Path]`` invalidated on scan
+  completion; every action call site adds
+  ``target_paths=tuple(self._selected_paths) or None``.
+
+Implementation: ~12 plan dataclasses × 2 changes each, plus selection
+UI on the Files table (DataTable cursor + space-to-toggle binding, count
+shown in the status strip).
 
 ### Tier 5.14 — Lazy Tab Fill
 
