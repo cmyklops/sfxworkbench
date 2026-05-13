@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.console import Console
@@ -21,13 +21,13 @@ from sfxworkbench.models import (
     CompareReport,
     CompareSummary,
 )
-from sfxworkbench.utils import json_dumps
+from sfxworkbench.utils import atomic_write_json
 
 console = Console()
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _md5(path: Path, block: int = 65536) -> str | None:
@@ -134,8 +134,7 @@ def build_compare_report(root: Path, against_db: Path = DEFAULT_DB_PATH, *, limi
 
 
 def write_compare_report(report: CompareReport, output_path: Path, quiet: bool = False) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json_dumps(report), encoding="utf-8")
+    atomic_write_json(output_path, report)
     if not quiet:
         console.print(f"Compare report written to [cyan]{output_path}[/cyan]")
 
@@ -176,8 +175,7 @@ def build_compare_plan(report_path: Path) -> ComparePlan:
 
 
 def write_compare_plan(plan: ComparePlan, output_path: Path, quiet: bool = False) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json_dumps(plan), encoding="utf-8")
+    atomic_write_json(output_path, plan)
     if not quiet:
         console.print(f"Compare plan written to [cyan]{output_path}[/cyan]")
 

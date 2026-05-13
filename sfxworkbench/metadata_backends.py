@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from collections.abc import Callable, Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib import metadata as importlib_metadata
 from importlib import util as importlib_util
 from pathlib import Path
@@ -25,7 +25,7 @@ MUTAGEN_EXTENSIONS = [".aif", ".aiff", ".mp3", ".flac", ".ogg", ".opus", ".m4a"]
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _has_path_separator(value: str) -> bool:

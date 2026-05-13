@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -24,14 +24,14 @@ from sfxworkbench.models import (
     DualMonoSummary,
 )
 from sfxworkbench.preservation import build_preservation_rules, move_protected_by
-from sfxworkbench.utils import json_dumps
+from sfxworkbench.utils import atomic_write_json
 
 console = Console()
 _VALID_REVIEW_STATES = {"approved", "rejected", "pending"}
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _default_log_path(plan_path: Path) -> Path:
@@ -157,8 +157,7 @@ def build_dual_mono_report(
 
 
 def write_dual_mono_report(report: DualMonoReport, output_path: Path, quiet: bool = False) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json_dumps(report), encoding="utf-8")
+    atomic_write_json(output_path, report)
     if not quiet:
         console.print(f"Dual-mono report written to [cyan]{output_path}[/cyan]")
 
@@ -219,8 +218,7 @@ def build_dual_mono_plan(
 
 
 def write_dual_mono_plan(plan: DualMonoPlan, output_path: Path, quiet: bool = False) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json_dumps(plan), encoding="utf-8")
+    atomic_write_json(output_path, plan)
     if not quiet:
         console.print(f"Dual-mono plan written to [cyan]{output_path}[/cyan]")
 
@@ -251,7 +249,7 @@ def review_dual_mono_plan(
         by_group[group_id].review_status = "rejected"
     plan.summary = _summarize_plan(plan)
     output = output_path or plan_path
-    output.write_text(json_dumps(plan), encoding="utf-8")
+    atomic_write_json(output, plan)
     result = DualMonoReviewResult(
         plan_path=str(plan_path),
         output_path=str(output),
@@ -352,8 +350,7 @@ def apply_dual_mono_plan(
             "written": written,
             "result": result,
         }
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(json_dumps(payload), encoding="utf-8")
+        atomic_write_json(log_path, payload)
     if not quiet:
         show_dual_mono_apply_result(result)
     return result

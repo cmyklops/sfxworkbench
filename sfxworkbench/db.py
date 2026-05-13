@@ -1,7 +1,9 @@
 """SQLite connection management and schema for sfxworkbench."""
 
+import contextlib
 import re
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 DEFAULT_DB_PATH = Path.home() / ".sfxworkbench" / "index.db"
@@ -336,3 +338,18 @@ def get_connection(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     apply_schema(conn)
     return conn
+
+
+@contextlib.contextmanager
+def connection(db_path: Path = DEFAULT_DB_PATH) -> Iterator[sqlite3.Connection]:
+    """Context-managed wrapper around :func:`get_connection`.
+
+    Guarantees the SQLite connection is closed (releasing any WAL lock) when
+    the ``with`` block exits, including via exception. Prefer this over the
+    bare :func:`get_connection` + manual ``.close()`` pattern.
+    """
+    conn = get_connection(db_path)
+    try:
+        yield conn
+    finally:
+        conn.close()

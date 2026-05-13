@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sfxworkbench.audit_cmd import run_audit
@@ -16,7 +16,7 @@ from sfxworkbench.utils import json_dumps
 
 
 def _now_stamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -184,7 +184,7 @@ def run_internal_beta_audit(
     manifest = {
         "schema_version": 1,
         "command": "internal_beta_audit",
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "root": root,
         "output_dir": output_dir,
         "db_path": db_path,

@@ -5,8 +5,8 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
-import re
-from datetime import datetime, timezone
+import math
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.console import Console
@@ -14,7 +14,16 @@ from rich.table import Table
 
 from sfxworkbench import __version__
 from sfxworkbench.apply_logs import default_apply_log_path_for_plan
-from sfxworkbench.db import DEFAULT_DB_PATH, get_connection, path_scope_filter, path_scope_params
+from sfxworkbench.db import DEFAULT_DB_PATH, connection, path_scope_filter, path_scope_params
+from sfxworkbench.metadata_fields import (
+    canonicalize as _canonical_tag_field,
+)
+from sfxworkbench.metadata_fields import (
+    embedded_keys_for,
+    is_multivalue,
+    normalize_value_for_dedup,
+    values_equal_for_dedup,
+)
 from sfxworkbench.models import (
     TagApplyResult,
     TagPlan,
@@ -26,26 +35,23 @@ from sfxworkbench.models import (
     TagSuggestionReport,
 )
 from sfxworkbench.tag_suggest import build_tag_suggestion_report, filter_suggestions, normalize_filter_values
-from sfxworkbench.utils import json_dumps
+from sfxworkbench.utils import atomic_write_json, json_dumps
 
 console = Console()
 
 PLAN_SCHEMA_VERSION = 1
+# mtime values round-trip through JSON as Python floats, which can lose
+# sub-microsecond precision on some filesystems. Use ``math.isclose`` rather
+# than ``!=`` so a re-loaded plan does not fail validation on an unchanged file.
+_MTIME_TOLERANCE = 1e-6
 _VALID_REVIEW_STATES = {"approved", "rejected", "pending"}
-_MULTIVALUE_FIELDS = {"keyword", "keywords"}
+# Sentinel used as the per-file dedup key for single-value fields, where any
+# already-planned value blocks further adds regardless of the new value.
 _SINGLE_VALUE_SENTINEL = "<single-value-field>"
-_EMBEDDED_FIELD_KEYS: dict[str, tuple[tuple[str, str], ...]] = {
-    "description": (("bext", "description"), ("tag", "description")),
-    "keyword": (("riff_info", "ikey"), ("tag", "keywords")),
-    "category": (("riff_info", "ignr"), ("tag", "category")),
-    "subcategory": (("tag", "subcategory"),),
-    "title": (("riff_info", "inam"), ("tag", "title")),
-    "comment": (("riff_info", "icmt"), ("tag", "comment")),
-}
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _md5(path: Path, block: int = 65536) -> str | None:
@@ -86,13 +92,6 @@ def _matches_selector(
     return True
 
 
-def _canonical_tag_field(field: str) -> str:
-    normalized = field.strip().lower()
-    if normalized in _MULTIVALUE_FIELDS:
-        return "keyword"
-    return normalized
-
-
 def _normalized_selector(values: list[str] | None, *, option_name: str) -> set[str]:
     return set(normalize_filter_values(values, option_name=option_name))
 
@@ -114,7 +113,7 @@ def _existing_tag_values(conn, *, file_id: int, field: str) -> list[str]:
 
 
 def _existing_embedded_values(conn, *, file_id: int, field: str) -> list[str]:
-    field_keys = _EMBEDDED_FIELD_KEYS.get(_canonical_tag_field(field), ())
+    field_keys = embedded_keys_for(_canonical_tag_field(field))
     if not field_keys:
         return []
     clauses = " OR ".join("(lower(namespace) = ? AND lower(key) = ?)" for _ in field_keys)
@@ -140,22 +139,17 @@ def _existing_values(conn, *, file_id: int, field: str) -> list[str]:
     )
 
 
-def _normalized_tag_value(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip().casefold()
-
-
 def _should_skip_existing(field: str, proposed_value: str, existing_values: list[str]) -> bool:
     if not existing_values:
         return False
-    if _canonical_tag_field(field) in _MULTIVALUE_FIELDS:
-        proposed_key = _normalized_tag_value(proposed_value)
-        return any(_normalized_tag_value(value) == proposed_key for value in existing_values)
+    if is_multivalue(_canonical_tag_field(field)):
+        return any(values_equal_for_dedup(proposed_value, existing) for existing in existing_values)
     return True
 
 
 def _planned_seen_key(field: str, proposed_value: str) -> str:
-    if _canonical_tag_field(field) in _MULTIVALUE_FIELDS:
-        return _normalized_tag_value(proposed_value)
+    if is_multivalue(_canonical_tag_field(field)):
+        return normalize_value_for_dedup(proposed_value)
     return _SINGLE_VALUE_SENTINEL
 
 
@@ -187,46 +181,45 @@ def _plan_from_suggestion_report(
     sources: list[str] | None = None,
     fields: list[str] | None = None,
 ) -> TagPlan:
-    conn = get_connection(db_path)
     source_filters = normalize_filter_values(sources, option_name="--source")
     field_filters = normalize_filter_values(fields, option_name="--field")
     entries: list[TagPlanEntry] = []
     planned_values: dict[tuple[int, str], set[str]] = {}
     entry_id = 1
-    for suggestion_entry in report.entries:
-        suggestions = filter_suggestions(suggestion_entry.suggestions, sources=source_filters, fields=field_filters)
-        for suggestion in suggestions:
-            existing_values = _existing_values(conn, file_id=suggestion_entry.file_id, field=suggestion.field)
-            seen_key = (suggestion_entry.file_id, _canonical_tag_field(suggestion.field))
-            seen_values = planned_values.setdefault(seen_key, set())
-            action = "add"
-            if _should_skip_existing(
-                suggestion.field, suggestion.value, existing_values
-            ) or _should_skip_planned_duplicate(suggestion.field, suggestion.value, seen_values):
-                action = "skip_existing"
-            else:
-                _remember_planned_add(suggestion.field, suggestion.value, seen_values)
-            entries.append(
-                TagPlanEntry(
-                    entry_id=entry_id,
-                    file_id=suggestion_entry.file_id,
-                    path=suggestion_entry.path,
-                    filename=suggestion_entry.filename,
-                    size_bytes=suggestion_entry.size_bytes,
-                    mtime=suggestion_entry.mtime,
-                    md5=suggestion_entry.md5,
-                    field=suggestion.field,
-                    action=action,
-                    existing_values=existing_values,
-                    proposed_value=suggestion.value,
-                    source=suggestion.source,
-                    method=suggestion.method,
-                    confidence=suggestion.confidence,
-                    evidence=suggestion.evidence,
+    with connection(db_path) as conn:
+        for suggestion_entry in report.entries:
+            suggestions = filter_suggestions(suggestion_entry.suggestions, sources=source_filters, fields=field_filters)
+            for suggestion in suggestions:
+                existing_values = _existing_values(conn, file_id=suggestion_entry.file_id, field=suggestion.field)
+                seen_key = (suggestion_entry.file_id, _canonical_tag_field(suggestion.field))
+                seen_values = planned_values.setdefault(seen_key, set())
+                action = "add"
+                if _should_skip_existing(
+                    suggestion.field, suggestion.value, existing_values
+                ) or _should_skip_planned_duplicate(suggestion.field, suggestion.value, seen_values):
+                    action = "skip_existing"
+                else:
+                    _remember_planned_add(suggestion.field, suggestion.value, seen_values)
+                entries.append(
+                    TagPlanEntry(
+                        entry_id=entry_id,
+                        file_id=suggestion_entry.file_id,
+                        path=suggestion_entry.path,
+                        filename=suggestion_entry.filename,
+                        size_bytes=suggestion_entry.size_bytes,
+                        mtime=suggestion_entry.mtime,
+                        md5=suggestion_entry.md5,
+                        field=suggestion.field,
+                        action=action,
+                        existing_values=existing_values,
+                        proposed_value=suggestion.value,
+                        source=suggestion.source,
+                        method=suggestion.method,
+                        confidence=suggestion.confidence,
+                        evidence=suggestion.evidence,
+                    )
                 )
-            )
-            entry_id += 1
-    conn.close()
+                entry_id += 1
     plan = TagPlan(
         generated_at=_now_iso(),
         tool_version=__version__,
@@ -262,21 +255,20 @@ def _load_indexed_file_lookup(
     root: Path, db_path: Path
 ) -> tuple[list[dict], dict[int, dict], dict[str, dict], dict[str, list[dict]]]:
     root = root.resolve()
-    conn = get_connection(db_path)
-    rows = [
-        dict(row)
-        for row in conn.execute(
-            f"""
-            SELECT id, path, filename, stem, size_bytes, mtime, md5
-            FROM files
-            WHERE {path_scope_filter()}
-              AND scan_error IS NULL
-            ORDER BY path
-            """,
-            path_scope_params(root),
-        ).fetchall()
-    ]
-    conn.close()
+    with connection(db_path) as conn:
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                f"""
+                SELECT id, path, filename, stem, size_bytes, mtime, md5
+                FROM files
+                WHERE {path_scope_filter()}
+                  AND scan_error IS NULL
+                ORDER BY path
+                """,
+                path_scope_params(root),
+            ).fetchall()
+        ]
     by_id = {int(row["id"]): row for row in rows}
     by_path = {str(Path(row["path"]).resolve()): row for row in rows}
     by_name: dict[str, list[dict]] = {}
@@ -334,12 +326,11 @@ def _plan_from_csv(
     source_filters = normalize_filter_values(sources, option_name="--source")
     field_filters = normalize_filter_values(fields, option_name="--field")
     rows, by_id, by_path, by_name = _load_indexed_file_lookup(root, db_path)
-    conn = get_connection(db_path)
     entries: list[TagPlanEntry] = []
     errors: list[dict] = []
     planned_values: dict[tuple[int, str], set[str]] = {}
     entry_id = 1
-    with csv_path.open(newline="", encoding="utf-8-sig") as handle:
+    with connection(db_path) as conn, csv_path.open(newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
         required = {"field", "value"}
         missing_columns = sorted(required - set(reader.fieldnames or []))
@@ -401,7 +392,6 @@ def _plan_from_csv(
                 )
             )
             entry_id += 1
-    conn.close()
     plan = TagPlan(
         generated_at=_now_iso(),
         tool_version=__version__,
@@ -472,8 +462,7 @@ def build_tag_plan(
 
 def write_tag_plan(plan: TagPlan, output_path: Path | None = None, quiet: bool = False) -> Path:
     output = output_path or _default_plan_path()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json_dumps(plan), encoding="utf-8")
+    atomic_write_json(output, plan)
     if not quiet:
         console.print(f"Tag plan written to [cyan]{output}[/cyan]")
     return output
@@ -539,8 +528,7 @@ def review_tag_plan(
     plan.summary = _summarize_plan(plan)
 
     output = output_path or plan_path
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json_dumps(plan), encoding="utf-8")
+    atomic_write_json(output, plan)
     result = TagReviewResult(
         plan_path=str(plan_path),
         output_path=str(output),
@@ -654,7 +642,7 @@ def _validate_plan_entry(conn, entry: TagPlanEntry) -> str | None:
         return f"path changed: expected {entry.path}, got {row['path']}"
     if entry.size_bytes is not None and row["size_bytes"] != entry.size_bytes:
         return f"size changed: expected {entry.size_bytes}, got {row['size_bytes']}"
-    if entry.mtime is not None and row["mtime"] != entry.mtime:
+    if entry.mtime is not None and not math.isclose(row["mtime"], entry.mtime, abs_tol=_MTIME_TOLERANCE):
         return "mtime changed"
     if entry.md5 is not None and row["md5"] != entry.md5:
         return "md5 changed"
@@ -667,7 +655,7 @@ def _validate_plan_entry(conn, entry: TagPlanEntry) -> str | None:
         return str(e)
     if entry.size_bytes is not None and stat.st_size != entry.size_bytes:
         return f"file size changed: expected {entry.size_bytes}, got {stat.st_size}"
-    if entry.mtime is not None and stat.st_mtime != entry.mtime:
+    if entry.mtime is not None and not math.isclose(stat.st_mtime, entry.mtime, abs_tol=_MTIME_TOLERANCE):
         return "file mtime changed"
     if entry.md5 is not None and len(entry.md5) == 32:
         current_md5 = _md5(path)
@@ -695,101 +683,98 @@ def apply_tag_plan(
     if require_reviewed and not approved_entries:
         result.errors.append({"path": str(plan_path), "error": "plan has no approved entries"})
         return result
-    conn = get_connection(effective_db)
     now = _now_iso()
     planned_values: dict[tuple[int, str], set[str]] = {}
-    for entry in plan.entries:
-        if require_reviewed and entry.review_status != "approved":
-            result.skipped += 1
-            continue
-        if entry.review_status == "rejected":
-            result.skipped += 1
-            continue
-        if entry.review_status not in _VALID_REVIEW_STATES:
-            result.errors.append({"entry_id": entry.entry_id, "path": entry.path, "error": "invalid review status"})
-            continue
-        validation_error = _validate_plan_entry(conn, entry)
-        if validation_error is not None:
-            result.errors.append({"entry_id": entry.entry_id, "path": entry.path, "error": validation_error})
-            continue
-        if entry.action != "add":
-            result.skipped += 1
-            continue
-        existing_values = _existing_values(conn, file_id=entry.file_id, field=entry.field)
-        seen_key = (entry.file_id, _canonical_tag_field(entry.field))
-        seen_values = planned_values.setdefault(seen_key, set())
-        if _should_skip_existing(entry.field, entry.proposed_value, existing_values) or _should_skip_planned_duplicate(
-            entry.field, entry.proposed_value, seen_values
-        ):
-            result.skipped += 1
-            continue
-        if dry_run:
+    log_payload = None
+    with connection(effective_db) as conn:
+        for entry in plan.entries:
+            if require_reviewed and entry.review_status != "approved":
+                result.skipped += 1
+                continue
+            if entry.review_status == "rejected":
+                result.skipped += 1
+                continue
+            if entry.review_status not in _VALID_REVIEW_STATES:
+                result.errors.append({"entry_id": entry.entry_id, "path": entry.path, "error": "invalid review status"})
+                continue
+            validation_error = _validate_plan_entry(conn, entry)
+            if validation_error is not None:
+                result.errors.append({"entry_id": entry.entry_id, "path": entry.path, "error": validation_error})
+                continue
+            if entry.action != "add":
+                result.skipped += 1
+                continue
+            existing_values = _existing_values(conn, file_id=entry.file_id, field=entry.field)
+            seen_key = (entry.file_id, _canonical_tag_field(entry.field))
+            seen_values = planned_values.setdefault(seen_key, set())
+            if _should_skip_existing(
+                entry.field, entry.proposed_value, existing_values
+            ) or _should_skip_planned_duplicate(entry.field, entry.proposed_value, seen_values):
+                result.skipped += 1
+                continue
+            if dry_run:
+                result.applied += 1
+                _remember_planned_add(entry.field, entry.proposed_value, seen_values)
+                continue
+            conn.execute(
+                """
+                INSERT INTO accepted_tags (
+                    file_id, field, value, source, method, confidence, evidence,
+                    plan_entry_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(file_id, field, value) DO UPDATE SET
+                    source = excluded.source,
+                    method = excluded.method,
+                    confidence = excluded.confidence,
+                    evidence = excluded.evidence,
+                    plan_entry_id = excluded.plan_entry_id,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    entry.file_id,
+                    entry.field,
+                    entry.proposed_value,
+                    entry.source,
+                    entry.method,
+                    entry.confidence,
+                    json.dumps(entry.evidence),
+                    entry.entry_id,
+                    now,
+                    now,
+                ),
+            )
             result.applied += 1
             _remember_planned_add(entry.field, entry.proposed_value, seen_values)
-            continue
-        conn.execute(
-            """
-            INSERT INTO accepted_tags (
-                file_id, field, value, source, method, confidence, evidence,
-                plan_entry_id, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(file_id, field, value) DO UPDATE SET
-                source = excluded.source,
-                method = excluded.method,
-                confidence = excluded.confidence,
-                evidence = excluded.evidence,
-                plan_entry_id = excluded.plan_entry_id,
-                updated_at = excluded.updated_at
-            """,
-            (
-                entry.file_id,
-                entry.field,
-                entry.proposed_value,
-                entry.source,
-                entry.method,
-                entry.confidence,
-                json.dumps(entry.evidence),
-                entry.entry_id,
-                now,
-                now,
-            ),
-        )
-        result.applied += 1
-        _remember_planned_add(entry.field, entry.proposed_value, seen_values)
-    if log_path is None and not dry_run:
-        log_path = _default_log_path(plan_path)
-    if log_path is not None:
-        result.log_path = str(log_path)
-    log_payload = None
-    if log_path is not None:
-        log_payload = {
-            "schema_version": PLAN_SCHEMA_VERSION,
-            "generated_at": _now_iso(),
-            "tool": "sfxworkbench",
-            "tool_version": __version__,
-            "plan_path": str(plan_path),
-            "db_path": str(effective_db),
-            "result": result,
-        }
-    if not dry_run:
-        conn.execute(
-            """
-            INSERT INTO tag_apply_log (plan_path, db_path, dry_run, generated_at, result_json)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                str(plan_path),
-                str(effective_db),
-                int(dry_run),
-                log_payload["generated_at"] if log_payload is not None else _now_iso(),
-                json_dumps(result),
-            ),
-        )
-        conn.commit()
-    conn.close()
+        if log_path is None and not dry_run:
+            log_path = _default_log_path(plan_path)
+        if log_path is not None:
+            result.log_path = str(log_path)
+            log_payload = {
+                "schema_version": PLAN_SCHEMA_VERSION,
+                "generated_at": _now_iso(),
+                "tool": "sfxworkbench",
+                "tool_version": __version__,
+                "plan_path": str(plan_path),
+                "db_path": str(effective_db),
+                "result": result,
+            }
+        if not dry_run:
+            conn.execute(
+                """
+                INSERT INTO tag_apply_log (plan_path, db_path, dry_run, generated_at, result_json)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    str(plan_path),
+                    str(effective_db),
+                    int(dry_run),
+                    log_payload["generated_at"] if log_payload is not None else _now_iso(),
+                    json_dumps(result),
+                ),
+            )
+            conn.commit()
     if log_path is not None and log_payload is not None:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(json_dumps(log_payload), encoding="utf-8")
+        atomic_write_json(log_path, log_payload)
     if not quiet:
         show_tag_apply_result(result)
     return result

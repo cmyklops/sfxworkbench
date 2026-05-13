@@ -708,6 +708,10 @@ class MetadataWriteApplyResult(BaseModel):
     files_written: int = 0
     files_backed_up: int = 0
     files_verified: int = 0
+    # Count of files where readback mismatch triggered an automatic restore from
+    # the pre-apply backup. Added in PR #7 to make the rollback path observable
+    # in the apply result and downstream apply-log JSON.
+    files_restored: int = 0
     backup_dir: str | None = None
     log_path: str | None = None
     backups: list[dict] = []

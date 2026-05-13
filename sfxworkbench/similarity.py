@@ -7,7 +7,7 @@ import json
 import math
 import time
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.console import Console
@@ -36,7 +36,7 @@ from sfxworkbench.models import (
     SimilaritySegmentsReport,
     SimilaritySegmentsSummary,
 )
-from sfxworkbench.utils import json_dumps
+from sfxworkbench.utils import atomic_write_json
 
 console = Console()
 
@@ -50,7 +50,7 @@ ProgressCallback = Callable[[str, int, int | None, str], None]
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _is_relative_to(path: Path, parent: Path) -> bool:
@@ -842,7 +842,7 @@ def crawl_similarity_descriptors(
         descriptors=descriptors,
     )
     if cache_path is not None:
-        (cache_path / f"similarity_crawl_{run_id}.json").write_text(json_dumps(report), encoding="utf-8")
+        atomic_write_json(cache_path / f"similarity_crawl_{run_id}.json", report)
     if not quiet:
         show_similarity_crawl_report(report)
     return report
@@ -1326,8 +1326,7 @@ def audit_similarity_descriptors(
         groups=reported_groups,
     )
     if output_path is not None:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(json_dumps(report), encoding="utf-8")
+        atomic_write_json(output_path, report)
     if not quiet:
         show_similarity_audit_report(report)
     return report

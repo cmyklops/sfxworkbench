@@ -25,7 +25,7 @@ from __future__ import annotations
 import csv
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -92,7 +92,7 @@ def resolve_catalog_path(path: Path | None = None) -> Path | None:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _split_synonyms(raw: str | None) -> list[str]:

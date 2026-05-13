@@ -941,3 +941,187 @@ def test_summary_confidence_buckets_are_sorted(tmp_path: Path, tmp_db: Path) -> 
     # Buckets must be a stable sorted dict so JSON output is deterministic.
     keys = list(report.summary.by_confidence_bucket.keys())
     assert keys == sorted(keys)
+
+
+# ---------------------------------------------------------------------------
+# Suggestor protocol (PR #5)
+# ---------------------------------------------------------------------------
+
+
+def _suggest_ctx(
+    tmp_path: Path,
+    *,
+    stem: str = "SFX_GUNSHOT_PISTOL_01",
+    catalog=None,
+    group_match=None,
+    include_synonyms: bool = False,
+    synonym_limit: int = 0,
+    synonym_depth: int = 0,
+):
+    """Build a SuggestContext for unit tests with sensible defaults."""
+    from sfxworkbench.tag_suggest import SuggestContext
+
+    file_path = tmp_path / "library" / f"{stem}.wav"
+    return SuggestContext(
+        file_id=1,
+        path=file_path,
+        filename=file_path.name,
+        stem=stem,
+        root=tmp_path / "library",
+        catalog=catalog,
+        group_match=group_match,
+        include_synonyms=include_synonyms,
+        synonym_limit=synonym_limit,
+        synonym_depth=synonym_depth,
+    )
+
+
+def test_default_suggestors_have_distinct_names() -> None:
+    from sfxworkbench.tag_suggest import DEFAULT_SUGGESTORS
+
+    names = [s.name for s in DEFAULT_SUGGESTORS]
+    assert len(set(names)) == len(names), f"duplicate suggestor names: {names}"
+    assert names == ["ucs_stem", "group", "filename", "path", "synonym"]
+
+
+def test_run_suggestors_concatenates_in_order(tmp_path: Path) -> None:
+    from sfxworkbench.tag_suggest import run_suggestors
+
+    ctx = _suggest_ctx(tmp_path, stem="SFX_GUNSHOT_PISTOL_01")
+    suggestions = run_suggestors(ctx)
+    # UCS stem suggestor fires first and provides ucs_category before any filename suggestion appears.
+    sources_in_order = [s.source for s in suggestions]
+    assert "ucs_stem" in sources_in_order
+    assert (
+        sources_in_order.index("ucs_stem") < sources_in_order.index("filename")
+        if "filename" in sources_in_order
+        else True
+    )
+
+
+def test_group_suggestor_returns_empty_without_group_match(tmp_path: Path) -> None:
+    from sfxworkbench.tag_suggest import GroupSuggestor
+
+    ctx = _suggest_ctx(tmp_path, group_match=None)
+    assert list(GroupSuggestor().propose(ctx, prior=[])) == []
+
+
+def test_group_suggestor_delegates_when_group_match_present(tmp_path: Path) -> None:
+    from sfxworkbench.tag_suggest import GroupSuggestor
+
+    member = RelatedSoundFile(path=str(tmp_path / "AMB_RAIN_01.wav"), filename="AMB_RAIN_01.wav", marker="01")
+    sibling = RelatedSoundFile(path=str(tmp_path / "AMB_RAIN_02.wav"), filename="AMB_RAIN_02.wav", marker="02")
+    group = RelatedSoundGroup(
+        group_id=1,
+        parent_path=str(tmp_path),
+        inferred_stem="AMB_RAIN",
+        reason="numbered_take",
+        confidence="high",
+        file_count=2,
+        files=[member, sibling],
+    )
+    ctx = _suggest_ctx(tmp_path, group_match=(group, member))
+
+    suggestions = list(GroupSuggestor().propose(ctx, prior=[]))
+    assert suggestions, "group suggestor should produce output when a group_match is present"
+    assert all(s.source == "group" for s in suggestions)
+
+
+def test_filename_suggestor_skips_description_when_ucs_or_group_already_did(tmp_path: Path) -> None:
+    """Gating logic that used to live inline in the orchestrator now lives in the suggestor."""
+    from sfxworkbench.models import TagSuggestion
+    from sfxworkbench.tag_suggest import FilenameSuggestor
+
+    ctx = _suggest_ctx(tmp_path, stem="Metal Hit 04")  # would normally produce a description
+
+    no_prior = list(FilenameSuggestor().propose(ctx, prior=[]))
+    assert any(s.field == "description" for s in no_prior)
+
+    ucs_prior = [
+        TagSuggestion(
+            field="description",
+            value="Metal",
+            source="ucs_stem",
+            method="ucs_heuristic",
+            confidence=0.75,
+            evidence=["x"],
+        )
+    ]
+    gated = list(FilenameSuggestor().propose(ctx, prior=ucs_prior))
+    assert not any(s.field == "description" for s in gated)
+    # Take number is still useful corroboration.
+    assert any(s.field == "take_number" for s in gated)
+
+
+def test_filename_suggestor_does_not_skip_description_for_low_confidence_prior(tmp_path: Path) -> None:
+    """Only the 'ucs_stem', 'ucs_catalog', and 'group' sources gate filename description."""
+    from sfxworkbench.models import TagSuggestion
+    from sfxworkbench.tag_suggest import FilenameSuggestor
+
+    ctx = _suggest_ctx(tmp_path, stem="Metal Hit 04")
+    path_prior = [
+        TagSuggestion(
+            field="description",
+            value="Whatever",
+            source="path",
+            method="folder_token",
+            confidence=0.50,
+            evidence=["x"],
+        )
+    ]
+    suggestions = list(FilenameSuggestor().propose(ctx, prior=path_prior))
+    # path-sourced description should NOT block filename description.
+    assert any(s.field == "description" for s in suggestions)
+
+
+def test_synonym_suggestor_only_runs_when_include_synonyms_is_true(tmp_path: Path) -> None:
+    from sfxworkbench.tag_suggest import SynonymSuggestor, suggest_from_filename
+
+    base = suggest_from_filename("Car Crash 01")
+    assert base, "precondition: filename suggestor produces something for this stem"
+
+    ctx_off = _suggest_ctx(tmp_path, include_synonyms=False)
+    assert list(SynonymSuggestor().propose(ctx_off, prior=base)) == []
+
+    ctx_on = _suggest_ctx(tmp_path, include_synonyms=True)
+    result = list(SynonymSuggestor().propose(ctx_on, prior=base))
+    # SynonymSuggestor mirrors suggest_synonym_keywords behavior.
+    assert all(s.source == "synonym" for s in result)
+
+
+def test_user_configured_confidence_profile_overrides_defaults() -> None:
+    """A user-set ConfidenceProfile flows through to per-suggestor confidence values."""
+    from sfxworkbench.config import ConfidenceProfile
+
+    overridden = ConfidenceProfile(ucs_heuristic=0.10, filename_take=0.99, path=0.50)
+
+    # Default profile produces the historical 0.75 anchor.
+    suggestions = suggest_from_ucs_stem("SFX_GUNSHOT_PISTOL_01")
+    assert any(s.confidence == 0.75 for s in suggestions)
+
+    # User profile shifts every emitted confidence to the override.
+    overridden_suggestions = suggest_from_ucs_stem("SFX_GUNSHOT_PISTOL_01", profile=overridden)
+    assert all(s.confidence == 0.10 for s in overridden_suggestions), [s.confidence for s in overridden_suggestions]
+
+    # Same propagation for filename take_number.
+    filename_default = suggest_from_filename("Pistol_01")
+    take_default = next(s for s in filename_default if s.field == "take_number")
+    assert take_default.confidence == 0.60
+
+    filename_overridden = suggest_from_filename("Pistol_01", profile=overridden)
+    take_overridden = next(s for s in filename_overridden if s.field == "take_number")
+    assert take_overridden.confidence == 0.99
+
+
+def test_build_tag_suggestion_report_uses_default_suggestors(tmp_path: Path, tmp_db: Path) -> None:
+    """End-to-end regression: the orchestrator's output matches what individual suggestors produce."""
+    root = tmp_path / "library"
+    folder = root / "Pistol"
+    folder.mkdir(parents=True)
+    _seed_files(tmp_db, [{"path": folder / "SFX_GUNSHOT_PISTOL_01.wav", "md5": "A"}])
+
+    report = build_tag_suggestion_report(root, tmp_db)
+    assert len(report.entries) == 1
+    sources = {s.source for s in report.entries[0].suggestions}
+    # Both ucs_stem (from the UCS-shaped filename) and filename or path heuristics fire.
+    assert "ucs_stem" in sources

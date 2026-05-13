@@ -1242,17 +1242,124 @@ def test_metadata_write_apply_reports_mutagen_readback_mismatch(tmp_path: Path, 
     assert result.files_written == 0
     assert result.files_backed_up == 1
     assert result.files_verified == 0
+    # PR #7: mismatch must trigger an automatic restore from the pre-apply backup.
+    assert result.files_restored == 1
     assert result.readback[0]["mismatched_fields"] == {
         "genre": {"expected": "SFX", "actual": None},
         "description": {"expected": "Metal Hit", "actual": "Wrong"},
     }
-    assert result.errors == [
-        {
-            "path": str(audio),
-            "error": "metadata readback mismatch",
-            "fields": result.readback[0]["mismatched_fields"],
-        }
-    ]
+    assert len(result.errors) == 1
+    error = result.errors[0]
+    assert error["path"] == str(audio)
+    assert "metadata readback mismatch" in error["error"]
+    assert "original restored from backup" in error["error"]
+    assert error["fields"] == result.readback[0]["mismatched_fields"]
+    assert "backup_path" in error
+    # And the actual file on disk should match the backup (was rolled back).
+    backup_path = Path(error["backup_path"])
+    assert audio.read_bytes() == backup_path.read_bytes()
+
+
+def _wired_mutagen_fake(monkeypatch):
+    """Wire fake mutagen read/write that flip from empty to full once a write happens.
+
+    Matches the pattern used by the existing readback-mismatch test: during
+    plan-build, ``read_mutagen_fields`` must return an empty dict so the
+    planner generates write entries; once ``write_mutagen_fields`` is called,
+    subsequent reads return the expected values so the readback verify
+    passes. The shared ``wrote`` flag is the cheapest way to express that.
+    """
+    state = {"wrote": False}
+
+    def fake_write(_path, _fields):
+        state["wrote"] = True
+
+    def fake_read(_path, _fields):
+        return {"description": "Metal Hit", "genre": "SFX"} if state["wrote"] else {}
+
+    monkeypatch.setattr(metadata_write, "write_mutagen_fields", fake_write)
+    monkeypatch.setattr(metadata_write, "read_mutagen_fields", fake_read)
+
+
+def test_metadata_write_apply_defaults_to_sibling_backups(tmp_path: Path, tmp_db: Path, monkeypatch) -> None:
+    """PR #13 follow-up: without --backup-dir, backups are .original-<stamp>Z siblings."""
+    monkeypatch.setattr(metadata_backends.importlib_util, "find_spec", lambda _name: object())
+    monkeypatch.setattr(metadata_backends.importlib_metadata, "version", lambda _name: "1.47.0")
+    _wired_mutagen_fake(monkeypatch)
+    root = tmp_path / "library"
+    root.mkdir()
+    audio = root / "SFX_HIT_01.flac"
+    audio.write_bytes(b"not really audio")
+    _seed_file(tmp_db, audio)
+
+    plan = build_metadata_write_plan(tmp_db, root=root, bwfmetaedit=_fake_bwfmetaedit(tmp_path))
+    plan_path = tmp_path / "metadata_write_plan.json"
+    write_metadata_write_plan(plan, plan_path, quiet=True)
+    review_metadata_write_plan(plan_path, approve_all=True, quiet=True)
+
+    result = apply_metadata_write_plan(plan_path, db_path=tmp_db, dry_run=False, quiet=True)
+
+    # A sibling .original-<stamp>Z file lives next to the source.
+    siblings = list(root.glob("SFX_HIT_01.flac.original-*Z"))
+    assert len(siblings) == 1
+    assert result.backup_dir == "sibling"
+    assert result.files_backed_up == 1
+    # The recorded backup_path in the result points at the sibling.
+    assert result.backups[0]["backup_path"] == str(siblings[0])
+
+
+def test_metadata_write_apply_cli_requires_yes_when_no_backup(tmp_path: Path, tmp_db: Path) -> None:
+    """PR #17: --apply --no-backup refuses without --yes so the safety bypass is intentional."""
+    from sfxworkbench.cli import app
+    from typer.testing import CliRunner
+
+    runner = CliRunner()
+    # Plan file doesn't need to exist meaningfully — the safety gate fires before
+    # we even reach the load_metadata_write_plan call.
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text("{}")
+    result = runner.invoke(
+        app,
+        [
+            "metadata",
+            "write-apply",
+            str(plan_path),
+            "--db",
+            str(tmp_db),
+            "--apply",
+            "--no-backup",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "safety net" in result.output
+    assert "--yes" in result.output
+
+
+def test_metadata_write_apply_with_no_backup_skips_backups(tmp_path: Path, tmp_db: Path, monkeypatch) -> None:
+    """PR #13 follow-up: --no-backup truly skips backups (and disables restore-on-mismatch)."""
+    monkeypatch.setattr(metadata_backends.importlib_util, "find_spec", lambda _name: object())
+    monkeypatch.setattr(metadata_backends.importlib_metadata, "version", lambda _name: "1.47.0")
+    _wired_mutagen_fake(monkeypatch)
+    root = tmp_path / "library"
+    root.mkdir()
+    audio = root / "SFX_HIT_01.flac"
+    audio.write_bytes(b"x")
+    _seed_file(tmp_db, audio)
+
+    plan = build_metadata_write_plan(tmp_db, root=root, bwfmetaedit=_fake_bwfmetaedit(tmp_path))
+    plan_path = tmp_path / "metadata_write_plan.json"
+    write_metadata_write_plan(plan, plan_path, quiet=True)
+    review_metadata_write_plan(plan_path, approve_all=True, quiet=True)
+
+    result = apply_metadata_write_plan(plan_path, db_path=tmp_db, dry_run=False, backup=False, quiet=True)
+
+    assert result.files_backed_up == 0
+    assert result.backup_dir is None
+    siblings = list(root.glob("SFX_HIT_01.flac.original-*Z"))
+    assert siblings == []
+    # Backup metadata still recorded (so apply-log keeps a per-file row) but
+    # backup_path is None.
+    assert result.backups[0]["backup_path"] is None
 
 
 def test_metadata_write_apply_rejects_file_changed_after_plan(tmp_path: Path, tmp_db: Path, monkeypatch) -> None:

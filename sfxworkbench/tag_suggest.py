@@ -16,14 +16,17 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Protocol
 
 from rich.console import Console
 from rich.table import Table
 
 from sfxworkbench import __version__
+from sfxworkbench.config import ConfidenceProfile
 from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params
 from sfxworkbench.groups import audit_related_groups
 from sfxworkbench.models import (
@@ -40,18 +43,20 @@ from sfxworkbench.ucs_catalog import load_catalog, lookup_entry, resolve_catalog
 
 console = Console()
 
-# Confidence anchors. Tuned so group-derived evidence outranks raw filename
-# guesses, and UCS structure outranks unstructured filename heuristics. Values
-# are deliberate floats so a future UCS catalog match can sit at 0.95 above the
-# 0.75 heuristic.
-_CONFIDENCE_UCS_HEURISTIC = 0.75
-_CONFIDENCE_UCS_CATALOG = 0.95
-_CONFIDENCE_GROUP = 0.85
-_CONFIDENCE_FILENAME_ABBREVIATION = 0.65
-_CONFIDENCE_FILENAME_TAKE = 0.60
-_CONFIDENCE_FILENAME_DESCRIPTION = 0.55
-_CONFIDENCE_PATH = 0.50
-_CONFIDENCE_SYNONYM = 0.62
+# Confidence anchors. Sourced from the default :class:`ConfidenceProfile` so
+# the Pydantic model is the single source of truth and user-overridable via
+# ``~/.config/sfxworkbench/config.toml`` once a future PR plumbs the active
+# profile through to the individual suggestors. Tuning lives in
+# :mod:`sfxworkbench.config`.
+_DEFAULT_CONFIDENCE = ConfidenceProfile()
+_CONFIDENCE_UCS_HEURISTIC = _DEFAULT_CONFIDENCE.ucs_heuristic
+_CONFIDENCE_UCS_CATALOG = _DEFAULT_CONFIDENCE.ucs_catalog
+_CONFIDENCE_GROUP = _DEFAULT_CONFIDENCE.group
+_CONFIDENCE_FILENAME_ABBREVIATION = _DEFAULT_CONFIDENCE.filename_abbreviation
+_CONFIDENCE_FILENAME_TAKE = _DEFAULT_CONFIDENCE.filename_take
+_CONFIDENCE_FILENAME_DESCRIPTION = _DEFAULT_CONFIDENCE.filename_description
+_CONFIDENCE_PATH = _DEFAULT_CONFIDENCE.path
+_CONFIDENCE_SYNONYM = _DEFAULT_CONFIDENCE.synonym
 
 # Common SFX abbreviations. Conservative list — only expand when the token is
 # unambiguous. Falls back to the original token if not in the dict.
@@ -142,7 +147,7 @@ _SYNONYM_KEYWORDS: dict[tuple[str, ...], tuple[str, ...]] = {
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _confidence_bucket(confidence: float) -> str:
@@ -258,7 +263,12 @@ def _strip_leading_sort_prefix(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def suggest_from_ucs_stem(stem: str, catalog: UcsCatalog | None = None) -> list[TagSuggestion]:
+def suggest_from_ucs_stem(
+    stem: str,
+    catalog: UcsCatalog | None = None,
+    *,
+    profile: ConfidenceProfile | None = None,
+) -> list[TagSuggestion]:
     """Emit UCS provenance fields plus description/take candidates from a UCS-named stem.
 
     When a UCS catalog is supplied and the filename's ``CatShort_SubCategory``
@@ -266,6 +276,7 @@ def suggest_from_ucs_stem(stem: str, catalog: UcsCatalog | None = None) -> list[
     are upgraded to catalog-backed evidence. UCS category fields are provenance:
     they record what the filename claims, not a final semantic search tag.
     """
+    p = profile or _DEFAULT_CONFIDENCE
     parsed = parse_ucs_stem(stem)
     if not parsed.is_ucs:
         return []
@@ -274,7 +285,7 @@ def suggest_from_ucs_stem(stem: str, catalog: UcsCatalog | None = None) -> list[
     has_catalog_match = catalog_entry is not None
     source = "ucs_catalog" if has_catalog_match else "ucs_stem"
     method = "ucs_catalog_match" if has_catalog_match else "ucs_heuristic"
-    confidence = _CONFIDENCE_UCS_CATALOG if has_catalog_match else _CONFIDENCE_UCS_HEURISTIC
+    confidence = p.ucs_catalog if has_catalog_match else p.ucs_heuristic
     suggestions: list[TagSuggestion] = []
     evidence = [stem]
     if catalog is not None and not has_catalog_match:
@@ -333,20 +344,26 @@ def suggest_from_ucs_stem(stem: str, catalog: UcsCatalog | None = None) -> list[
                 value=take,
                 source="ucs_stem",
                 method="trailing_number",
-                confidence=_CONFIDENCE_UCS_HEURISTIC,
+                confidence=p.ucs_heuristic,
                 evidence=evidence,
             )
         )
     return suggestions
 
 
-def suggest_from_filename(stem: str, *, skip_description: bool = False) -> list[TagSuggestion]:
+def suggest_from_filename(
+    stem: str,
+    *,
+    skip_description: bool = False,
+    profile: ConfidenceProfile | None = None,
+) -> list[TagSuggestion]:
     """Emit ``description`` and ``take_number`` for non-UCS filenames.
 
     ``skip_description`` suppresses the description suggestion when a higher
     confidence source (UCS or group) has already produced one — but the take
     number is still useful as corroboration.
     """
+    p = profile or _DEFAULT_CONFIDENCE
     suggestions: list[TagSuggestion] = []
     if not stem:
         return suggestions
@@ -364,7 +381,7 @@ def suggest_from_filename(stem: str, *, skip_description: bool = False) -> list[
                 value=take,
                 source="filename",
                 method="trailing_number",
-                confidence=_CONFIDENCE_FILENAME_TAKE,
+                confidence=p.filename_take,
                 evidence=[stem],
             )
         )
@@ -381,17 +398,16 @@ def suggest_from_filename(stem: str, *, skip_description: bool = False) -> list[
                 value=description_value,
                 source="filename",
                 method="abbreviation_expansion" if has_abbreviation else "title_case",
-                confidence=(
-                    _CONFIDENCE_FILENAME_ABBREVIATION if has_abbreviation else _CONFIDENCE_FILENAME_DESCRIPTION
-                ),
+                confidence=(p.filename_abbreviation if has_abbreviation else p.filename_description),
                 evidence=[stem],
             )
         )
     return suggestions
 
 
-def suggest_from_path(file_path: Path, root: Path) -> list[TagSuggestion]:
+def suggest_from_path(file_path: Path, root: Path, *, profile: ConfidenceProfile | None = None) -> list[TagSuggestion]:
     """Emit one ``description`` suggestion per meaningful parent folder."""
+    p = profile or _DEFAULT_CONFIDENCE
     try:
         relative = file_path.resolve().relative_to(root.resolve())
     except ValueError:
@@ -415,15 +431,21 @@ def suggest_from_path(file_path: Path, root: Path) -> list[TagSuggestion]:
                 value=value,
                 source="path",
                 method="folder_chain",
-                confidence=_CONFIDENCE_PATH,
+                confidence=p.path,
                 evidence=[raw_name],
             )
         )
     return suggestions
 
 
-def suggest_from_group(file_in_group: RelatedSoundFile, group: RelatedSoundGroup) -> list[TagSuggestion]:
+def suggest_from_group(
+    file_in_group: RelatedSoundFile,
+    group: RelatedSoundGroup,
+    *,
+    profile: ConfidenceProfile | None = None,
+) -> list[TagSuggestion]:
     """Emit suggestions for a file that belongs to a related sound group."""
+    p = profile or _DEFAULT_CONFIDENCE
     suggestions: list[TagSuggestion] = []
     evidence = [
         f"group:{group.group_id}",
@@ -439,7 +461,7 @@ def suggest_from_group(file_in_group: RelatedSoundFile, group: RelatedSoundGroup
                 value=description_value,
                 source="group",
                 method="group_inferred_stem",
-                confidence=_CONFIDENCE_GROUP,
+                confidence=p.group,
                 evidence=evidence,
             )
         )
@@ -456,7 +478,7 @@ def suggest_from_group(file_in_group: RelatedSoundFile, group: RelatedSoundGroup
                 value=label,
                 source="group",
                 method="channel_marker",
-                confidence=_CONFIDENCE_GROUP,
+                confidence=p.group,
                 evidence=evidence + [f"marker:{marker}"],
             )
         )
@@ -467,7 +489,7 @@ def suggest_from_group(file_in_group: RelatedSoundFile, group: RelatedSoundGroup
                 value=marker,
                 source="group",
                 method="numbered_sequence_marker",
-                confidence=_CONFIDENCE_GROUP,
+                confidence=p.group,
                 evidence=evidence + [f"marker:{marker}"],
             )
         )
@@ -479,8 +501,10 @@ def suggest_synonym_keywords(
     *,
     synonym_limit: int = 0,
     synonym_depth: int = 0,
+    profile: ConfidenceProfile | None = None,
 ) -> list[TagSuggestion]:
     """Suggest reviewer-facing keyword synonyms from existing tag evidence."""
+    p = profile or _DEFAULT_CONFIDENCE
     if synonym_limit < 0:
         raise ValueError("--synonym-limit must be 0 or greater")
     if synonym_depth < 0:
@@ -519,13 +543,167 @@ def suggest_synonym_keywords(
                     value=keyword,
                     source="synonym",
                     method="controlled_synonym_map",
-                    confidence=_CONFIDENCE_SYNONYM,
+                    confidence=p.synonym,
                     evidence=[f"matched:{trigger}", *evidence],
                 )
             )
             if synonym_limit and len(synonym_suggestions) >= synonym_limit:
                 return synonym_suggestions
     return synonym_suggestions
+
+
+# ---------------------------------------------------------------------------
+# Suggestor protocol
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SuggestContext:
+    """Per-file inputs that every :class:`Suggestor` may consult.
+
+    Built once per file by the orchestrator and threaded through each suggestor
+    in :data:`DEFAULT_SUGGESTORS`. Pure data — no DB handles or I/O — so
+    suggestors stay easy to test in isolation.
+
+    The ``profile`` field carries the active :class:`ConfidenceProfile` (from
+    the user's :class:`sfxworkbench.config.Config`), letting users override
+    confidence anchors via the TOML config without code changes. ``None``
+    means "use the module's ``_DEFAULT_CONFIDENCE``".
+    """
+
+    file_id: int
+    path: Path
+    filename: str
+    stem: str
+    root: Path
+    catalog: UcsCatalog | None = None
+    group_match: tuple[RelatedSoundGroup, RelatedSoundFile] | None = None
+    include_synonyms: bool = False
+    synonym_limit: int = 0
+    synonym_depth: int = 0
+    profile: ConfidenceProfile | None = None
+
+
+class Suggestor(Protocol):
+    """A single source of tag suggestions for one indexed file.
+
+    Implementations are typically tiny ``@dataclass(frozen=True)`` wrappers
+    around the module-level ``suggest_from_*`` functions. The orchestrator runs
+    them in order and feeds each the accumulated ``prior`` suggestions so that
+    later stages (e.g. filename description gating, synonym expansion) can
+    react to earlier evidence without breaking the uniform call surface.
+
+    Adding a new suggestor (LLM-backed, catalog-backed, user-rule-backed) is a
+    matter of writing one more wrapper and appending to
+    :data:`DEFAULT_SUGGESTORS`; ``build_tag_suggestion_report`` does not need
+    to change.
+    """
+
+    @property
+    def name(self) -> str:
+        """A short identifier (lowercase snake_case) for this suggestor."""
+        ...
+
+    def propose(self, ctx: SuggestContext, prior: list[TagSuggestion]) -> Iterable[TagSuggestion]:
+        """Return zero or more suggestions for *ctx*, given the *prior* accumulator."""
+        ...
+
+
+# Sources whose ``description`` suggestion is strong enough that the filename
+# suggestor should not repeat its own (lower-confidence) description guess.
+_FILENAME_DESCRIPTION_GATING_SOURCES = frozenset({"ucs_stem", "ucs_catalog", "group"})
+
+
+@dataclass(frozen=True)
+class UcsStemSuggestor:
+    name: str = "ucs_stem"
+
+    def propose(self, ctx: SuggestContext, prior: list[TagSuggestion]) -> Iterable[TagSuggestion]:
+        return suggest_from_ucs_stem(ctx.stem, catalog=ctx.catalog, profile=ctx.profile)
+
+
+@dataclass(frozen=True)
+class GroupSuggestor:
+    name: str = "group"
+
+    def propose(self, ctx: SuggestContext, prior: list[TagSuggestion]) -> Iterable[TagSuggestion]:
+        if ctx.group_match is None:
+            return []
+        group, member = ctx.group_match
+        return suggest_from_group(member, group, profile=ctx.profile)
+
+
+@dataclass(frozen=True)
+class FilenameSuggestor:
+    name: str = "filename"
+
+    def propose(self, ctx: SuggestContext, prior: list[TagSuggestion]) -> Iterable[TagSuggestion]:
+        skip_description = any(
+            s.field == "description" and s.source in _FILENAME_DESCRIPTION_GATING_SOURCES for s in prior
+        )
+        return suggest_from_filename(ctx.stem, skip_description=skip_description, profile=ctx.profile)
+
+
+@dataclass(frozen=True)
+class PathSuggestor:
+    name: str = "path"
+
+    def propose(self, ctx: SuggestContext, prior: list[TagSuggestion]) -> Iterable[TagSuggestion]:
+        return suggest_from_path(ctx.path, ctx.root, profile=ctx.profile)
+
+
+@dataclass(frozen=True)
+class SynonymSuggestor:
+    """Meta-suggestor: expands existing high-confidence evidence into review-only synonyms.
+
+    Always runs last because it consumes the prior accumulator as its input.
+    """
+
+    name: str = "synonym"
+
+    def propose(self, ctx: SuggestContext, prior: list[TagSuggestion]) -> Iterable[TagSuggestion]:
+        if not ctx.include_synonyms:
+            return []
+        return suggest_synonym_keywords(
+            list(prior),
+            synonym_limit=ctx.synonym_limit,
+            synonym_depth=ctx.synonym_depth,
+            profile=ctx.profile,
+        )
+
+
+# The intermediate ``list[Suggestor]`` is purely for type-checking: it forces
+# each concrete instance to be widened to the Protocol type, so the resulting
+# tuple is correctly inferred as ``tuple[Suggestor, ...]`` rather than the
+# concrete heterogenous tuple type mypy would otherwise pick.
+_DEFAULT_SUGGESTOR_LIST: list[Suggestor] = [
+    UcsStemSuggestor(),
+    GroupSuggestor(),
+    FilenameSuggestor(),
+    PathSuggestor(),
+    SynonymSuggestor(),
+]
+
+DEFAULT_SUGGESTORS: tuple[Suggestor, ...] = tuple(_DEFAULT_SUGGESTOR_LIST)
+"""Ordered list of suggestors used by :func:`build_tag_suggestion_report`.
+
+Order matters: stages that gate on prior evidence (FilenameSuggestor's
+``skip_description``, SynonymSuggestor's meta-expansion) must come after the
+sources they consult.
+"""
+
+
+def run_suggestors(ctx: SuggestContext, suggestors: Iterable[Suggestor] = DEFAULT_SUGGESTORS) -> list[TagSuggestion]:
+    """Run *suggestors* in order against *ctx*, feeding each the accumulated prior list.
+
+    Returns the concatenated list of all suggestions. Filtering by source,
+    field, and confidence happens in :func:`build_tag_suggestion_report` after
+    this collection step.
+    """
+    accumulated: list[TagSuggestion] = []
+    for suggestor in suggestors:
+        accumulated.extend(suggestor.propose(ctx, accumulated))
+    return accumulated
 
 
 # ---------------------------------------------------------------------------
@@ -577,6 +755,7 @@ def build_tag_suggestion_report(
     synonym_depth: int = 0,
     sources: list[str] | None = None,
     fields: list[str] | None = None,
+    confidence_profile: ConfidenceProfile | None = None,
 ) -> TagSuggestionReport:
     """Walk the index for files under ``root`` and produce per-file suggestions."""
     if min_confidence < 0 or min_confidence > 1:
@@ -612,31 +791,22 @@ def build_tag_suggestion_report(
         path = Path(row["path"])
         stem_raw = row["stem"] or path.stem
         stem = normalize_stem(stem_raw)
-
-        ucs_suggestions = suggest_from_ucs_stem(stem, catalog=catalog)
-        has_ucs_description = any(s.field == "description" for s in ucs_suggestions)
-
-        group_match = group_index.by_path.get(str(path))
-        group_suggestions: list[TagSuggestion] = []
-        if group_match is not None:
-            group, member = group_match
-            group_suggestions = suggest_from_group(member, group)
-        has_group_description = any(s.field == "description" for s in group_suggestions)
-
-        # Skip filename description when a higher-confidence source already
-        # produced one. Keep filename's take_number — it corroborates.
-        skip_filename_description = has_ucs_description or has_group_description
-        filename_suggestions = suggest_from_filename(stem, skip_description=skip_filename_description)
-
-        path_suggestions = suggest_from_path(path, root)
-
-        all_suggestions = ucs_suggestions + group_suggestions + filename_suggestions + path_suggestions
-        if include_synonyms:
-            all_suggestions = all_suggestions + suggest_synonym_keywords(
-                all_suggestions,
-                synonym_limit=synonym_limit,
-                synonym_depth=synonym_depth,
-            )
+        ctx = SuggestContext(
+            file_id=int(row["id"]),
+            path=path,
+            filename=row["filename"],
+            stem=stem,
+            root=root,
+            catalog=catalog,
+            group_match=group_index.by_path.get(str(path)),
+            include_synonyms=include_synonyms,
+            synonym_limit=synonym_limit,
+            synonym_depth=synonym_depth,
+            profile=confidence_profile,
+        )
+        # Filename description gating + synonym expansion happen inside the
+        # individual suggestors via the ``prior`` accumulator.
+        all_suggestions = run_suggestors(ctx)
         if min_confidence > 0:
             all_suggestions = [s for s in all_suggestions if s.confidence >= min_confidence]
         all_suggestions = filter_suggestions(all_suggestions, sources=source_filters, fields=field_filters)

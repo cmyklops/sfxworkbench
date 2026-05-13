@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -38,7 +38,7 @@ from sfxworkbench.rename import apply_rename_plan, build_rename_plan, undo_renam
 from sfxworkbench.scan import scan_library
 from sfxworkbench.tag_plan import apply_tag_plan, build_tag_plan, review_tag_plan, write_tag_plan
 from sfxworkbench.tag_sidecar import build_tag_sidecar_report, write_tag_sidecar_report
-from sfxworkbench.utils import json_dumps
+from sfxworkbench.utils import atomic_write_json
 
 
 @dataclass(frozen=True)
@@ -57,7 +57,7 @@ class ActionResult:
 
 
 def _now_stamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
 
 
 def operation_report_dir(
@@ -111,7 +111,7 @@ def write_action_history(result: ActionResult, report_dir: Path) -> Path:
     payload = {
         "schema_version": 1,
         "command": "tui_action",
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "action": result.action,
         "status": result.status,
         "message": result.message,
@@ -120,7 +120,7 @@ def write_action_history(result: ActionResult, report_dir: Path) -> Path:
         "refresh": list(result.refresh),
         "details": _compact_details(result.details),
     }
-    output.write_text(json_dumps(payload), encoding="utf-8")
+    atomic_write_json(output, payload)
     return output
 
 
@@ -176,7 +176,7 @@ def _write_legacy_quarantine_log(report_dir: Path, quarantine_dirs: list[Path]) 
     payload = {
         "schema_version": 1,
         "command": "legacy_quarantine_log",
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "entries": [
             {
                 "quarantine_path": str(quarantine_dir),
@@ -186,7 +186,7 @@ def _write_legacy_quarantine_log(report_dir: Path, quarantine_dirs: list[Path]) 
             for quarantine_dir in quarantine_dirs
         ],
     }
-    log_path.write_text(json_dumps(payload), encoding="utf-8")
+    atomic_write_json(log_path, payload)
     return log_path
 
 

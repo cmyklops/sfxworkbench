@@ -1,7 +1,23 @@
-"""Normalized embedded metadata field indexing."""
+"""Normalized embedded metadata field indexing and the canonical tag-field registry.
+
+This module owns two related but distinct concerns:
+
+1. **DB-ingest helpers** (``MetadataField``, ``read_embedded_metadata_fields``,
+   ``replace_metadata_fields``) — read a file's embedded chunks and populate the
+   ``metadata_fields`` SQLite table. Consumed by ``scan.py`` and
+   ``metadata_write.py``.
+
+2. **Canonical tag-field registry** (``TagField``, ``FIELDS``, ``canonicalize``,
+   ``is_multivalue``, ``embedded_keys_for``, ``normalize_value_for_dedup``,
+   ``values_equal_for_dedup``) — single source of truth for which SFX-workbench
+   field names exist, which aliases they accept (including container-specific
+   keys like RIFF ``ikey``), which are multivalue, and how to compare values
+   when deduplicating. Consumed by ``tag_plan.py`` and ``tui_data.py``.
+"""
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from sqlite3 import Connection
@@ -83,3 +99,160 @@ def replace_metadata_fields(
         """,
         [(file_id, item.namespace, item.key, item.value, item.source, updated_at) for item in fields],
     )
+
+
+# ---------------------------------------------------------------------------
+# Canonical tag-field registry
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TagField:
+    """One canonical sfxworkbench tag field.
+
+    A canonical field is the workbench's preferred name for a logical metadata
+    concept (e.g. ``"description"``, ``"keyword"``). Each field carries:
+
+    - ``canonical`` — the canonical name itself.
+    - ``aliases`` — accepted user-visible synonyms plus container-specific
+      keys (RIFF ``ikey``, ``ignr`` etc.) that should canonicalize to this
+      field. Always includes ``canonical``. Lookups are case-insensitive.
+    - ``multivalue`` — ``True`` for fields where a file legitimately carries
+      multiple distinct values (keywords); ``False`` for single-value fields
+      (description, title) where any existing value blocks an additional add.
+    - ``embedded_keys`` — ``(namespace, key)`` pairs in the ``metadata_fields``
+      SQLite table where existing values for this field can be found. Empty
+      tuple for fields that only live in the ``accepted_tags`` table.
+    """
+
+    canonical: str
+    aliases: tuple[str, ...]
+    multivalue: bool
+    embedded_keys: tuple[tuple[str, str], ...]
+
+
+_FIELDS_RAW: tuple[TagField, ...] = (
+    TagField(
+        canonical="description",
+        aliases=("description",),
+        multivalue=False,
+        embedded_keys=(
+            ("bext", "description"),
+            ("tag", "description"),
+            ("id3", "description"),
+            ("vorbis", "description"),
+            ("mp4", "description"),
+        ),
+    ),
+    TagField(
+        canonical="keyword",
+        aliases=("keyword", "keywords", "ikey"),
+        multivalue=True,
+        embedded_keys=(
+            ("riff_info", "ikey"),
+            ("tag", "keywords"),
+        ),
+    ),
+    TagField(
+        canonical="category",
+        aliases=("category", "ignr"),
+        multivalue=False,
+        embedded_keys=(
+            ("riff_info", "ignr"),
+            ("tag", "category"),
+        ),
+    ),
+    TagField(
+        canonical="subcategory",
+        aliases=("subcategory", "isbj"),
+        multivalue=False,
+        embedded_keys=(
+            ("riff_info", "isbj"),
+            ("tag", "subcategory"),
+        ),
+    ),
+    TagField(
+        canonical="title",
+        aliases=("title", "inam"),
+        multivalue=False,
+        embedded_keys=(
+            ("riff_info", "inam"),
+            ("tag", "title"),
+            ("id3", "title"),
+            ("vorbis", "title"),
+            ("mp4", "title"),
+        ),
+    ),
+    TagField(
+        canonical="comment",
+        aliases=("comment", "icmt"),
+        multivalue=False,
+        embedded_keys=(
+            ("riff_info", "icmt"),
+            ("tag", "comment"),
+            ("id3", "comment"),
+            ("vorbis", "comment"),
+            ("mp4", "comment"),
+        ),
+    ),
+    TagField(
+        canonical="ucs_category",
+        aliases=("ucs_category",),
+        multivalue=False,
+        embedded_keys=(),
+    ),
+    TagField(
+        canonical="ucs_subcategory",
+        aliases=("ucs_subcategory",),
+        multivalue=False,
+        embedded_keys=(),
+    ),
+)
+
+FIELDS: dict[str, TagField] = {field.canonical: field for field in _FIELDS_RAW}
+"""Canonical name → :class:`TagField`. Single source of truth for the registry."""
+
+_ALIAS_TO_CANONICAL: dict[str, str] = {
+    alias.lower(): field.canonical for field in _FIELDS_RAW for alias in field.aliases
+}
+
+
+def canonicalize(name: str) -> str:
+    """Return the canonical field name for *name*.
+
+    Strips whitespace and matches case-insensitively against every known alias
+    (including container-specific RIFF keys). Unknown names pass through
+    lowercased so unfamiliar fields still hash consistently downstream.
+    """
+    normalized = name.strip().lower()
+    return _ALIAS_TO_CANONICAL.get(normalized, normalized)
+
+
+def is_multivalue(canonical: str) -> bool:
+    """Return ``True`` if *canonical* names a multivalue field (e.g. keywords)."""
+    field = FIELDS.get(canonical)
+    return field.multivalue if field is not None else False
+
+
+def embedded_keys_for(canonical: str) -> tuple[tuple[str, str], ...]:
+    """Return the ``(namespace, key)`` pairs for *canonical* in the metadata_fields table."""
+    field = FIELDS.get(canonical)
+    return field.embedded_keys if field is not None else ()
+
+
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def normalize_value_for_dedup(value: str) -> str:
+    """Return a casefold + whitespace-collapsed form of *value* for dedup comparisons.
+
+    Two values that differ only in casing or internal whitespace are treated as
+    the same when deciding whether a new tag would duplicate an existing one.
+    Use :func:`values_equal_for_dedup` if you just want a boolean.
+    """
+    return _WHITESPACE_RE.sub(" ", value).strip().casefold()
+
+
+def values_equal_for_dedup(a: str, b: str) -> bool:
+    """Return ``True`` if *a* and *b* match after dedup-normalization."""
+    return normalize_value_for_dedup(a) == normalize_value_for_dedup(b)

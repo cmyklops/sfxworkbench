@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from hashlib import md5
 from pathlib import Path
 
@@ -48,7 +48,7 @@ _PORTABLE_TRANSLATION = str.maketrans(
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _default_log_path() -> Path:

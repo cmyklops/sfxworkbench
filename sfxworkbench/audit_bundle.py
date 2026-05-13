@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sfxworkbench import __version__
@@ -17,13 +17,13 @@ from sfxworkbench.models import AuditBundleReport, AuditBundleSummary
 from sfxworkbench.packs import audit_packs, write_pack_audit_report
 from sfxworkbench.scan import scan_library
 from sfxworkbench.ucs_validate import build_ucs_validation_report, write_ucs_validation_report
-from sfxworkbench.utils import json_dumps
+from sfxworkbench.utils import atomic_write_text, json_dumps
 
 ProgressCallback = Callable[[str, int, int | None, str], None]
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _safe_report_name(root: Path) -> str:
@@ -33,16 +33,15 @@ def _safe_report_name(root: Path) -> str:
 
 def default_audit_bundle_dir(root: Path) -> Path:
     """Return a timestamped report folder for an integrated audit run."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     return Path.home() / "reports" / f"sfxworkbench_audit_{_safe_report_name(root)}_{stamp}"
 
 
 def _write_json(path: Path, payload: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     if hasattr(payload, "model_dump"):
-        path.write_text(json_dumps(payload), encoding="utf-8")
+        atomic_write_text(path, json_dumps(payload))
     else:
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        atomic_write_text(path, json.dumps(payload, indent=2))
 
 
 def build_audit_bundle(

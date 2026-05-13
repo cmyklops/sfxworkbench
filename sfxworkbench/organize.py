@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.console import Console
@@ -133,7 +133,7 @@ _DESIGN_SPLIT_FOLDER_KEYS = _SOURCE_BRANCH_FOLDER_KEYS | _DESIGNED_BRANCH_FOLDER
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _strip_leading_number(name: str) -> str | None:

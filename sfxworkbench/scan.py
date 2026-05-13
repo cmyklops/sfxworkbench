@@ -3,7 +3,7 @@
 import hashlib
 import json
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.console import Console
@@ -92,7 +92,7 @@ def scan_library(
         progress_callback("scanning", 0, total, f"Found {total:,} audio files")
 
     result = ScanResult(total=total)
-    now_str = datetime.now(timezone.utc).isoformat()
+    now_str = datetime.now(UTC).isoformat()
     pending = 0  # uncommitted writes since last batch flush
     processed = 0
     cancelled = _should_cancel(cancel_requested)

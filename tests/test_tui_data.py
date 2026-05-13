@@ -581,3 +581,52 @@ def test_tui_command_invokes_runner(tmp_db: Path, monkeypatch) -> None:
     assert calls
     assert calls[0]["db_path"] == tmp_db
     assert calls[0]["report_paths"] == [tmp_db.parent]
+
+
+# -- PR #2 safety fixes -----------------------------------------------------
+
+
+def test_summarize_plan_file_reraises_invalid_json_as_value_error(tmp_path: Path) -> None:
+    """A corrupted plan file produces ValueError, not a raw JSONDecodeError.
+
+    Pre-fix this leaked ``json.JSONDecodeError`` past callers that only knew to
+    catch ``ValueError``, crashing the TUI when a plan/report file was malformed.
+    """
+    bad = tmp_path / "broken.json"
+    bad.write_text("{not valid json")
+
+    import pytest
+
+    with pytest.raises(ValueError, match="invalid JSON"):
+        summarize_plan_file(bad)
+
+
+def test_plan_detail_rows_reraises_invalid_json_as_value_error(tmp_path: Path) -> None:
+    bad = tmp_path / "broken.json"
+    bad.write_text("{not valid json")
+
+    import pytest
+
+    with pytest.raises(ValueError, match="invalid JSON"):
+        plan_detail_rows(bad)
+
+
+def test_save_library_path_returns_none_on_success(tmp_library: Path, tmp_db: Path) -> None:
+    scan_library(tmp_library, tmp_db, skip_hash=True, quiet=True)
+    assert save_library_path(tmp_db, tmp_library) is None
+    assert saved_library_path(tmp_db) == str(tmp_library)
+
+
+def test_save_library_path_returns_error_message_on_db_failure(tmp_path: Path, monkeypatch) -> None:
+    """When SQLite raises, the helper surfaces a string so the caller can warn the user."""
+    db_path = tmp_path / "test.db"
+
+    def boom(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr("sfxworkbench.tui_data.get_connection", boom)
+
+    result = save_library_path(db_path, "/some/library")
+    assert isinstance(result, str)
+    assert "could not save library path" in result
+    assert "database is locked" in result

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.console import Console
@@ -12,7 +12,7 @@ from rich.table import Table
 from sfxworkbench import __version__
 from sfxworkbench.db import DEFAULT_DB_PATH, get_connection, path_scope_filter, path_scope_params
 from sfxworkbench.models import ProcessedFileEntry, ProcessedFileReport, ProcessedFileSummary
-from sfxworkbench.utils import json_dumps
+from sfxworkbench.utils import atomic_write_json
 
 console = Console()
 
@@ -46,7 +46,7 @@ _PROCESSED_TOKENS = {
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _tokens(text: str) -> list[str]:
@@ -133,8 +133,7 @@ def build_processed_file_report(
 
 
 def write_processed_file_report(report: ProcessedFileReport, output_path: Path, quiet: bool = False) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json_dumps(report), encoding="utf-8")
+    atomic_write_json(output_path, report)
     if not quiet:
         console.print(f"Processed-file report written to [cyan]{output_path}[/cyan]")
 

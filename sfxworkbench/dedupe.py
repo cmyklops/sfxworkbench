@@ -3,7 +3,7 @@
 import hashlib
 import json
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.console import Console
@@ -22,7 +22,7 @@ PLAN_SCHEMA_VERSION = 1
 
 
 def _now_stamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
 
 
 def _md5(path: Path, block: int = 65536) -> str:
@@ -143,7 +143,7 @@ def write_dedupe_plan(
 
     plan = {
         "schema_version": PLAN_SCHEMA_VERSION,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "tool": "sfxworkbench",
         "tool_version": __version__,
         "db_path": str(db_path) if db_path is not None else None,
@@ -214,7 +214,7 @@ def review_dedupe_plan(
 
     plan["review"] = {
         "status": "approved" if len(approved_groups) == total and total else "partially_approved",
-        "approved_at": datetime.now(timezone.utc).isoformat(),
+        "approved_at": datetime.now(UTC).isoformat(),
         "approved_groups": approved_groups,
     }
 
@@ -366,7 +366,7 @@ def apply_dedupe_plan(
         result.log_path = str(log_path)
         payload = {
             "schema_version": 1,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
             "tool": "sfxworkbench",
             "tool_version": __version__,
             "plan_path": str(plan_path),

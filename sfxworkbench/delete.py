@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.console import Console
@@ -15,14 +15,14 @@ from sfxworkbench import __version__
 from sfxworkbench.apply_logs import default_apply_log_path_for_plan
 from sfxworkbench.models import DeleteApplyResult, DeletePlan, DeletePlanEntry, DeletePlanSummary, DeleteReviewResult
 from sfxworkbench.preservation import build_preservation_rules, protected_by
-from sfxworkbench.utils import json_dumps
+from sfxworkbench.utils import atomic_write_json
 
 console = Console()
 _VALID_REVIEW_STATES = {"approved", "rejected", "pending"}
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _default_delete_log_path(plan_path: Path) -> Path:
@@ -121,8 +121,7 @@ def build_delete_plan(
 
 
 def write_delete_plan(plan: DeletePlan, output_path: Path, quiet: bool = False) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json_dumps(plan), encoding="utf-8")
+    atomic_write_json(output_path, plan)
     if not quiet:
         console.print(f"Delete plan written to [cyan]{output_path}[/cyan]")
 
@@ -153,7 +152,7 @@ def review_delete_plan(
         by_id[entry_id].review_status = "rejected"
     plan.summary = _summarize(plan)
     output = output_path or plan_path
-    output.write_text(json_dumps(plan), encoding="utf-8")
+    atomic_write_json(output, plan)
     result = DeleteReviewResult(
         plan_path=str(plan_path),
         output_path=str(output),
@@ -251,8 +250,7 @@ def apply_delete_plan(
             "deleted": deleted_entries,
             "result": result,
         }
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(json_dumps(payload), encoding="utf-8")
+        atomic_write_json(log_path, payload)
     if not quiet:
         show_delete_apply_result(result)
     return result

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -34,3 +36,48 @@ def to_jsonable(value: Any) -> Any:
 def json_dumps(value: Any) -> str:
     """Stable JSON for CLI machine-readable output."""
     return json.dumps(to_jsonable(value), indent=2, sort_keys=True)
+
+
+def _default_file_mode() -> int:
+    """Return the file mode ``path.write_text`` would produce (umask-derived)."""
+    umask = os.umask(0)
+    os.umask(umask)
+    return 0o666 & ~umask
+
+
+def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
+    """Write *content* to *path* atomically.
+
+    Uses a sibling temp file, ``fsync``, and ``os.replace`` so a crash mid-write
+    leaves the destination either unchanged (if it existed) or absent — never
+    truncated or partially written. Parent directories are created as needed.
+
+    The destination's mode is preserved when the file already exists; new files
+    receive the umask-derived mode that ``Path.write_text`` would have produced,
+    so this helper is drop-in compatible with existing ``write_text`` callsites.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding=encoding) as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            target_mode = path.stat().st_mode & 0o777
+        except FileNotFoundError:
+            target_mode = _default_file_mode()
+        os.chmod(tmp_name, target_mode)
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def atomic_write_json(path: Path, value: Any) -> None:
+    """Atomic counterpart to ``path.write_text(json_dumps(value), encoding="utf-8")``."""
+    atomic_write_text(path, json_dumps(value))

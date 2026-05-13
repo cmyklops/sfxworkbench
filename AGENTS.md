@@ -110,7 +110,7 @@ Two parallel layers that don't depend on each other:
 
 **`audit.py`** — standalone zero-dependency Phase 0 auditor. Uses only stdlib (no soundfile, no Typer). Runs on Python 3.9+. Do not import from the `sfxworkbench` package here and do not break it.
 
-**`sfxworkbench/` package** — Phase 1+ CLI engine. Requires Python 3.10+, installed via uv. Entry point is `sfx` → `sfxworkbench/cli.py`. All commands lazy-import their module (e.g. `from sfxworkbench.clean import clean_library`) to keep startup fast.
+**`sfxworkbench/` package** — Phase 1+ CLI engine. Requires Python 3.11+, installed via uv. Entry point is `sfx` → `sfxworkbench/cli.py`. All commands lazy-import their module (e.g. `from sfxworkbench.clean import clean_library`) to keep startup fast.
 
 ### Data flow
 

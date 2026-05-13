@@ -3,7 +3,7 @@
 import json
 import shutil
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.console import Console
@@ -207,7 +207,7 @@ def clean_library(
     if log_path is not None:
         log_data = {
             "schema_version": 1,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
             "root": str(root),
             "dry_run": dry_run,
             "removed_files": result.removed_files,

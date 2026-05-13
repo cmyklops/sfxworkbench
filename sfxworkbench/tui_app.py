@@ -50,23 +50,16 @@ from sfxworkbench.tui_actions import (
     write_action_history,
 )
 from sfxworkbench.tui_data import (
-    advanced_findings,
-    clean_findings,
-    dedupe_findings,
-    dedupe_group_rows,
     discover_plan_files,
     feature_pages,
     file_detail,
     indexed_library_size_gb,
     library_root,
     list_files,
-    metadata_findings,
-    metadata_workbench_rows,
     plan_detail_rows,
     preferred_library_path,
     report_search_paths,
     save_library_path,
-    scan_findings,
 )
 
 _FEATURES: tuple[tuple[str, str], ...] = (
@@ -334,8 +327,9 @@ def run_tui(
         from textual import events
         from textual.app import App, ComposeResult
         from textual.containers import Horizontal, Vertical, VerticalScroll
+        from textual.css.query import NoMatches
         from textual.screen import ModalScreen
-        from textual.widgets import Button, ContentSwitcher, DataTable, Input, Static, Tab, Tabs
+        from textual.widgets import Button, ContentSwitcher, DataTable, Footer, Input, Static, Tab, Tabs
         from textual.worker import Worker, WorkerState
 
         if sys.platform == "win32":
@@ -529,11 +523,23 @@ def run_tui(
             ("4", "focus_dedupe", "Dedupe"),
             ("5", "focus_metadata", "Metadata"),
             ("6", "focus_advanced", "Advanced"),
-            ("s", "focus_file_search", "File Search"),
+            ("s", "focus_file_search", "Search"),
+            # PR #14: push the two-pane review screen for the most recent tag plan.
+            ("R", "open_metadata_review", "Review tags"),
+            # Tier 1.3 follow-up: app-level shortcuts for the most common actions
+            # on the current page, so power users don't need to mouse to a button.
+            ("c", "cancel_running_action", "Cancel"),
+            ("p", "open_command_palette", "Commands"),
         ]
 
         def __init__(self) -> None:
             super().__init__(driver_class=SfxworkbenchDriver)
+            # Surface the run_tui closure args as instance attributes so the
+            # tab page modules (sfxworkbench.tui_screens.*_tab) can read them
+            # without needing the App class's closure scope.
+            self.db_path = db_path
+            self.config_path = config_path
+            self.report_paths = report_paths
             self._library_path = initial_library_path
             self._resolved_report_paths = list(initial_report_paths)
             self._report_dir = operation_report_dir(
@@ -556,6 +562,14 @@ def run_tui(
             self._sort_state: dict[str, tuple[str, bool]] = {}
             self._last_compact = False
             self._session_started_at = time.time()
+            # Tier 5.13: handle to the pending file-search debounce timer, so a
+            # second keystroke cancels the first scheduled refill.
+            self._file_search_debounce = None
+            # Declarative button → handler mapping built once. Replaces the
+            # 250-line ``on_button_pressed`` elif chain. Each handler is a
+            # zero-arg callable bound to ``self`` so it sees current state
+            # (root path, report dir) at click time, not at __init__ time.
+            self._button_handlers: dict[str, Callable[[], None]] = self._build_button_handlers()
 
         def compose(self) -> ComposeResult:
             yield Tabs(*(Tab(label, id=key) for key, label in _FEATURES), active="scan", id="feature-tabs")
@@ -580,7 +594,9 @@ def run_tui(
                 yield from self._page("dedupe", self._dedupe_page)
                 yield from self._page("metadata", self._metadata_page)
                 yield from self._page("advanced", self._advanced_page)
-            yield Static("q Quit", id="mini-footer")
+            # Textual ``Footer`` renders all visible BINDINGS, replacing the
+            # legacy static "q Quit" hint with full keybinding discoverability.
+            yield Footer()
 
         def _page(self, key: str, factory) -> ComposeResult:
             with VerticalScroll(id=f"{key}-page", classes="page"):
@@ -597,116 +613,62 @@ def run_tui(
                 yield Static(title, classes="page-title")
                 yield Static(note, classes="workflow-note")
 
-        def _scan_page(self) -> ComposeResult:
-            yield from self._page_header("scan")
+        # ---- Page composition helpers (Tier 2.4) -----------------------
+        # Each ``_*_page`` method below used to assemble its widgets from
+        # scratch with identical boilerplate. The helpers below capture the
+        # shared shapes so each page becomes a declarative sequence of yields.
+
+        def _button_row(self, *specs: tuple[str, str] | tuple[str, str, str]) -> ComposeResult:
+            """Yield a horizontal row of buttons.
+
+            Each spec is ``(label, id)`` or ``(label, id, variant)`` where variant
+            is ``"default"``/``"warning"``/``"error"``. Centralizing the
+            ``Horizontal(classes="button-row")`` wrapper means future styling
+            tweaks land in one place.
+            """
             with Horizontal(classes="button-row"):
-                yield Button("Scan Library", id="scan-run")
-                yield Button("Full Audit", id="scan-full-audit")
-                yield Button("Refresh", id="scan-refresh")
-            yield Static("", id="scan-note", classes="note")
-            yield DataTable(id="scan-findings-table")
-            yield Static("History", classes="pane-title")
-            yield DataTable(id="scan-reports-table")
-            yield Static("History Detail", classes="pane-title")
-            yield DataTable(id="scan-report-detail-table")
+                for spec in specs:
+                    if len(spec) == 2:
+                        label, button_id = spec
+                        yield Button(label, id=button_id)
+                    else:
+                        label, button_id, variant = spec
+                        yield Button(label, id=button_id, variant=variant)
+
+        def _titled_table(self, title: str, table_id: str) -> ComposeResult:
+            """Yield a ``Static`` pane-title followed by an empty ``DataTable``."""
+            yield Static(title, classes="pane-title")
+            yield DataTable(id=table_id)
+
+        def _scan_page(self) -> ComposeResult:
+            from sfxworkbench.tui_screens import scan_tab
+
+            yield from scan_tab.compose(self)
 
         def _files_page(self) -> ComposeResult:
-            yield from self._page_header("files")
-            yield Input(placeholder="Search indexed files", id="file-search")
-            with Horizontal(classes="button-row"):
-                yield Button("Clear Search", id="files-clear-search")
-                yield Button("Scan Library", id="files-scan-library")
-                yield Button("Audition", id="files-open-file")
-                yield Button("Reveal in Files", id="files-reveal-file")
-            yield DataTable(id="files-table")
-            yield Static("", id="file-detail", classes="detail")
+            from sfxworkbench.tui_screens import files_tab
+
+            yield from files_tab.compose(self)
 
         def _clean_page(self) -> ComposeResult:
-            yield from self._page_header("clean")
-            with Horizontal(classes="button-row"):
-                yield Button("Preview Junk", id="clean-preview")
-                yield Button("Apply Junk Cleanup", id="clean-apply", variant="warning")
-                yield Button("Preview Name Cleanup", id="organize-rename-preview")
-                yield Button("Apply Name Cleanup", id="organize-rename-apply", variant="warning")
-                yield Button("Undo Name Cleanup", id="organize-rename-undo")
-                yield Button("Refresh", id="clean-refresh")
-            with Horizontal(classes="button-row"):
-                yield Button("Preview Folder Cleanup", id="organize-audit")
-                yield Button("Approve Folder Cleanup", id="organize-approve")
-                yield Button("Apply Folder Cleanup", id="organize-apply", variant="warning")
-                yield Button("Undo Folder Cleanup", id="organize-undo")
-            with Horizontal(classes="button-row"):
-                yield Button("Find Nested Folders", id="organize-nesting-audit")
-                yield Button("Build Nesting Plan", id="organize-nesting-plan")
-                yield Button("Approve Nesting", id="organize-nesting-approve")
-                yield Button("Apply Nesting", id="organize-nesting-apply", variant="warning")
-                yield Button("Undo Nesting", id="organize-nesting-undo")
-            yield DataTable(id="clean-findings-table")
-            yield Static("Previewed Junk", classes="pane-title")
-            yield DataTable(id="clean-items-table")
-            yield Static("History", classes="pane-title")
-            yield DataTable(id="clean-reports-table")
-            yield Static("History Detail", classes="pane-title")
-            yield DataTable(id="clean-report-detail-table")
+            from sfxworkbench.tui_screens import clean_tab
+
+            yield from clean_tab.compose(self)
 
         def _dedupe_page(self) -> ComposeResult:
-            yield from self._page_header("dedupe")
-            with Horizontal(classes="button-row"):
-                yield Button("Build Dedupe Plan", id="dedupe-build")
-                yield Button("Approve Dedupe", id="dedupe-approve")
-                yield Button("Apply Quarantine", id="dedupe-apply", variant="warning")
-                yield Button("Pack Audit", id="pack-audit")
-                yield Button("Build Pack Plan", id="pack-plan")
-                yield Button("Approve Pack", id="pack-approve")
-                yield Button("Apply Pack", id="pack-apply", variant="warning")
-            yield DataTable(id="dedupe-findings-table")
-            yield Static("Exact Duplicate Groups", classes="pane-title")
-            yield DataTable(id="dedupe-groups-table")
-            yield Static("History", classes="pane-title")
-            yield DataTable(id="dedupe-reports-table")
-            yield Static("History Detail", classes="pane-title")
-            yield DataTable(id="dedupe-report-detail-table")
+            from sfxworkbench.tui_screens import dedupe_tab
+
+            yield from dedupe_tab.compose(self)
 
         def _metadata_page(self) -> ComposeResult:
-            yield from self._page_header("metadata")
-            with Horizontal(classes="button-row"):
-                yield Button("Metadata Audit", id="metadata-audit")
-                yield Button("Generate Suggestions", id="metadata-plan")
-                yield Button("Generate Synonyms", id="metadata-plan-synonyms")
-                yield Button("Approve DB Tags", id="metadata-approve")
-                yield Button("Apply DB Tags", id="metadata-apply", variant="warning")
-                yield Button("Export Sidecar", id="metadata-sidecar")
-            yield DataTable(id="metadata-findings-table")
-            yield Static("Metadata Values - First 100 Prioritized Files", classes="pane-title")
-            yield DataTable(id="metadata-rows-table")
-            yield Static("History", classes="pane-title")
-            yield DataTable(id="metadata-reports-table")
-            yield Static("History Detail", classes="pane-title")
-            yield DataTable(id="metadata-report-detail-table")
+            from sfxworkbench.tui_screens import metadata_tab
+
+            yield from metadata_tab.compose(self)
 
         def _advanced_page(self) -> ComposeResult:
-            yield from self._page_header("advanced")
-            yield Static(
-                "Index/cache controls, permanent delete, embedded metadata writes, compare, processed variants, and dual-mono stay here.",
-                classes="note",
-            )
-            with Horizontal(classes="button-row"):
-                yield Button("Plan Embedded Metadata", id="metadata-write-plan")
-                yield Button("Approve Embedded Metadata", id="metadata-write-approve")
-                yield Button("Apply Embedded Metadata", id="metadata-write-apply", variant="warning")
-                yield Button("Undo Embedded Metadata", id="metadata-write-undo")
-            with Horizontal(classes="button-row"):
-                yield Button("Reveal Quarantine", id="quarantine-reveal")
-                yield Button("Plan Permanent Delete", id="delete-plan")
-                yield Button("Approve Permanent Delete", id="delete-approve")
-                yield Button("Apply Permanent Delete", id="delete-apply", variant="error")
-            yield DataTable(id="advanced-findings-table")
-            yield Static("History", classes="pane-title")
-            yield DataTable(id="advanced-reports-table")
-            yield Static("History Detail", classes="pane-title")
-            yield DataTable(id="advanced-report-detail-table")
-            yield Static("Last Action", classes="pane-title")
-            yield DataTable(id="action-result-table")
+            from sfxworkbench.tui_screens import advanced_tab
+
+            yield from advanced_tab.compose(self)
 
         def on_mount(self) -> None:
             self._last_compact = self._compact
@@ -758,6 +720,45 @@ def run_tui(
             self._open_feature("files")
             self.query_one("#file-search", Input).focus()
 
+        def action_cancel_running_action(self) -> None:
+            """``c`` binding from Tier 1.3 — cancels whatever worker is running, if any."""
+            if self._running_worker is not None and not self._running_worker.is_finished:
+                self._cancel_running_action()
+
+        def action_open_command_palette(self) -> None:
+            """``p`` binding — push the command palette (Tier 3.9 scaffolding)."""
+            try:
+                from sfxworkbench.tui_screens.command_palette import build_command_palette
+            except ImportError:
+                return
+            self.push_screen(build_command_palette(self._button_handlers))
+
+        def action_open_metadata_review(self) -> None:
+            """Push the two-pane metadata-review screen (PR #14).
+
+            Picks the most-recent ``tag_plan*.json`` under the active report
+            directory; if none exists, surfaces a warning in the action result
+            instead of opening an empty screen.
+            """
+            from sfxworkbench.tui_screens.metadata_review import build_metadata_review_screen
+
+            tag_plans = sorted(
+                (candidate for candidate in self._report_dir.rglob("tag_plan*.json") if candidate.is_file()),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if not tag_plans:
+                self._last_action = ActionResult(
+                    action="open_metadata_review",
+                    status="warning",
+                    message=(f"No tag_plan*.json files found under {self._report_dir}. Run `sfx tag plan` first."),
+                )
+                self._fill_status_strip()
+                self._fill_operation_strip()
+                self._fill_action_result()
+                return
+            self.push_screen(build_metadata_review_screen(tag_plans[0], db_path=db_path))
+
         def _open_feature(self, key: str) -> None:
             if key == "organize":
                 key = "clean"
@@ -772,261 +773,317 @@ def run_tui(
         def on_input_changed(self, event: Input.Changed) -> None:
             if event.input.id == "file-search":
                 self._file_query = event.value
-                self._fill_files()
+                # Tier 5.13: debounce — re-sorting a 50k-row library table on every
+                # keystroke is visibly laggy. Cancel any pending refill and schedule
+                # a new one 250ms after the user pauses typing.
+                if self._file_search_debounce is not None:
+                    try:
+                        self._file_search_debounce.stop()
+                    except Exception:  # pragma: no cover - timer already finished
+                        pass
+                self._file_search_debounce = self.set_timer(0.25, self._fill_files)
 
         def on_input_submitted(self, event: Input.Submitted) -> None:
             if event.input.id == "library-path-input":
                 self._set_library_path(event.value)
 
-        def on_button_pressed(self, event: Button.Pressed) -> None:
-            button_id = event.button.id or ""
-            root = self._root_path()
-            report_dir = self._report_dir
-            if button_id == "set-library-path":
-                self._set_library_path(self.query_one("#library-path-input", Input).value)
-            elif button_id == "use-indexed-root":
-                self._set_library_path(library_root(db_path))
-            elif button_id == "cancel-action":
-                self._cancel_running_action()
-            elif button_id in {
-                "refresh-all",
-                "scan-refresh",
-                "clean-refresh",
-            }:
-                self._refresh()
-            elif button_id in {"scan-run", "files-scan-library"}:
-                self._start_action(
+        def _build_button_handlers(self) -> dict[str, Callable[[], None]]:
+            """Map every button id to a zero-arg handler.
+
+            Replaces the old 250-line ``on_button_pressed`` elif chain. Each
+            entry is one of:
+
+            - Direct UI action (lookup, refresh, file opener) — invoked
+              immediately.
+            - ``_start_action`` wrapper — runs a worker action with a label.
+            - ``_confirm_then_start`` wrapper — prompts the user before running
+              a destructive action.
+
+            Building the table in ``__init__`` means the entries that close
+            over ``self`` get current state (root, report_dir) at click time,
+            so a mid-session library-path change is honored without
+            rebuilding the dispatch.
+            """
+            handlers: dict[str, Callable[[], None]] = {}
+
+            # -- Direct UI handlers (no worker action) ---------------------
+            handlers["set-library-path"] = lambda: self._set_library_path(
+                self.query_one("#library-path-input", Input).value
+            )
+            handlers["use-indexed-root"] = lambda: self._set_library_path(library_root(db_path))
+            handlers["cancel-action"] = self._cancel_running_action
+            for refresh_id in ("refresh-all", "scan-refresh", "clean-refresh"):
+                handlers[refresh_id] = self._refresh
+            handlers["files-clear-search"] = self._clear_file_search_input
+            handlers["files-open-file"] = lambda: self._open_selected_file(reveal=False)
+            handlers["files-reveal-file"] = lambda: self._open_selected_file(reveal=True)
+            handlers["quarantine-reveal"] = self._reveal_latest_quarantine
+
+            # -- Worker actions: build factories closing over current state -
+            pcb = self._threadsafe_progress_callback
+            cancel = self._is_cancel_requested
+
+            def _start(name: str, label: str, factory: Callable[[], ActionResult]) -> None:
+                self._start_action(name, label, factory)
+
+            def _confirm(name: str, label: str, msg: str, factory: Callable[[], ActionResult]) -> None:
+                self._confirm_then_start(name, label, msg, factory)
+
+            # Scan + audit
+            def _h_scan() -> None:
+                root = self._root_path()
+                _start(
                     "scan",
                     "Scan Library",
-                    lambda: scan_action(
-                        root,
-                        db_path,
-                        progress_callback=self._threadsafe_progress_callback,
-                        cancel_requested=self._is_cancel_requested,
-                    ),
+                    lambda: scan_action(root, db_path, progress_callback=pcb, cancel_requested=cancel),
                 )
-            elif button_id == "scan-full-audit":
-                self._start_action(
+
+            handlers["scan-run"] = _h_scan
+            handlers["files-scan-library"] = _h_scan
+
+            def _h_full_audit() -> None:
+                root = self._root_path()
+                _start(
                     "full_audit",
                     "Full Audit",
-                    lambda: full_audit_action(
-                        root,
-                        db_path,
-                        report_dir,
-                        progress_callback=self._threadsafe_progress_callback,
-                    ),
+                    lambda: full_audit_action(root, db_path, self._report_dir, progress_callback=pcb),
                 )
-            elif button_id == "files-clear-search":
-                self._file_query = ""
-                self.query_one("#file-search", Input).value = ""
-                self._fill_files()
-            elif button_id == "files-open-file":
-                self._open_selected_file(reveal=False)
-            elif button_id == "files-reveal-file":
-                self._open_selected_file(reveal=True)
-            elif button_id == "clean-preview":
-                self._start_action(
+
+            handlers["scan-full-audit"] = _h_full_audit
+
+            # Clean
+            def _h_clean_preview() -> None:
+                root = self._root_path()
+                _start(
                     "clean_preview",
                     "Preview Junk",
-                    lambda: clean_action(
-                        root,
-                        report_dir,
-                        apply=False,
-                        progress_callback=self._threadsafe_progress_callback,
-                    ),
+                    lambda: clean_action(root, self._report_dir, apply=False, progress_callback=pcb),
                 )
-            elif button_id == "clean-apply":
-                self._confirm_then_start(
+
+            handlers["clean-preview"] = _h_clean_preview
+
+            def _h_clean_apply() -> None:
+                root = self._root_path()
+                _confirm(
                     "clean_apply",
                     "Apply Junk Cleanup",
                     "This removes known junk files and folders. Recommended first: run Preview Junk and inspect the Previewed Junk table.",
-                    lambda: clean_action(
-                        root,
-                        report_dir,
-                        apply=True,
-                        progress_callback=self._threadsafe_progress_callback,
-                    ),
+                    lambda: clean_action(root, self._report_dir, apply=True, progress_callback=pcb),
                 )
-            elif button_id == "dedupe-build":
-                self._start_action(
-                    "dedupe_build", "Build Dedupe Plan", lambda: build_dedupe_plan_action(db_path, report_dir)
-                )
-            elif button_id == "dedupe-approve":
-                self._start_action(
-                    "dedupe_approve",
-                    "Approve Dedupe",
-                    lambda: approve_dedupe_plan_action(report_dir),
-                )
-            elif button_id == "dedupe-apply":
-                self._confirm_then_start(
-                    "dedupe_apply",
-                    "Apply Dedupe",
-                    "This quarantines approved duplicate files from the current dedupe plan. Required first: Build Dedupe Plan, then Approve Dedupe.",
-                    lambda: apply_dedupe_plan_action(db_path, report_dir),
-                )
-            elif button_id == "pack-audit":
-                self._start_action("pack_audit", "Pack Audit", lambda: pack_audit_action(root, db_path, report_dir))
-            elif button_id == "pack-plan":
-                self._start_action("pack_plan", "Build Pack Plan", lambda: pack_plan_action(report_dir))
-            elif button_id == "pack-approve":
-                self._start_action("pack_approve", "Approve Pack", lambda: approve_pack_plan_action(report_dir))
-            elif button_id == "pack-apply":
-                self._confirm_then_start(
-                    "pack_apply",
-                    "Apply Pack",
-                    "This quarantines approved pack/folder overlaps from the current pack plan. Required first: Pack Audit, Build Pack Plan, then Approve Pack.",
-                    lambda: apply_pack_plan_action(db_path, report_dir),
-                )
-            elif button_id == "organize-rename-preview":
-                self._start_action(
+
+            handlers["clean-apply"] = _h_clean_apply
+
+            # Dedupe
+            handlers["dedupe-build"] = lambda: _start(
+                "dedupe_build", "Build Dedupe Plan", lambda: build_dedupe_plan_action(db_path, self._report_dir)
+            )
+            handlers["dedupe-approve"] = lambda: _start(
+                "dedupe_approve", "Approve Dedupe", lambda: approve_dedupe_plan_action(self._report_dir)
+            )
+            handlers["dedupe-apply"] = lambda: _confirm(
+                "dedupe_apply",
+                "Apply Dedupe",
+                "This quarantines approved duplicate files from the current dedupe plan. Required first: Build Dedupe Plan, then Approve Dedupe.",
+                lambda: apply_dedupe_plan_action(db_path, self._report_dir),
+            )
+
+            # Packs
+            def _h_pack_audit() -> None:
+                root = self._root_path()
+                _start("pack_audit", "Pack Audit", lambda: pack_audit_action(root, db_path, self._report_dir))
+
+            handlers["pack-audit"] = _h_pack_audit
+            handlers["pack-plan"] = lambda: _start(
+                "pack_plan", "Build Pack Plan", lambda: pack_plan_action(self._report_dir)
+            )
+            handlers["pack-approve"] = lambda: _start(
+                "pack_approve", "Approve Pack", lambda: approve_pack_plan_action(self._report_dir)
+            )
+            handlers["pack-apply"] = lambda: _confirm(
+                "pack_apply",
+                "Apply Pack",
+                "This quarantines approved pack/folder overlaps from the current pack plan. Required first: Pack Audit, Build Pack Plan, then Approve Pack.",
+                lambda: apply_pack_plan_action(db_path, self._report_dir),
+            )
+
+            # Organize: rename
+            def _h_rename_preview() -> None:
+                root = self._root_path()
+                _start(
                     "rename_preview",
                     "Preview Name Cleanup",
-                    lambda: rename_preview_action(root, report_dir, pattern="portable"),
+                    lambda: rename_preview_action(root, self._report_dir, pattern="portable"),
                 )
-            elif button_id == "organize-rename-apply":
-                self._confirm_then_start(
-                    "rename_apply",
-                    "Apply Name Cleanup",
-                    "This renames files on disk and updates indexed paths. Recommended first: Preview Name Cleanup and review the generated plan.",
-                    lambda: apply_rename_action(db_path, report_dir, pattern="portable"),
+
+            handlers["organize-rename-preview"] = _h_rename_preview
+            handlers["organize-rename-apply"] = lambda: _confirm(
+                "rename_apply",
+                "Apply Name Cleanup",
+                "This renames files on disk and updates indexed paths. Recommended first: Preview Name Cleanup and review the generated plan.",
+                lambda: apply_rename_action(db_path, self._report_dir, pattern="portable"),
+            )
+            handlers["organize-rename-undo"] = lambda: _start(
+                "rename_undo",
+                "Undo Name Cleanup",
+                lambda: undo_rename_action(db_path, self._report_dir),
+            )
+
+            # Organize: folder cleanup
+            def _h_organize_audit() -> None:
+                root = self._root_path()
+                _start(
+                    "organize_audit", "Preview Folder Cleanup", lambda: organize_audit_action(root, self._report_dir)
                 )
-            elif button_id == "organize-rename-undo":
-                self._start_action("rename_undo", "Undo Name Cleanup", lambda: undo_rename_action(db_path, report_dir))
-            elif button_id == "organize-audit":
-                self._start_action(
-                    "organize_audit",
-                    "Preview Folder Cleanup",
-                    lambda: organize_audit_action(root, report_dir),
-                )
-            elif button_id == "organize-apply":
-                self._confirm_then_start(
-                    "organize_apply",
-                    "Apply Folder Cleanup",
-                    "This applies approved folder cleanup entries, renames folders on disk, and updates indexed paths. Required first: Preview Folder Cleanup, then Approve Folder Cleanup.",
-                    lambda: apply_organize_action(db_path, report_dir),
-                )
-            elif button_id == "organize-approve":
-                self._start_action(
-                    "organize_approve",
-                    "Approve Folder Cleanup",
-                    lambda: approve_organize_action(report_dir),
-                )
-            elif button_id == "organize-undo":
-                self._start_action(
-                    "organize_undo",
-                    "Undo Folder Cleanup",
-                    lambda: undo_organize_action(db_path, report_dir),
-                )
-            elif button_id == "organize-nesting-audit":
-                self._start_action(
+
+            handlers["organize-audit"] = _h_organize_audit
+            handlers["organize-apply"] = lambda: _confirm(
+                "organize_apply",
+                "Apply Folder Cleanup",
+                "This applies approved folder cleanup entries, renames folders on disk, and updates indexed paths. Required first: Preview Folder Cleanup, then Approve Folder Cleanup.",
+                lambda: apply_organize_action(db_path, self._report_dir),
+            )
+            handlers["organize-approve"] = lambda: _start(
+                "organize_approve",
+                "Approve Folder Cleanup",
+                lambda: approve_organize_action(self._report_dir),
+            )
+            handlers["organize-undo"] = lambda: _start(
+                "organize_undo",
+                "Undo Folder Cleanup",
+                lambda: undo_organize_action(db_path, self._report_dir),
+            )
+
+            # Organize: nesting
+            def _h_nesting_audit() -> None:
+                root = self._root_path()
+                _start(
                     "organize_nesting_audit",
                     "Find Nested Folders",
-                    lambda: organize_audit_action(root, report_dir, pattern="redundant-nesting"),
+                    lambda: organize_audit_action(root, self._report_dir, pattern="redundant-nesting"),
                 )
-            elif button_id == "organize-nesting-plan":
-                self._start_action(
-                    "organize_nesting_plan",
-                    "Build Nesting Plan",
-                    lambda: build_nesting_plan_action(report_dir),
+
+            handlers["organize-nesting-audit"] = _h_nesting_audit
+            handlers["organize-nesting-plan"] = lambda: _start(
+                "organize_nesting_plan",
+                "Build Nesting Plan",
+                lambda: build_nesting_plan_action(self._report_dir),
+            )
+            handlers["organize-nesting-apply"] = lambda: _confirm(
+                "organize_nesting_apply",
+                "Apply Nesting",
+                "This applies approved nesting entries, flattens nested folders on disk, and updates indexed paths. Required first: Find Nested Folders, Build Nesting Plan, then Approve Nesting.",
+                lambda: apply_nesting_action(db_path, self._report_dir),
+            )
+            handlers["organize-nesting-approve"] = lambda: _start(
+                "organize_nesting_approve",
+                "Approve Nesting",
+                lambda: approve_organize_action(self._report_dir, plan_name="nesting_plan.json"),
+            )
+            handlers["organize-nesting-undo"] = lambda: _start(
+                "organize_nesting_undo",
+                "Undo Nesting",
+                lambda: undo_nesting_action(db_path, self._report_dir),
+            )
+
+            # Metadata: DB-only tag pipeline
+            handlers["metadata-audit"] = lambda: _start(
+                "metadata_audit", "Metadata Audit", lambda: metadata_audit_action(db_path, self._report_dir)
+            )
+
+            def _h_metadata_plan() -> None:
+                root = self._root_path()
+                _start(
+                    "metadata_plan", "Generate Suggestions", lambda: tag_plan_action(root, db_path, self._report_dir)
                 )
-            elif button_id == "organize-nesting-apply":
-                self._confirm_then_start(
-                    "organize_nesting_apply",
-                    "Apply Nesting",
-                    "This applies approved nesting entries, flattens nested folders on disk, and updates indexed paths. Required first: Find Nested Folders, Build Nesting Plan, then Approve Nesting.",
-                    lambda: apply_nesting_action(db_path, report_dir),
-                )
-            elif button_id == "organize-nesting-approve":
-                self._start_action(
-                    "organize_nesting_approve",
-                    "Approve Nesting",
-                    lambda: approve_organize_action(report_dir, plan_name="nesting_plan.json"),
-                )
-            elif button_id == "organize-nesting-undo":
-                self._start_action(
-                    "organize_nesting_undo",
-                    "Undo Nesting",
-                    lambda: undo_nesting_action(db_path, report_dir),
-                )
-            elif button_id == "metadata-audit":
-                self._start_action(
-                    "metadata_audit", "Metadata Audit", lambda: metadata_audit_action(db_path, report_dir)
-                )
-            elif button_id == "metadata-plan":
-                self._start_action(
-                    "metadata_plan",
-                    "Generate Suggestions",
-                    lambda: tag_plan_action(root, db_path, report_dir),
-                )
-            elif button_id == "metadata-plan-synonyms":
-                self._start_action(
+
+            handlers["metadata-plan"] = _h_metadata_plan
+
+            def _h_metadata_plan_synonyms() -> None:
+                root = self._root_path()
+                _start(
                     "metadata_plan_synonyms",
                     "Generate Synonyms",
-                    lambda: tag_plan_action(root, db_path, report_dir, include_synonyms=True),
+                    lambda: tag_plan_action(root, db_path, self._report_dir, include_synonyms=True),
                 )
-            elif button_id == "metadata-apply":
-                self._confirm_then_start(
-                    "metadata_apply",
-                    "Apply DB Tags",
-                    "This writes approved tag decisions into the SQLite index. Required first: Generate Suggestions, then Approve DB Tags.",
-                    lambda: apply_tag_plan_action(db_path, report_dir),
+
+            handlers["metadata-plan-synonyms"] = _h_metadata_plan_synonyms
+            handlers["metadata-apply"] = lambda: _confirm(
+                "metadata_apply",
+                "Apply DB Tags",
+                "This writes approved tag decisions into the SQLite index. Required first: Generate Suggestions, then Approve DB Tags.",
+                lambda: apply_tag_plan_action(db_path, self._report_dir),
+            )
+            handlers["metadata-approve"] = lambda: _start(
+                "metadata_approve",
+                "Approve DB Tags",
+                lambda: approve_tag_plan_action(self._report_dir),
+            )
+
+            def _h_metadata_sidecar() -> None:
+                root = self._root_path()
+                _start(
+                    "metadata_sidecar", "Export Sidecar", lambda: export_sidecar_action(root, db_path, self._report_dir)
                 )
-            elif button_id == "metadata-approve":
-                self._start_action(
-                    "metadata_approve",
-                    "Approve DB Tags",
-                    lambda: approve_tag_plan_action(report_dir),
-                )
-            elif button_id == "metadata-sidecar":
-                self._start_action(
-                    "metadata_sidecar", "Export Sidecar", lambda: export_sidecar_action(root, db_path, report_dir)
-                )
-            elif button_id == "metadata-write-plan":
-                self._start_action(
+
+            handlers["metadata-sidecar"] = _h_metadata_sidecar
+
+            # Metadata: embedded write pipeline
+            def _h_metadata_write_plan() -> None:
+                root = self._root_path()
+                _start(
                     "metadata_write_plan",
                     "Plan Embedded Metadata",
-                    lambda: build_embedded_metadata_plan_action(root, db_path, report_dir),
+                    lambda: build_embedded_metadata_plan_action(root, db_path, self._report_dir),
                 )
-            elif button_id == "metadata-write-apply":
-                self._confirm_then_start(
-                    "metadata_write_apply",
-                    "Apply Embedded Metadata",
-                    "This writes approved embedded metadata entries into audio files, backs up originals, and verifies readback. Required first: Plan Embedded Metadata, then Approve Embedded Metadata.",
-                    lambda: apply_embedded_metadata_action(db_path, report_dir),
-                )
-            elif button_id == "metadata-write-approve":
-                self._start_action(
-                    "metadata_write_approve",
-                    "Approve Embedded Metadata",
-                    lambda: approve_embedded_metadata_action(report_dir),
-                )
-            elif button_id == "metadata-write-undo":
-                self._start_action(
-                    "metadata_write_undo",
-                    "Undo Embedded Metadata",
-                    lambda: undo_embedded_metadata_action(db_path, report_dir),
-                )
-            elif button_id == "quarantine-reveal":
-                self._reveal_latest_quarantine()
-            elif button_id == "delete-plan":
-                self._start_action(
-                    "delete_plan",
-                    "Plan Permanent Delete",
-                    lambda: build_delete_plan_action(report_dir),
-                )
-            elif button_id == "delete-apply":
-                self._confirm_then_start(
-                    "delete_apply",
-                    "Apply Permanent Delete",
-                    "This permanently deletes approved paths from the current delete plan. This cannot be undone. Required first: Reveal Quarantine, Plan Permanent Delete, inspect History Detail, then Approve Permanent Delete.",
-                    lambda: apply_delete_plan_action(report_dir),
-                )
-            elif button_id == "delete-approve":
-                self._start_action(
-                    "delete_approve",
-                    "Approve Permanent Delete",
-                    lambda: approve_delete_plan_action(report_dir),
-                )
+
+            handlers["metadata-write-plan"] = _h_metadata_write_plan
+            handlers["metadata-write-apply"] = lambda: _confirm(
+                "metadata_write_apply",
+                "Apply Embedded Metadata",
+                "This writes approved embedded metadata entries into audio files, backs up originals, and verifies readback. Required first: Plan Embedded Metadata, then Approve Embedded Metadata.",
+                lambda: apply_embedded_metadata_action(db_path, self._report_dir),
+            )
+            handlers["metadata-write-approve"] = lambda: _start(
+                "metadata_write_approve",
+                "Approve Embedded Metadata",
+                lambda: approve_embedded_metadata_action(self._report_dir),
+            )
+            handlers["metadata-write-undo"] = lambda: _start(
+                "metadata_write_undo",
+                "Undo Embedded Metadata",
+                lambda: undo_embedded_metadata_action(db_path, self._report_dir),
+            )
+
+            # Delete (permanent)
+            handlers["delete-plan"] = lambda: _start(
+                "delete_plan",
+                "Plan Permanent Delete",
+                lambda: build_delete_plan_action(self._report_dir),
+            )
+            handlers["delete-apply"] = lambda: _confirm(
+                "delete_apply",
+                "Apply Permanent Delete",
+                "This permanently deletes approved paths from the current delete plan. This cannot be undone. Required first: Reveal Quarantine, Plan Permanent Delete, inspect History Detail, then Approve Permanent Delete.",
+                lambda: apply_delete_plan_action(self._report_dir),
+            )
+            handlers["delete-approve"] = lambda: _start(
+                "delete_approve",
+                "Approve Permanent Delete",
+                lambda: approve_delete_plan_action(self._report_dir),
+            )
+
+            return handlers
+
+        def _clear_file_search_input(self) -> None:
+            """Handler for the files-clear-search button."""
+            self._file_query = ""
+            self.query_one("#file-search", Input).value = ""
+            self._fill_files()
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            handler = self._button_handlers.get(event.button.id or "")
+            if handler is not None:
+                handler()
 
         def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
             if event.data_table.id == "files-table":
@@ -1066,7 +1123,15 @@ def run_tui(
             if text.startswith("~"):
                 text = str(Path(text).expanduser())
             self._library_path = text
-            save_library_path(db_path, self._library_path)
+            save_error = save_library_path(db_path, self._library_path)
+            if save_error is not None:
+                # Surface DB write failures rather than silently pretending the save worked.
+                self._last_action = ActionResult(
+                    action="set_library_path",
+                    status="warning",
+                    message=save_error,
+                    errors=(save_error,),
+                )
             self._resolved_report_paths = report_search_paths(
                 db_path=db_path,
                 report_paths=report_paths,
@@ -1160,7 +1225,7 @@ def run_tui(
                 return None
             try:
                 cursor_row = self.query_one("#files-table", DataTable).cursor_row
-            except Exception:
+            except NoMatches:
                 cursor_row = 0
             if cursor_row is None or cursor_row < 0 or cursor_row >= len(self._file_rows):
                 cursor_row = 0
@@ -1189,7 +1254,8 @@ def run_tui(
                 )
             else:
                 try:
-                    subprocess.Popen(command)
+                    # Detach the OS opener's output from the Textual terminal.
+                    subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 except OSError as exc:
                     self._last_action = ActionResult(
                         action=action,
@@ -1233,7 +1299,8 @@ def run_tui(
                     )
                 else:
                     try:
-                        subprocess.Popen(command)
+                        # Detach the OS opener's output from the Textual terminal.
+                        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     except OSError as exc:
                         self._last_action = ActionResult(
                             action="quarantine_reveal",
@@ -1447,17 +1514,14 @@ def run_tui(
                 )
 
         def _fill_scan(self) -> None:
-            self.query_one("#scan-note", Static).update(
-                "Full Audit refreshes the index and writes read-only reports for health, metadata, duplicates, packs, groups, format, and UCS."
-            )
-            self._fill_findings("scan-findings-table", scan_findings(db_path=db_path, config_path=config_path))
+            from sfxworkbench.tui_screens import scan_tab
+
+            scan_tab.fill(self)
 
         def _fill_clean(self) -> None:
-            self._fill_findings(
-                "clean-findings-table",
-                clean_findings(self._library_path, db_path=db_path, scan_junk=False),
-            )
-            self._fill_clean_items()
+            from sfxworkbench.tui_screens import clean_tab
+
+            clean_tab.fill(self)
 
         def _fill_clean_items(self) -> None:
             table = self._reset_table("clean-items-table", ("Type", "Path"))
@@ -1491,61 +1555,27 @@ def run_tui(
                 table.add_row("more", f"{remaining:,} additional item(s) in the generated cleanup log.")
 
         def _fill_dedupe(self) -> None:
-            self._fill_findings("dedupe-findings-table", dedupe_findings(db_path=db_path))
-            table = self._reset_table(
-                "dedupe-groups-table",
-                ("Group", "Copies", "Extra", "Size", "Wasted", "State", "Keep Path"),
-            )
-            rows = dedupe_group_rows(db_path=db_path, limit=100)
-            if not rows:
-                table.add_row("none", "0", "0", "0", "0", _state_token("clear"), "No exact duplicate groups indexed.")
-                return
-            for row in rows:
-                table.add_row(
-                    str(row.group_id),
-                    _fmt(row.copies),
-                    _fmt(row.extra_copies),
-                    _fmt(row.size_bytes),
-                    _fmt(row.wasted_bytes),
-                    _state_token(row.status),
-                    _clip_middle(row.keep_path),
-                )
+            from sfxworkbench.tui_screens import dedupe_tab
+
+            dedupe_tab.fill(self)
 
         def _fill_metadata(self) -> None:
-            plan_path = self._report_dir / "metadata_tag_plan.json"
-            self._fill_findings("metadata-findings-table", metadata_findings(db_path=db_path, plan_path=plan_path))
-            table = self._reset_table(
-                "metadata-rows-table",
-                (
-                    ("State", "state", 12),
-                    ("Tags", "tags", 180),
-                    ("Filename", "filename", 56),
-                ),
-            )
-            rows = metadata_workbench_rows(db_path=db_path, plan_path=plan_path, limit=100)
-            rows = self._sort_for_table(
-                "metadata-rows-table",
-                rows,
-                {
-                    "state": lambda row: _sort_text(row.status),
-                    "tags": lambda row: _sort_text(row.tags_summary),
-                    "filename": lambda row: _sort_text(row.filename),
-                },
-            )
-            if not rows:
-                table.add_row(_state_token("info"), "", "No indexed files")
-                return
-            for row in rows:
-                table.add_row(
-                    _state_token(row.status),
-                    _tags_cell(row),
-                    row.filename,
-                )
+            from sfxworkbench.tui_screens import metadata_tab
+
+            metadata_tab.fill(self)
 
         def _fill_advanced(self) -> None:
-            self._fill_findings("advanced-findings-table", advanced_findings(db_path=db_path, config_path=config_path))
+            from sfxworkbench.tui_screens import advanced_tab
+
+            advanced_tab.fill(self)
 
         def _fill_files(self) -> None:
+            """Delegate hook for the Files tab fill. See ``_fill_files_impl`` for the body."""
+            from sfxworkbench.tui_screens import files_tab
+
+            files_tab.fill(self)
+
+        def _fill_files_impl(self) -> None:
             columns = (
                 (
                     ("Filename", "filename"),
@@ -1682,7 +1712,7 @@ def run_tui(
             table_id = f"{feature}-report-detail-table"
             try:
                 table = self.query_one(f"#{table_id}", DataTable)
-            except Exception:
+            except NoMatches:
                 return
             table.clear(columns=True)
             table.add_columns("Kind", "Action", "Source", "Target", "State", "Detail")
@@ -1716,7 +1746,7 @@ def run_tui(
             table_id = f"{feature}-reports-table"
             try:
                 table = self.query_one(f"#{table_id}", DataTable)
-            except Exception:
+            except NoMatches:
                 return
             columns = (
                 ("Kind", "Type", "Rows", "Err", "Title", "Path")
@@ -1777,7 +1807,7 @@ def run_tui(
         def _fill_action_result(self) -> None:
             try:
                 table = self.query_one("#action-result-table", DataTable)
-            except Exception:
+            except NoMatches:
                 return
             table.clear(columns=True)
             table.add_columns("Field", "Value")

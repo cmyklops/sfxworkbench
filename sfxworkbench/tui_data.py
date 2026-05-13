@@ -12,6 +12,13 @@ from typing import Any
 from sfxworkbench.apply_logs import APPLY_LOG_DIR_NAME
 from sfxworkbench.audit_cmd import _STANDARD_SAMPLE_RATES
 from sfxworkbench.db import DEFAULT_DB_PATH, get_connection
+from sfxworkbench.metadata_fields import (
+    canonicalize as _canonical_tag_field,
+)
+from sfxworkbench.metadata_fields import (
+    is_multivalue,
+    values_equal_for_dedup,
+)
 from sfxworkbench.preservation import build_preservation_rules
 
 _TUI_LIBRARY_PATH_KEY = "tui_library_path"
@@ -243,26 +250,6 @@ _SEARCH_TAG_FIELDS: dict[str, int] = {
 }
 
 
-_MULTIVALUE_TAG_FIELDS = {"keyword", "keywords"}
-
-
-def _canonical_tag_field(field: str) -> str:
-    normalized = field.strip().lower()
-    if normalized in _MULTIVALUE_TAG_FIELDS:
-        return "keyword"
-    if normalized == "ikey":
-        return "keyword"
-    if normalized == "ignr":
-        return "category"
-    if normalized == "isbj":
-        return "subcategory"
-    if normalized == "inam":
-        return "title"
-    if normalized == "icmt":
-        return "comment"
-    return normalized
-
-
 def _clean_tag_value(value: object) -> str:
     text = str(value or "")
     text = text.replace("\u2010", "-").replace("\u2011", "-").replace("\u2012", "-")
@@ -287,9 +274,8 @@ def _is_duplicate_tag_item(item: TagDisplayItem, existing_items: tuple[TagDispla
     matching_items = [existing for existing in existing_items if _canonical_tag_field(existing.field) == field]
     if not matching_items:
         return False
-    if field in _MULTIVALUE_TAG_FIELDS:
-        value = _clean_tag_value(item.value).casefold()
-        return any(_clean_tag_value(existing.value).casefold() == value for existing in matching_items)
+    if is_multivalue(field):
+        return any(values_equal_for_dedup(item.value, existing.value) for existing in matching_items)
     return True
 
 
@@ -432,8 +418,14 @@ def saved_library_path(db_path: Path = DEFAULT_DB_PATH) -> str | None:
     return value
 
 
-def save_library_path(db_path: Path = DEFAULT_DB_PATH, library_path: str | Path | None = None) -> None:
-    """Persist the explicit TUI library path used for generated commands."""
+def save_library_path(db_path: Path = DEFAULT_DB_PATH, library_path: str | Path | None = None) -> str | None:
+    """Persist the explicit TUI library path used for generated commands.
+
+    Returns ``None`` on success, or a short human-readable error message if the
+    write failed (e.g. SQLite is locked or the DB file is unwritable). Callers
+    can surface the message in the TUI status strip rather than silently
+    pretending the save succeeded.
+    """
     value = str(library_path).strip() if library_path is not None else ""
     try:
         conn = get_connection(db_path)
@@ -448,8 +440,9 @@ def save_library_path(db_path: Path = DEFAULT_DB_PATH, library_path: str | Path 
             conn.commit()
         finally:
             conn.close()
-    except sqlite3.Error:
-        return
+    except sqlite3.Error as exc:
+        return f"could not save library path: {exc}"
+    return None
 
 
 def preferred_library_path(db_path: Path = DEFAULT_DB_PATH) -> str:
@@ -2263,7 +2256,10 @@ def _report_category(path: Path, kind: str, *, command: str | None = None, patte
 
 def summarize_plan_file(path: Path) -> PlanSummary:
     """Summarize a JSON report/plan/log for the first before/after viewer."""
-    payload = json.loads(path.read_text())
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path}: invalid JSON: {exc}") from exc
     if not isinstance(payload, dict):
         raise ValueError(f"{path}: expected JSON object")
 
@@ -2420,7 +2416,10 @@ def _append_output_report_rows(rows: list[PlanDetailRow], body: dict[str, Any], 
 
 def plan_detail_rows(path: Path, *, limit: int = 100) -> list[PlanDetailRow]:
     """Return representative rows from a JSON report, plan, or apply log."""
-    payload = json.loads(path.read_text())
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path}: invalid JSON: {exc}") from exc
     if not isinstance(payload, dict):
         raise ValueError(f"{path}: expected JSON object")
     body = payload.get("plan") or payload.get("report") or payload

@@ -9,7 +9,7 @@ description = "Safety-first sound-effects library hygiene CLI"
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "Matt Wesdock" }]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 keywords = ["audio", "sound-effects", "wav", "library-management", "cli"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -17,8 +17,8 @@ classifiers = [
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Multimedia :: Sound/Audio",
     "Typing :: Typed",
 ]
@@ -41,7 +41,7 @@ Changelog = "https://github.com/cmyklops/sfxworkbench/blob/main/CHANGELOG.md"
 Documentation = "https://github.com/cmyklops/sfxworkbench#readme"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-cov", "ruff>=0.8", "poethepoet>=0.30"]
+dev = ["pytest>=8.0", "pytest-cov", "ruff>=0.8", "poethepoet>=0.30", "mypy>=1.8"]
 metadata = ["wavinfo>=4.0", "mutagen>=1.47"]
 tui = [
     "textual>=0.89",
@@ -52,7 +52,7 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py311"
 src = ["sfxworkbench", "tests"]
 
 [tool.ruff.lint]
@@ -60,16 +60,28 @@ select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
-"audit.py" = ["T201"]
+# audit.py must run on Python 3.9+, so cannot use 3.11-only idioms like
+# `datetime.UTC` that UP017 would prefer.
+"audit.py" = ["T201", "UP017"]
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 line-ending = "lf"
 
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
+files = ["sfxworkbench"]
+
 [tool.poe.tasks]
 test = "pytest tests/ -v"
 lint = "ruff check ."
+# mypy is onboarded with lax settings; not yet gated on `check` because the
+# brownfield codebase has a pre-existing error baseline. Track via the
+# `lint-types` task and ratchet errors down before adding it to `check`.
+lint-types = "mypy sfxworkbench"
 fmt = "ruff format ."
 fmt-check = "ruff format --check ."
 json-smoke = "pytest tests/test_cli_json.py tests/test_json_contracts.py -v"

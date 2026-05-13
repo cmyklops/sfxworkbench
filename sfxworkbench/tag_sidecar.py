@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.console import Console
@@ -13,13 +13,13 @@ from rich.table import Table
 from sfxworkbench import __version__
 from sfxworkbench.db import DEFAULT_DB_PATH, get_connection
 from sfxworkbench.models import TagSidecarEntry, TagSidecarImportResult, TagSidecarReport, TagSidecarTag
-from sfxworkbench.utils import json_dumps
+from sfxworkbench.utils import atomic_write_json
 
 console = Console()
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _md5(path: Path, block: int = 65536) -> str | None:
@@ -121,8 +121,7 @@ def build_tag_sidecar_report(
 
 
 def write_tag_sidecar_report(report: TagSidecarReport, output_path: Path, quiet: bool = False) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json_dumps(report), encoding="utf-8")
+    atomic_write_json(output_path, report)
     if not quiet:
         console.print(f"Tag sidecar written to [cyan]{output_path}[/cyan]")
 

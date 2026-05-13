@@ -5,7 +5,7 @@ import json
 import shutil
 import struct
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.console import Console
@@ -35,7 +35,7 @@ from sfxworkbench.models import (
 )
 from sfxworkbench.preservation import build_preservation_rules, move_protected_by
 from sfxworkbench.ucs import looks_ucs
-from sfxworkbench.utils import json_dumps
+from sfxworkbench.utils import atomic_write_json
 
 console = Console()
 
@@ -105,7 +105,7 @@ FIXTURE_MANIFEST_NAME = "metadata_write_fixture_manifest.json"
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _default_plan_path() -> Path:
@@ -739,8 +739,7 @@ def write_metadata_write_plan(
     quiet: bool = False,
 ) -> Path:
     output = output_path or _default_plan_path()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json_dumps(plan), encoding="utf-8")
+    atomic_write_json(output, plan)
     if not quiet:
         console.print(f"Metadata write plan written to [cyan]{output}[/cyan]")
     return output
@@ -773,8 +772,7 @@ def review_metadata_write_plan(
     plan.summary = _summarize_plan(plan)
 
     output = output_path or plan_path
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json_dumps(plan), encoding="utf-8")
+    atomic_write_json(output, plan)
     result = MetadataWriteReviewResult(
         plan_path=str(plan_path),
         output_path=str(output),
@@ -951,7 +949,7 @@ def build_metadata_write_fixture_bundle(
         bundle.files.append(fixture)
 
     manifest_path = output_dir / FIXTURE_MANIFEST_NAME
-    manifest_path.write_text(json_dumps(bundle), encoding="utf-8")
+    atomic_write_json(manifest_path, bundle)
     if not quiet:
         console.print(f"Metadata write fixture bundle written to [cyan]{manifest_path}[/cyan]")
     return bundle
@@ -1119,18 +1117,32 @@ def apply_metadata_write_plan(
     quiet: bool = False,
     config_path: Path | None = None,
     safe_folders: list[Path] | None = None,
+    backup: bool = True,
 ) -> MetadataWriteApplyResult:
-    """Apply reviewed Mutagen metadata writes to original files, with backups."""
+    """Apply reviewed Mutagen metadata writes to original files, with backups.
+
+    Backup behavior (added in PR #13 follow-up):
+
+    - ``backup=False``: no backup is taken. The readback safety net can't
+      restore on mismatch; only use this when you have an external snapshot.
+    - ``backup=True`` (default) and ``backup_dir`` is given: legacy mode —
+      backups copy into ``backup_dir`` mirroring source paths. Existing
+      callers and tests rely on this; pass an explicit ``--backup-dir`` to
+      opt in.
+    - ``backup=True`` (default) and no ``backup_dir``: ExifTool-style sibling
+      backups — each source ``foo.wav`` gets a ``foo.wav.original-<UTC>Z``
+      sibling created via :func:`sfxworkbench.backups.make_original_backup`.
+      Cleanup via ``sfx maintenance clean-backups``.
+    """
     preview = preview_metadata_write_plan(plan_path, db_path=db_path, require_reviewed=require_reviewed, quiet=True)
     plan = load_metadata_write_plan(plan_path)
     rules = build_preservation_rules(config_path=config_path, safe_folders=safe_folders)
     effective_db = db_path or Path(plan.db_path)
-    if backup_dir is None and not dry_run:
-        backup_dir = _default_backup_dir(plan_path)
+    use_sibling_backup = backup and backup_dir is None
     result = MetadataWriteApplyResult(
         planned=preview.planned,
         skipped=preview.skipped,
-        backup_dir=str(backup_dir) if backup_dir is not None else None,
+        backup_dir=str(backup_dir) if backup_dir is not None else ("sibling" if use_sibling_backup else None),
         dry_run=dry_run,
         target=preview.target,
         errors=list(preview.errors),
@@ -1152,20 +1164,28 @@ def apply_metadata_write_plan(
                 result.applied += entry_count
                 result.files_written += 1
                 continue
-            assert backup_dir is not None
             try:
-                target = _backup_target(source, backup_dir)
-                target.parent.mkdir(parents=True, exist_ok=True)
                 source_stat = source.stat()
+                target: Path | None
+                if backup_dir is not None:
+                    target = _backup_target(source, backup_dir)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, target)
+                elif use_sibling_backup:
+                    from sfxworkbench.backups import make_original_backup
+
+                    target = make_original_backup(source)
+                else:
+                    target = None
                 backup_entry = {
                     "path": str(source),
-                    "backup_path": str(target),
+                    "backup_path": str(target) if target is not None else None,
                     "pre_apply_size": source_stat.st_size,
                     "pre_apply_mtime": source_stat.st_mtime,
                     "pre_apply_md5": _md5(source),
                 }
-                shutil.copy2(source, target)
-                result.files_backed_up += 1
+                if target is not None:
+                    result.files_backed_up += 1
                 result.backups.append(backup_entry)
                 if backend == "mutagen":
                     write_mutagen_fields(source, command.fields)
@@ -1193,8 +1213,26 @@ def apply_metadata_write_plan(
                     }
                 )
                 if mismatched_fields:
+                    # Verify-on-readback safety net (PR #7). If a backup exists
+                    # (sibling or backup_dir mode), restore the original;
+                    # otherwise just record the mismatch and let the user
+                    # decide.
+                    if target is not None:
+                        try:
+                            shutil.copy2(target, source)
+                            result.files_restored += 1
+                            restore_note = "; original restored from backup"
+                        except OSError as restore_exc:
+                            restore_note = f"; BACKUP RESTORE FAILED: {restore_exc}"
+                    else:
+                        restore_note = "; NO BACKUP AVAILABLE — file may be in inconsistent state"
                     result.errors.append(
-                        {"path": str(source), "error": "metadata readback mismatch", "fields": mismatched_fields}
+                        {
+                            "path": str(source),
+                            "error": f"metadata readback mismatch{restore_note}",
+                            "fields": mismatched_fields,
+                            "backup_path": str(target) if target is not None else None,
+                        }
                     )
                     continue
                 result.files_verified += 1
@@ -1214,20 +1252,17 @@ def apply_metadata_write_plan(
         log_path = _default_apply_log_path(plan_path)
     if log_path is not None:
         result.log_path = str(log_path)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(
-            json_dumps(
-                {
-                    "schema_version": PLAN_SCHEMA_VERSION,
-                    "generated_at": _now_iso(),
-                    "tool": "sfxworkbench",
-                    "tool_version": __version__,
-                    "plan_path": str(plan_path),
-                    "db_path": str(effective_db),
-                    "result": result,
-                }
-            ),
-            encoding="utf-8",
+        atomic_write_json(
+            log_path,
+            {
+                "schema_version": PLAN_SCHEMA_VERSION,
+                "generated_at": _now_iso(),
+                "tool": "sfxworkbench",
+                "tool_version": __version__,
+                "plan_path": str(plan_path),
+                "db_path": str(effective_db),
+                "result": result,
+            },
         )
     if not quiet:
         show_metadata_write_apply_result(result)
