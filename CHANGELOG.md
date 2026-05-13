@@ -7,6 +7,44 @@ versioning once public releases begin.
 
 ## Unreleased
 
+### Bug-Audit Fixes (follow-up to Tier 5.12 + 3.8)
+
+A deep audit of the last six commits surfaced four real bugs. All four
+fixed in this round.
+
+- **Clean tab stopped refreshing after Preview/Apply Junk.** ``clean_action``
+  declared ``refresh=("status", "reports")`` — neither is a tab key, so
+  Tier 5.12 smart-invalidation skipped marking Clean dirty and
+  ``_fill_clean_items`` never ran. Fixed to ``("clean", "reports")`` for
+  preview and ``("clean", "files", "reports")`` for apply.
+- **New invariant test** ``test_action_refresh_hints_include_at_least_one_tab_key``
+  asserts every non-error refresh tuple includes at least one tab key.
+  Would have caught the clean_action bug. Companion to the existing
+  unknown-hint AST scan.
+- **Selection now clears after every destructive action that moves
+  files**, not just ``scan``/``full_audit``. Added ``clean_apply``,
+  ``dedupe_apply``, ``pack_apply``, ``rename_apply``, ``rename_undo``.
+  Previously a user could quarantine 5 selected files via
+  ``dedupe_apply`` then have a follow-up "scoped" apply silently no-op
+  because the selection still held the moved paths.
+  ``metadata_write_apply`` and ``delete_apply`` exempted — the former
+  keeps paths intact, the latter operates on quarantine paths the
+  Files-tab selection can't reach.
+- **Cancelled / errored worker results now invalidate every tab.** The
+  worker callbacks synthesize ``ActionResult(..., refresh=("status",))``
+  — pre-5.12 the full refresh covered this; post-5.12 the empty-tab-keys
+  tuple skipped all tab fills. ``_run_action`` now treats an empty
+  refresh as "invalidate everything" since we can't know what partial
+  state the cancelled/errored action left behind.
+- **Target_paths counters standardized across all 7 Tier 3.8 executors.**
+  Previously three patterns coexisted: ``dedupe``/``scan_errors``/
+  ``metadata_write`` did a bare ``continue`` with no counter; ``rename``
+  pre-filtered via ``model_copy`` so ``planned`` shrank with selection;
+  the others incremented ``skipped``. Now every executor increments
+  ``result.skipped`` on a selection miss and ``planned`` always reflects
+  the original plan size. ``DedupeApplyResult``, ``ScanErrorApplyResult``,
+  and ``RenameResult`` gained a ``skipped: int = 0`` field.
+
 ### Tier 3.7 — In-Table Filters (Metadata + Dedupe)
 
 - **Filter the Metadata prioritized-files table by typing.** A new

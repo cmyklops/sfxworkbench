@@ -1154,6 +1154,11 @@ def apply_metadata_write_plan(
     try:
         for command in preview.commands:
             if selection is not None and command.path not in selection:
+                # Tier 3.8: count selection-filtered commands toward
+                # ``result.skipped`` so the apply diagnostic balances —
+                # otherwise ``planned - applied - skipped`` would leave the
+                # filtered commands unaccounted for.
+                result.skipped += len(command.fields)
                 continue
             entry_count = len(command.fields)
             backend = _command_backend(command)

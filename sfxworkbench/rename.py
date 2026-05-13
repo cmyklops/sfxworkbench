@@ -352,15 +352,18 @@ def apply_rename_plan(
     """Apply a rename plan, refusing collisions and writing an undo log.
 
     ``target_paths`` (Tier 3.8): if given, only entries whose ``old_path``
-    is in this set are renamed. Other entries are silently skipped.
+    is in this set are renamed. Filtered entries count toward ``skipped``
+    so ``planned`` continues to reflect the original plan size — matches
+    the convention used by ``apply_delete_plan``, ``apply_tag_plan``, etc.
     """
-    if target_paths is not None:
-        selection = frozenset(target_paths)
-        plan = plan.model_copy(update={"entries": [e for e in plan.entries if e.old_path in selection]})
+    selection: frozenset[str] | None = frozenset(target_paths) if target_paths is not None else None
     result = RenameResult(planned=len(plan.entries), dry_run=dry_run)
     rules = build_preservation_rules(config_path=config_path, safe_folders=safe_folders)
     protection_errors = [
-        error for entry in plan.entries if (error := _protection_error(Path(entry.old_path), rules)) is not None
+        error
+        for entry in plan.entries
+        if (selection is None or entry.old_path in selection)
+        and (error := _protection_error(Path(entry.old_path), rules)) is not None
     ]
     if protection_errors:
         result.errors.extend(protection_errors)
@@ -390,6 +393,9 @@ def apply_rename_plan(
     root = Path(plan.root)
 
     for entry in plan.entries:
+        if selection is not None and entry.old_path not in selection:
+            result.skipped += 1
+            continue
         old = Path(entry.old_path)
         new = Path(entry.new_path)
         created_parent = False

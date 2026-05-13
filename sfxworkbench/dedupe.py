@@ -288,6 +288,10 @@ def apply_dedupe_plan(
             if entry["action"] != "remove":
                 continue
             if selection is not None and entry["path"] not in selection:
+                # Mirror the other Tier 3.8 executors: count selection-skipped
+                # entries in ``result.skipped`` so the user can see how many
+                # plan entries the scope filter dropped.
+                result.skipped += 1
                 continue
             p = Path(entry["path"])
             sz = entry.get("size_bytes", 0)

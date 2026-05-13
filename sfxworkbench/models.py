@@ -368,6 +368,7 @@ class ScanErrorApplyResult(BaseModel):
     planned: int = 0
     quarantined: int = 0
     bytes_quarantined: int = 0
+    skipped: int = 0  # Tier 3.8: entries dropped by ``target_paths`` filter
     errors: list[dict] = []
     quarantine_dir: str | None = None
     dry_run: bool = True
@@ -377,6 +378,7 @@ class DedupeApplyResult(BaseModel):
     removed: int = 0
     quarantined: int = 0
     bytes_freed: int = 0
+    skipped: int = 0  # Tier 3.8: entries dropped by ``target_paths`` filter
     errors: list[dict] = []
     quarantine_dir: str | None = None
     log_path: str | None = None
@@ -1084,6 +1086,7 @@ class RenamePlan(BaseModel):
 class RenameResult(BaseModel):
     planned: int = 0
     renamed: int = 0
+    skipped: int = 0  # Tier 3.8: entries dropped by ``target_paths`` filter
     undone: int = 0
     errors: list[dict] = []
     log_path: str | None = None

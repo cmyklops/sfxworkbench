@@ -66,6 +66,9 @@ def _collect_refresh_hints(module_path: Path) -> list[tuple[int, tuple[str, ...]
     return hits
 
 
+_TAB_KEYS = frozenset({"scan", "files", "clean", "dedupe", "metadata", "advanced"})
+
+
 def test_action_refresh_hints_are_known() -> None:
     """Every ``refresh=("...", ...)`` literal in tui_actions.py uses a known hint."""
     module_path = Path(inspect.getsourcefile(tui_actions) or "")
@@ -83,4 +86,43 @@ def test_action_refresh_hints_are_known() -> None:
     assert not unknown, (
         "Unknown refresh hints in sfxworkbench.tui_actions; "
         "extend _KNOWN_HINTS or fix the typo:\n" + "\n".join(f"  line {ln}: {hint!r}" for ln, hint in unknown)
+    )
+
+
+def test_action_refresh_hints_include_at_least_one_tab_key() -> None:
+    """Every ``refresh=(...)`` literal includes at least one tab key.
+
+    Caught a real bug: ``clean_action`` used to declare
+    ``refresh=("status", "reports")`` with no tab keys, so after Tier 5.12
+    smart invalidation the Clean tab never refreshed after Preview Junk /
+    Apply Junk. Pure status/reports refreshes are valid for error paths
+    (which set ``("status",)``), but a return from a *successful* action
+    needs a tab key to repopulate the table that surfaced the action's
+    output.
+
+    Exempts ``_action_error`` (line 128) since synthesized error results
+    legitimately only touch the status strip; the App-side fallback
+    (``_run_action``) treats those as "invalidate everything" anyway.
+    """
+    module_path = Path(inspect.getsourcefile(tui_actions) or "")
+    declarations = _collect_refresh_hints(module_path)
+
+    error_helper_lines = set()
+    for lineno, hints in declarations:
+        # Heuristic: the error helper's tuple is the only ``("status",)``
+        # single-element tuple at line 128. Skip exactly that one.
+        if hints == ("status",) and lineno < 200:
+            error_helper_lines.add(lineno)
+
+    missing: list[tuple[int, tuple[str, ...]]] = []
+    for lineno, hints in declarations:
+        if lineno in error_helper_lines:
+            continue
+        if not any(hint in _TAB_KEYS for hint in hints):
+            missing.append((lineno, hints))
+
+    assert not missing, (
+        "ActionResult.refresh declarations missing a tab key — after Tier 5.12 "
+        "these actions return without triggering any tab fill, so their "
+        "downstream tables stay stale:\n" + "\n".join(f"  line {ln}: refresh={hints!r}" for ln, hints in missing)
     )

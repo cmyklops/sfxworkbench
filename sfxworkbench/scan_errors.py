@@ -205,6 +205,9 @@ def apply_scan_error_plan(
         if entry.action != "quarantine":
             continue
         if selection is not None and entry.path not in selection:
+            # Tier 3.8: filtered-by-selection entries count in ``skipped`` so
+            # the user sees what the scope filter dropped.
+            result.skipped += 1
             continue
         path = Path(entry.path)
         validation_error = _validate_candidate(path, entry.size_bytes, entry.hash)

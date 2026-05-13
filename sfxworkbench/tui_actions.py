@@ -270,6 +270,11 @@ def clean_action(
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error(action, e)
     count = len(result.removed_files) + len(result.removed_dirs)
+    # Bugfix: pre-Tier 5.12 every action triggered a full tab refresh, so the
+    # Clean tab repopulated after Preview/Apply. With smart invalidation the
+    # ``clean`` hint is required to mark the tab dirty; apply also touches
+    # the file index, so ``files`` belongs in the apply tuple.
+    refresh_hints = ("clean", "files", "reports") if apply else ("clean", "reports")
     return ActionResult(
         action=action,
         status="applied" if apply else "dry_run",
@@ -278,7 +283,7 @@ def clean_action(
             f"({len(result.removed_files):,} files, {len(result.removed_dirs):,} dirs)."
         ),
         output_path=str(log_path),
-        refresh=("status", "reports"),
+        refresh=refresh_hints,
         details=result.model_dump(),
     )
 

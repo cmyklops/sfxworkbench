@@ -1492,18 +1492,36 @@ def run_tui(
             )
             if self._report_dir.exists() and self._report_dir not in self._resolved_report_paths:
                 self._resolved_report_paths.insert(0, self._report_dir)
-            # Tier 3.8: scan and full-audit rebuild the file index, so any
-            # previously-selected paths may no longer exist or may have moved.
-            # Drop the selection set rather than leaving the user with stale
-            # references that would silently no-op on the next apply.
-            if result.action in {"scan", "full_audit"}:
+            # Tier 3.8: actions that mutate the file index leave the
+            # selection holding paths that may have moved or been deleted.
+            # Drop the set rather than letting a subsequent scoped apply
+            # silently no-op against ghost paths. ``metadata_write_apply``
+            # is intentionally excluded — it changes file *contents*, not
+            # paths, so the selection remains valid. ``delete_apply``
+            # operates on quarantine paths the Files tab can't select.
+            if result.action in {
+                "scan",
+                "full_audit",
+                "clean_apply",
+                "dedupe_apply",
+                "pack_apply",
+                "rename_apply",
+                "rename_undo",
+            }:
                 self._selected_paths.clear()
             # Tier 5.12: honor the action's declared refresh hints instead of
             # blindly re-filling every tab. ``result.refresh`` is a tuple like
             # ``("metadata", "reports")`` — only the named tabs are marked
             # dirty, so a metadata audit while the user sits on Files no
             # longer triggers a Files re-fill (and its underlying SQL).
-            self._refresh(result.refresh)
+            #
+            # Empty refresh means the result was synthesized without a real
+            # declared scope — cancellation paths, internal error paths,
+            # future callers that forget to set it. Be conservative there
+            # and invalidate every tab since we can't know what partial
+            # state landed.
+            dirty = result.refresh if result.refresh else None
+            self._refresh(dirty)
             self._fill_action_result()
 
         def _refresh(self, dirty: tuple[str, ...] | None = None) -> None:
