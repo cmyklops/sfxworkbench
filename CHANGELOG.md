@@ -7,6 +7,17 @@ versioning once public releases begin.
 
 ## Unreleased
 
+### Tier 3.7 — Metadata Tab Filter Input
+
+- **Filter the Metadata prioritized-files table by typing.** A new
+  ``#metadata-search`` Input sits above the Metadata Values table; the
+  query feeds straight into the existing ``metadata_workbench_rows(query=)``
+  adapter (which already filters on ``f.filename`` and ``f.path``).
+  Debounced at 250ms, mirroring the Files tab's search.
+- Files tab already had this; Metadata was the highest-payoff missing
+  case. Clean/Dedupe/Advanced filters are still deferred — those adapters
+  don't yet accept a query string.
+
 ### Tier 5.14 — Lazy Tab Fill
 
 - **`_refresh` no longer fills every tab eagerly.** It marks all six tabs

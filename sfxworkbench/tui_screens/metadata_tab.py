@@ -22,7 +22,7 @@ NOTE = (
 
 
 def compose(app) -> ComposeResult:
-    from textual.widgets import DataTable
+    from textual.widgets import DataTable, Input
 
     yield from app._page_header(KEY)
     yield from app._button_row(
@@ -34,6 +34,7 @@ def compose(app) -> ComposeResult:
         ("Export Sidecar", "metadata-sidecar"),
     )
     yield DataTable(id="metadata-findings-table")
+    yield Input(placeholder="Filter prioritized files (by filename or path)", id="metadata-search")
     yield from app._titled_table("Metadata Values - First 100 Prioritized Files", "metadata-rows-table")
     yield from app._titled_table("History", "metadata-reports-table")
     yield from app._titled_table("History Detail", "metadata-report-detail-table")
@@ -56,7 +57,12 @@ def fill(app) -> None:
             ("Filename", "filename", 56),
         ),
     )
-    rows = metadata_workbench_rows(db_path=app.db_path, plan_path=plan_path, limit=100)
+    rows = metadata_workbench_rows(
+        db_path=app.db_path,
+        plan_path=plan_path,
+        query=getattr(app, "_metadata_query", ""),
+        limit=100,
+    )
     rows = app._sort_for_table(
         "metadata-rows-table",
         rows,

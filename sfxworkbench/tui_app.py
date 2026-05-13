@@ -565,6 +565,12 @@ def run_tui(
             # Tier 5.13: handle to the pending file-search debounce timer, so a
             # second keystroke cancels the first scheduled refill.
             self._file_search_debounce = None
+            # Tier 3.7: filter input for the Metadata tab's prioritized-files
+            # table. Mirrors ``_file_query`` + ``_file_search_debounce`` for the
+            # Files tab; the data adapter ``metadata_workbench_rows`` already
+            # accepts ``query``, so the lift is just plumbing.
+            self._metadata_query = ""
+            self._metadata_search_debounce = None
             # Tier 5.14: tabs whose data is stale and need a fill before the user
             # next sees them. ``_refresh()`` marks all six; activation drains a
             # tab's dirty flag by filling it. Tabs the user never opens stay
@@ -789,6 +795,17 @@ def run_tui(
                     except Exception:  # pragma: no cover - timer already finished
                         pass
                 self._file_search_debounce = self.set_timer(0.25, self._fill_files)
+            elif event.input.id == "metadata-search":
+                self._metadata_query = event.value
+                # Same debounce shape as ``file-search``: metadata fill rebuilds
+                # the prioritized-files table from a SQL query, so per-keystroke
+                # refill is wasteful.
+                if self._metadata_search_debounce is not None:
+                    try:
+                        self._metadata_search_debounce.stop()
+                    except Exception:  # pragma: no cover - timer already finished
+                        pass
+                self._metadata_search_debounce = self.set_timer(0.25, self._fill_metadata)
 
         def on_input_submitted(self, event: Input.Submitted) -> None:
             if event.input.id == "library-path-input":
