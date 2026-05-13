@@ -16,7 +16,7 @@ NOTE = (
 
 
 def compose(app) -> ComposeResult:
-    from textual.widgets import DataTable
+    from textual.widgets import DataTable, Input
 
     yield from app._page_header(KEY)
     yield from app._button_row(
@@ -29,6 +29,7 @@ def compose(app) -> ComposeResult:
         ("Apply Pack", "pack-apply", "warning"),
     )
     yield DataTable(id="dedupe-findings-table")
+    yield Input(placeholder="Filter duplicate groups (by hash or file path)", id="dedupe-search")
     yield from app._titled_table("Exact Duplicate Groups", "dedupe-groups-table")
     yield from app._titled_table("History", "dedupe-reports-table")
     yield from app._titled_table("History Detail", "dedupe-report-detail-table")
@@ -49,7 +50,11 @@ def fill(app) -> None:
         "dedupe-groups-table",
         ("Group", "Copies", "Extra", "Size", "Wasted", "State", "Keep Path"),
     )
-    rows = dedupe_group_rows(db_path=app.db_path, limit=100)
+    rows = dedupe_group_rows(
+        db_path=app.db_path,
+        query=getattr(app, "_dedupe_query", ""),
+        limit=100,
+    )
     if not rows:
         table.add_row("none", "0", "0", "0", "0", _state_token("clear"), "No exact duplicate groups indexed.")
         return

@@ -650,17 +650,32 @@ def clean_findings(
     return findings
 
 
-def dedupe_group_rows(db_path: Path = DEFAULT_DB_PATH, *, limit: int = 100) -> list[DuplicateGroupRow]:
+def dedupe_group_rows(
+    db_path: Path = DEFAULT_DB_PATH,
+    *,
+    query: str = "",
+    limit: int = 100,
+) -> list[DuplicateGroupRow]:
     from sfxworkbench.dedupe import find_duplicates
 
     groups = find_duplicates(db_path)
+    # Tier 3.7: post-hoc filter — ``find_duplicates`` already builds the full
+    # group set, so we screen each group against the search terms (all must
+    # match somewhere in the hash, keep path, or any member file).
+    terms = [term.lower() for term in query.split() if term.strip()]
     rows: list[DuplicateGroupRow] = []
-    for index, group in enumerate(groups[:limit], start=1):
+    group_index = 0
+    for group in groups:
+        group_index += 1
         keep = sorted(group.files)[0] if group.files else ""
+        if terms:
+            haystack = " ".join([str(keep).lower(), (group.hash or "").lower()] + [str(f).lower() for f in group.files])
+            if not all(term in haystack for term in terms):
+                continue
         extra = max(0, len(group.files) - 1)
         rows.append(
             DuplicateGroupRow(
-                group_id=index,
+                group_id=group_index,
                 hash=group.hash,
                 copies=len(group.files),
                 extra_copies=extra,
@@ -670,6 +685,8 @@ def dedupe_group_rows(db_path: Path = DEFAULT_DB_PATH, *, limit: int = 100) -> l
                 status="pending" if extra else "clear",
             )
         )
+        if len(rows) >= limit:
+            break
     return rows
 
 

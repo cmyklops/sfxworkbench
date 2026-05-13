@@ -7,16 +7,50 @@ versioning once public releases begin.
 
 ## Unreleased
 
-### Tier 3.7 — Metadata Tab Filter Input
+### Tier 3.7 — In-Table Filters (Metadata + Dedupe)
 
 - **Filter the Metadata prioritized-files table by typing.** A new
   ``#metadata-search`` Input sits above the Metadata Values table; the
   query feeds straight into the existing ``metadata_workbench_rows(query=)``
   adapter (which already filters on ``f.filename`` and ``f.path``).
   Debounced at 250ms, mirroring the Files tab's search.
-- Files tab already had this; Metadata was the highest-payoff missing
-  case. Clean/Dedupe/Advanced filters are still deferred — those adapters
-  don't yet accept a query string.
+- **Filter the Dedupe duplicate-groups table by typing.** A new
+  ``#dedupe-search`` Input matches all space-separated terms against the
+  group's hash, keep-path, and member files. ``dedupe_group_rows`` gained
+  a ``query`` parameter; filtering happens post-hoc in Python since
+  ``find_duplicates`` returns the full group set up front.
+- **Not extended to Scan / Clean / Advanced.** Those tabs surface small
+  categorical *findings* tables (file counts by issue category, not file
+  lists). Filtering would be low-value churn for tables of <20 rows.
+
+### Tier 3.8, 5.12 — Deferred With Concrete Design Notes
+
+Two items from the deferred list remain genuinely-needs-design and are not
+in scope for this round. Captured here so the next session can pick them
+up without re-deriving the analysis.
+
+- **3.8 multi-select for bulk operations** — the action contract in
+  ``sfxworkbench.tui_actions`` takes plans (``RenamePlan``,
+  ``DeletePlan``), not file selections. Two paths to bridge:
+  - **Option (a):** add ``target_paths: tuple[Path, ...] | None`` to every
+    plan dataclass and gate executors on it. Mechanical but touches every
+    action.
+  - **Option (b):** introduce a ``SelectionAction`` wrapper that filters
+    the targets of an existing plan. Cleaner contract; needs a small
+    redesign session.
+  - **Product questions to answer first**: does selection persist across
+    tab switches? Across re-scans? Span pages of the Files table?
+- **5.12 reactive partial refresh** — today every ``_fill_<tab>()``
+  rebuilds the entire DataTable (``table.clear(); add_row`` per row). A
+  reactive variant would diff: ``add_row`` for new keys, ``remove_row``
+  for gone keys, ``update_cell`` for changed cells. Prerequisites:
+  - Every row needs a stable identity key (``file_id``? ``path``?).
+  - Sort and filter state must move into ``reactive()`` attributes so
+    Textual can recompute downstream.
+  - Every place that triggers a fill needs an audit: does the change
+    actually invalidate the table, or just touch one row?
+  Real cost: 3-5 days. Real risk: subtle staleness bugs. Worth doing
+  when a user complains about refresh cost; premature otherwise.
 
 ### Tier 5.14 — Lazy Tab Fill
 
