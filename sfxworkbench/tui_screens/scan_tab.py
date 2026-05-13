@@ -44,8 +44,12 @@ def compose(app) -> ComposeResult:
     )
     yield Static("", id="scan-note", classes="note")
     yield DataTable(id="scan-findings-table")
-    yield from app._titled_table("History", "scan-reports-table")
-    yield from app._titled_table("History Detail", "scan-report-detail-table")
+    yield from app._titled_table_pair(
+        "History",
+        "scan-reports-table",
+        "History Detail",
+        "scan-report-detail-table",
+    )
 
 
 def fill(app) -> None:

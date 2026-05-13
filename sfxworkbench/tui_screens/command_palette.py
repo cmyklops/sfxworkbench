@@ -71,7 +71,34 @@ _LABELS: dict[str, str] = {
     "delete-plan": "Plan permanent delete",
     "delete-approve": "Approve permanent delete",
     "delete-apply": "Apply permanent delete",
+    # Tier post-feedback: theme switching via the palette. Each handler
+    # assigns to ``App.theme`` (a reactive attribute) so Textual restyles
+    # the whole UI immediately. Names match Textual's built-in theme list.
+    "theme-textual-dark": "Theme: Textual Dark",
+    "theme-textual-light": "Theme: Textual Light",
+    "theme-monokai": "Theme: Monokai",
+    "theme-dracula": "Theme: Dracula",
+    "theme-nord": "Theme: Nord",
+    "theme-tokyo-night": "Theme: Tokyo Night",
+    "theme-solarized-light": "Theme: Solarized Light",
+    "theme-gruvbox": "Theme: Gruvbox",
+    "theme-catppuccin-mocha": "Theme: Catppuccin Mocha",
 }
+
+
+# Theme button ids exposed via the palette. The TUI registers a handler for
+# each that flips ``App.theme`` to the matching Textual built-in.
+THEME_BUTTON_IDS: tuple[str, ...] = (
+    "theme-textual-dark",
+    "theme-textual-light",
+    "theme-monokai",
+    "theme-dracula",
+    "theme-nord",
+    "theme-tokyo-night",
+    "theme-solarized-light",
+    "theme-gruvbox",
+    "theme-catppuccin-mocha",
+)
 
 
 def label_for(button_id: str) -> str:

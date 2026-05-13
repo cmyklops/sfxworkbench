@@ -123,6 +123,51 @@ def test_filename_take_via_take_prefix_token() -> None:
     assert take_values == ["07"]
 
 
+def test_filename_word_splits_lowercase_concatenated_compound() -> None:
+    """SFX libraries often ship stems like ``Afghanmeninteriorbusyc3401`` —
+    descriptive compound + catalog number with no separators. Without
+    word-splitting the entire string becomes a single proposed description,
+    which is what surfaced in the metadata-review screenshot. Tokenize and
+    suggest should recover real words.
+    """
+    suggestions = suggest_from_filename("Afghanmeninteriorbusyc3401")
+    descriptions = [s for s in suggestions if s.field == "description"]
+    assert descriptions, "filename should still produce a description suggestion"
+    value = descriptions[0].value.lower()
+    # The exact tokenization depends on wordninja's word-frequency list, but
+    # the meaningful sub-words must appear and the raw blob must NOT.
+    assert "afghan" in value
+    assert "interior" in value
+    assert "busy" in value
+    assert "afghanmeninteriorbusy" not in value
+
+
+def test_filename_word_splits_separates_catalog_number() -> None:
+    """Trailing digits land in ``take_number`` (existing behavior) once the
+    digit-boundary pre-split has run.
+    """
+    suggestions = suggest_from_filename("Boxingcrowdcheersandsh2301")
+    by_field: dict[str, list] = {}
+    for s in suggestions:
+        by_field.setdefault(s.field, []).append(s)
+    description_value = by_field["description"][0].value.lower()
+    assert "boxing" in description_value
+    assert "crowd" in description_value
+    assert "cheers" in description_value
+    assert "2301" not in description_value
+    take_values = [s.value for s in by_field.get("take_number", [])]
+    assert take_values == ["2301"]
+
+
+def test_filename_word_split_preserves_existing_structure() -> None:
+    """Already-separated stems must pass through unchanged. Word-splitting
+    only kicks in for lowercase alphabetic tokens of 8+ chars.
+    """
+    suggestions = suggest_from_filename("AMB_RAIN_01")
+    description = next(s for s in suggestions if s.field == "description")
+    assert description.value == "Ambience Rain"
+
+
 def test_synonym_keywords_from_description_suggestions() -> None:
     base = suggest_from_filename("Car Crash 01")
 

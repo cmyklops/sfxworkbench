@@ -7,6 +7,61 @@ versioning once public releases begin.
 
 ## Unreleased
 
+### TUI Feedback Round
+
+Live testing surfaced eight discrete items. All eight landed.
+
+- **Audition button now plays inline via a CLI audio tool**, not the
+  default GUI app. macOS uses ``afplay`` so ``.wav`` files no longer
+  bounce through LaunchServices to Music.app. Linux probes
+  ``paplay`` → ``aplay`` → ``play`` (sox). Windows uses PowerShell
+  ``Media.SoundPlayer.PlaySync``. The "Reveal in Files" button is
+  unchanged. New tests in ``tests/test_tui_app.py``.
+- **``.DS_Store`` no longer flagged as junk on macOS.** Finder
+  regenerates it the moment the enclosing folder is reopened, so listing
+  it as cleanable was pointless churn. Linux / Windows / WSL still
+  cleanup since they're typically remnants of a prior mac mount.
+  ``sfxworkbench/junk.py`` gained a platform guard; new tests in
+  ``tests/test_junk.py`` cover both branches.
+- **Filename word-splitting for tag proposals.** Lowercase compound
+  stems like ``Afghanmeninteriorbusyc3401`` used to land as a single
+  token and surface verbatim in Generate Suggestions. New
+  ``_split_compound`` helper uses ``wordninja`` (added as a dependency)
+  with a digit-boundary pre-pass, so the trailing catalog number lands
+  in ``take_number`` and the rest yields ``afghan men interior busy``.
+  Tests in ``tests/test_tag_suggest.py`` cover the screenshot examples
+  plus the AMB_RAIN_01 pass-through case.
+- **Generate Suggestions no longer caps at 200.** ``tag_plan_action``
+  passes ``limit=0`` (treated as unlimited downstream) so the result
+  includes every file with a suggestion. The user's "only 165" complaint
+  was a symptom of the 200 cap plus the bad word-splitting; both are
+  now fixed.
+- **Progress bar for metadata actions.** ``build_tag_suggestion_report``,
+  ``apply_tag_plan``, and their action wrappers now accept a
+  ``progress_callback`` and report once per 50-100 entries. The TUI
+  status strip already plumbs ``_threadsafe_progress_callback`` for
+  ``scan`` / ``clean`` / ``audit``; metadata actions match the shape so
+  the user sees a moving bar instead of an apparent freeze.
+- **Theme switching via the command palette.** Hardcoded
+  ``theme = "textual-dark"`` is now one of nine Textual built-ins
+  reachable via Cmd+P → "Theme: …". ``THEME_BUTTON_IDS`` lives in
+  ``command_palette.py`` so the palette and the App stay in sync.
+- **History / History Detail render side-by-side.** New
+  ``_titled_table_pair`` helper wraps both panes in a ``Horizontal``
+  container with each ``1fr`` wide. All 5 tabs (scan, clean, dedupe,
+  metadata, advanced) updated to use it. CSS additions cap height at
+  ``1fr`` with ``min-height: 16``.
+- **Select-all binding + selection action hints.** New ``ctrl+a``
+  binding selects every currently-visible Files-tab row (respects the
+  active search filter — selecting 50k rows by accident is harder this
+  way). When the selection is non-empty, the status strip now appends
+  ``scoped applies: Apply DB Tags · Apply Dedupe · Apply Embedded
+  Metadata`` so the user can see what the selection unlocks.
+
+Deferred: shared files window across tabs — real refactor, separate
+plan. In-TUI waveform / inline audio player — much larger UI work;
+``afplay`` is the pragmatic stopgap.
+
 ### Bug-Audit Fixes (follow-up to Tier 5.12 + 3.8)
 
 A deep audit of the last six commits surfaced four real bugs. All four

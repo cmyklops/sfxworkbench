@@ -31,8 +31,12 @@ def compose(app) -> ComposeResult:
     yield DataTable(id="dedupe-findings-table")
     yield Input(placeholder="Filter duplicate groups (by hash or file path)", id="dedupe-search")
     yield from app._titled_table("Exact Duplicate Groups", "dedupe-groups-table")
-    yield from app._titled_table("History", "dedupe-reports-table")
-    yield from app._titled_table("History Detail", "dedupe-report-detail-table")
+    yield from app._titled_table_pair(
+        "History",
+        "dedupe-reports-table",
+        "History Detail",
+        "dedupe-report-detail-table",
+    )
 
 
 def fill(app) -> None:

@@ -5,6 +5,7 @@ Both `clean.py` and `scan.py` import from here. Adding a new pattern here
 makes it visible to both modules in one shot.
 """
 
+import sys
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -59,6 +60,11 @@ def is_junk_file(path: Path) -> bool:
     AppleDouble files are always junk (macOS resource forks; never contain
     real audio). For other patterns, files with audio extensions are
     protected as a safety guard so we never accidentally delete content.
+
+    ``.DS_Store`` is exempted on macOS: Finder regenerates the file the
+    moment the enclosing folder is browsed, so cleanup is pointless churn.
+    On Linux / Windows / WSL the file is still detritus from a previous
+    macOS mount and worth removing.
     """
     name = path.name
     # AppleDouble: always junk, regardless of apparent extension.
@@ -66,6 +72,8 @@ def is_junk_file(path: Path) -> bool:
         return True
     # Safety guard for non-AppleDouble: don't touch audio.
     if path.suffix.lower() in AUDIO_EXTENSIONS:
+        return False
+    if name == ".DS_Store" and sys.platform == "darwin":
         return False
     if name in JUNK_FILENAMES:
         return True

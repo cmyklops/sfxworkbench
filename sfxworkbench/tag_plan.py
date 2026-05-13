@@ -6,6 +6,7 @@ import csv
 import hashlib
 import json
 import math
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -426,6 +427,7 @@ def build_tag_plan(
     target: str = "db",
     sources: list[str] | None = None,
     fields: list[str] | None = None,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
 ) -> TagPlan:
     """Build a reviewed DB-only tag plan from suggestions."""
     if target != "db":
@@ -449,6 +451,7 @@ def build_tag_plan(
             synonym_depth=synonym_depth,
             sources=sources,
             fields=fields,
+            progress_callback=progress_callback,
         )
     return _plan_from_suggestion_report(
         report,
@@ -672,12 +675,17 @@ def apply_tag_plan(
     log_path: Path | None = None,
     quiet: bool = False,
     target_paths: tuple[str, ...] | None = None,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
 ) -> TagApplyResult:
     """Apply approved tag plan entries into the DB-only accepted_tags table.
 
     ``target_paths`` (Tier 3.8): if given, only entries whose ``path`` is in
     this set are applied. The TUI passes the user's row selection through
     so an apply can be scoped to "just these files I picked".
+
+    ``progress_callback``: fires once per 100 entries so the TUI status
+    strip can advance a progress bar. Signature
+    ``(phase, completed, total, message)`` matches ``scan_action`` etc.
     """
     plan = load_tag_plan(plan_path)
     effective_db = db_path or Path(plan.db_path)
@@ -693,8 +701,13 @@ def apply_tag_plan(
     now = _now_iso()
     planned_values: dict[tuple[int, str], set[str]] = {}
     log_payload = None
+    total_entries = len(plan.entries)
+    if progress_callback is not None:
+        progress_callback("applying", 0, total_entries, f"Applying {total_entries:,} tag plan entrie(s)...")
     with connection(effective_db) as conn:
-        for entry in plan.entries:
+        for entry_index, entry in enumerate(plan.entries):
+            if progress_callback is not None and (entry_index % 100 == 0 or entry_index + 1 == total_entries):
+                progress_callback("applying", entry_index, total_entries, entry.path)
             if selection is not None and entry.path not in selection:
                 result.skipped += 1
                 continue

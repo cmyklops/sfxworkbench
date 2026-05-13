@@ -1,7 +1,9 @@
 """Tests for sfxworkbench.junk shared module."""
 
+import sys
 from pathlib import Path
 
+import pytest
 from sfxworkbench import junk
 
 
@@ -25,11 +27,30 @@ def test_is_junk_file_protects_real_audio() -> None:
 
 
 def test_is_junk_file_recognizes_known_junk() -> None:
-    assert junk.is_junk_file(Path("/x/.DS_Store"))
+    # .DS_Store is platform-conditional; covered separately below.
     assert junk.is_junk_file(Path("/x/Thumbs.db"))
     assert junk.is_junk_file(Path("/x/foo.reapeaks"))
     assert junk.is_junk_file(Path("/x/foo.sfk"))
     assert junk.is_junk_file(Path("/x/foo.wf"))
+
+
+def test_ds_store_excluded_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``.DS_Store`` is futile to clean on macOS — Finder regenerates it the
+    moment the enclosing folder is reopened. The cleanup pipeline should
+    skip it on Darwin so users don't see meaningless churn.
+    """
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert not junk.is_junk_file(Path("/x/.DS_Store"))
+
+
+def test_ds_store_still_junk_on_linux_and_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On Linux / Windows / WSL the file is leftover from a prior macOS mount
+    and worth removing — no Finder around to regenerate it.
+    """
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert junk.is_junk_file(Path("/x/.DS_Store"))
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert junk.is_junk_file(Path("/x/.DS_Store"))
 
 
 def test_is_junk_dir() -> None:

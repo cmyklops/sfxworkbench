@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -118,6 +118,12 @@ _LOW_VALUE_FOLDER_NAMES: frozenset[str] = frozenset(
 )
 
 _SEPARATOR_RE = re.compile(r"[\s._\-]+")
+# Tier post-feedback: SFX libraries often ship lowercase concatenated
+# compounds with a trailing catalog number (e.g. ``Afghanmeninteriorbusyc3401``).
+# Splitting on the digit boundary first surfaces the catalog number as its own
+# token, and ``wordninja`` (Viterbi dynamic-programming splitter over a built-in
+# word-frequency list) recovers ``afghan men interior busy`` from the compound.
+_DIGIT_BOUNDARY_RE = re.compile(r"(\d+)")
 _TRAILING_NUMBER_RE = re.compile(
     r"^(?P<base>.+?)(?:[\s._\-]*(?:take|tk)?[\s._\-]*)?(?P<number>\d{1,4})$",
     re.IGNORECASE,
@@ -189,9 +195,59 @@ def filter_suggestions(
     ]
 
 
+def _split_compound(token: str) -> list[str]:
+    """Recover words from a concatenated compound token.
+
+    SFX naming conventions frequently produce stems like
+    ``Afghanmeninteriorbusyc3401`` — descriptive words run together with a
+    trailing catalog number. The separator-only split leaves this as one
+    token, so the suggestion engine used to propose the entire compound as
+    a description.
+
+    Heuristics:
+    - Tokens shorter than 8 chars stay intact (``rain`` is one word, not
+      ``r ain``; ``AMB`` is an abbreviation handled downstream).
+    - Tokens in the abbreviation dictionary are left alone.
+    - Digit-boundary split first so ``busyc3401`` → ``busyc`` + ``3401``;
+      the number flows through the existing ``_TRAILING_NUMBER_RE`` logic.
+    - Lowercase + wordninja for the alphabetic part. ``Afghanmen`` and
+      ``afghanmen`` get the same treatment — the leading capital is just
+      title case, not a structure signal.
+    - Drop sub-tokens shorter than 3 chars (typically noise from
+      ambiguous splits, e.g. a stray ``c`` left over from a catalog code).
+    """
+    if token.upper() in _ABBREVIATIONS:
+        return [token]
+    digit_parts = [part for part in _DIGIT_BOUNDARY_RE.split(token) if part]
+    if len(digit_parts) > 1:
+        out: list[str] = []
+        for part in digit_parts:
+            if part.isdigit():
+                out.append(part)
+            else:
+                out.extend(_split_compound(part))
+        return out
+    if len(token) < 8 or not token.isalpha():
+        return [token]
+    import wordninja
+
+    pieces = [piece for piece in wordninja.split(token.lower()) if len(piece) >= 3]
+    return pieces or [token]
+
+
 def _tokenize(text: str) -> list[str]:
-    """Split a stem on common separators, drop empty tokens."""
-    return [token for token in _SEPARATOR_RE.split(text) if token]
+    """Split a stem on common separators, then word-split each remaining token.
+
+    ``_split_compound`` is a no-op for short, mixed-case, or abbreviation
+    tokens — so well-structured stems like ``AMB_RAIN_01`` pass through as
+    ``[AMB, RAIN, 01]`` while concatenated compounds get recovered.
+    """
+    out: list[str] = []
+    for token in _SEPARATOR_RE.split(text):
+        if not token:
+            continue
+        out.extend(_split_compound(token))
+    return out
 
 
 def _normalized_keyword_tokens(text: str) -> set[str]:
@@ -756,6 +812,7 @@ def build_tag_suggestion_report(
     sources: list[str] | None = None,
     fields: list[str] | None = None,
     confidence_profile: ConfidenceProfile | None = None,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
 ) -> TagSuggestionReport:
     """Walk the index for files under ``root`` and produce per-file suggestions."""
     if min_confidence < 0 or min_confidence > 1:
@@ -787,7 +844,11 @@ def build_tag_suggestion_report(
     files_with_suggestions = 0
     total_suggestions = 0
 
-    for row in rows:
+    total_rows = len(rows)
+    if progress_callback is not None:
+        progress_callback("suggesting", 0, total_rows, f"Processing {total_rows:,} indexed file(s)...")
+
+    for row_index, row in enumerate(rows):
         path = Path(row["path"])
         stem_raw = row["stem"] or path.stem
         stem = normalize_stem(stem_raw)
@@ -832,6 +893,15 @@ def build_tag_suggestion_report(
                 suggestions=all_suggestions,
             )
         )
+        # Report every 50 files to keep the TUI responsive without dominating
+        # this hot loop with callback overhead. Always report on the final row.
+        if progress_callback is not None and ((row_index + 1) % 50 == 0 or row_index + 1 == total_rows):
+            progress_callback(
+                "suggesting",
+                row_index + 1,
+                total_rows,
+                f"{row['filename']}",
+            )
 
     selected = entries if limit == 0 else entries[:limit]
 

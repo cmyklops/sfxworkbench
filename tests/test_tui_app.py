@@ -70,37 +70,84 @@ def test_tui_zero_count_review_states_display_clear() -> None:
     assert _finding_status("info", 0) == "info"
 
 
-def test_desktop_open_command_uses_windows_explorer() -> None:
+def test_desktop_open_command_reveals_via_windows_explorer() -> None:
     target = Path("C:/Users/Matt/Sounds/hit.wav")
 
-    assert _desktop_open_command(target, platform="win32") == ["explorer", str(target)]
     assert _desktop_open_command(target, reveal=True, platform="win32") == ["explorer", f"/select,{target}"]
 
 
-def test_desktop_open_command_uses_macos_open() -> None:
+def test_desktop_open_command_reveals_via_macos_open() -> None:
     target = Path("/Users/matt/Sounds/hit.wav")
 
-    assert _desktop_open_command(target, platform="darwin") == ["open", str(target)]
     assert _desktop_open_command(target, reveal=True, platform="darwin") == ["open", "-R", str(target)]
 
 
-def test_desktop_open_command_uses_xdg_open_when_available() -> None:
+def test_desktop_open_command_reveals_via_xdg_open() -> None:
     target = Path("/home/matt/Sounds/hit.wav")
 
     def fake_which(name: str) -> str | None:
         assert name == "xdg-open"
         return "/usr/bin/xdg-open"
 
-    assert _desktop_open_command(target, platform="linux", which=fake_which) == ["/usr/bin/xdg-open", str(target)]
     assert _desktop_open_command(target, reveal=True, platform="linux", which=fake_which) == [
         "/usr/bin/xdg-open",
         str(target.parent),
     ]
 
 
-def test_desktop_open_command_reports_no_linux_opener() -> None:
+def test_desktop_open_command_reveal_reports_no_linux_opener() -> None:
+    target = Path("/home/matt/Sounds/hit.wav")
+    assert _desktop_open_command(target, reveal=True, platform="linux", which=lambda _: None) == []
+
+
+def test_audition_uses_afplay_on_macos() -> None:
+    """Audition (non-reveal) routes through a CLI audio player to bypass
+    LaunchServices — otherwise ``.wav`` lands on Music.app on macOS.
+    """
+    target = Path("/Users/matt/Sounds/hit.wav")
+
+    assert _desktop_open_command(target, platform="darwin") == ["afplay", str(target)]
+
+
+def test_audition_uses_powershell_soundplayer_on_windows() -> None:
+    target = Path("C:/Users/Matt/Sounds/hit.wav")
+
+    command = _desktop_open_command(target, platform="win32")
+    assert command[0] == "powershell"
+    assert "-Command" in command
+    assert str(target) in command[-1]
+
+
+def test_audition_prefers_paplay_then_aplay_then_sox_play_on_linux() -> None:
+    """Linux probes for audio players in preference order. ``paplay`` (Pulse)
+    is preferred since it works on most modern desktops; ``aplay`` (ALSA)
+    is the next fallback; ``play`` (sox) closes out for systems without
+    either system audio stack installed.
+    """
     target = Path("/home/matt/Sounds/hit.wav")
 
+    def only(found: str) -> object:
+        def fake_which(name: str) -> str | None:
+            return f"/usr/bin/{name}" if name == found else None
+
+        return fake_which
+
+    assert _desktop_open_command(target, platform="linux", which=only("paplay")) == [
+        "/usr/bin/paplay",
+        str(target),
+    ]
+    assert _desktop_open_command(target, platform="linux", which=only("aplay")) == [
+        "/usr/bin/aplay",
+        str(target),
+    ]
+    assert _desktop_open_command(target, platform="linux", which=only("play")) == [
+        "/usr/bin/play",
+        str(target),
+    ]
+
+
+def test_audition_reports_no_linux_player() -> None:
+    target = Path("/home/matt/Sounds/hit.wav")
     assert _desktop_open_command(target, platform="linux", which=lambda _: None) == []
 
 

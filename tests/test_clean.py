@@ -11,10 +11,29 @@ def test_find_junk_detects_appledouble(tmp_library: Path) -> None:
     assert any(n.startswith("._") for n in names), "Should find AppleDouble files"
 
 
-def test_find_junk_detects_ds_store(tmp_library: Path) -> None:
+def test_find_junk_detects_ds_store(tmp_library: Path, monkeypatch) -> None:
+    """``.DS_Store`` is detected as junk on non-Darwin platforms.
+
+    On macOS the file is exempted (Finder regenerates it) — covered by
+    ``test_find_junk_skips_ds_store_on_macos`` below and the unit test
+    in ``test_junk.py``.
+    """
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "linux")
     junk_files, _ = find_junk(tmp_library)
     names = [f.name for f, _ in junk_files]
-    assert ".DS_Store" in names, "Should find .DS_Store files"
+    assert ".DS_Store" in names, "Should find .DS_Store files on non-macOS"
+
+
+def test_find_junk_skips_ds_store_on_macos(tmp_library: Path, monkeypatch) -> None:
+    """``.DS_Store`` is intentionally not flagged as junk on macOS."""
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    junk_files, _ = find_junk(tmp_library)
+    names = [f.name for f, _ in junk_files]
+    assert ".DS_Store" not in names, "Should not flag .DS_Store as junk on macOS"
 
 
 def test_find_junk_detects_wfcache_dir(tmp_library: Path) -> None:
@@ -55,7 +74,14 @@ def test_dry_run_makes_no_changes(tmp_library: Path) -> None:
     assert result.dry_run is True
 
 
-def test_apply_removes_junk(tmp_library: Path) -> None:
+def test_apply_removes_junk(tmp_library: Path, monkeypatch) -> None:
+    """Apply removes the full junk set on non-macOS platforms (.DS_Store
+    included). macOS skips .DS_Store per ``junk.is_junk_file`` — that
+    behavior is covered by the unit test in ``test_junk.py``.
+    """
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "linux")
     result = clean_library(tmp_library, dry_run=False)
     assert result.dry_run is False
 

@@ -317,6 +317,7 @@ def tag_plan_action(
     fields: list[str] | None = None,
     include_synonyms: bool = False,
     min_confidence: float = 0.8,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
 ) -> ActionResult:
     used_catalog = True
     try:
@@ -325,13 +326,14 @@ def tag_plan_action(
                 root,
                 db_path=db_path,
                 min_confidence=min_confidence,
-                limit=200,
+                limit=0,
                 use_ucs_catalog=True,
                 include_synonyms=include_synonyms,
                 synonym_limit=3 if include_synonyms else 0,
                 synonym_depth=2 if include_synonyms else 0,
                 sources=sources,
                 fields=fields,
+                progress_callback=progress_callback,
             )
         except ValueError as catalog_error:
             if "No UCS catalog loaded" not in str(catalog_error):
@@ -342,13 +344,14 @@ def tag_plan_action(
                 root,
                 db_path=db_path,
                 min_confidence=fallback_confidence,
-                limit=200,
+                limit=0,
                 use_ucs_catalog=False,
                 include_synonyms=include_synonyms,
                 synonym_limit=3 if include_synonyms else 0,
                 synonym_depth=2 if include_synonyms else 0,
                 sources=sources,
                 fields=fields,
+                progress_callback=progress_callback,
             )
         output = _ensure_report_dir(report_dir) / "metadata_tag_plan.json"
         write_tag_plan(plan, output, quiet=True)
@@ -389,6 +392,7 @@ def apply_tag_plan_action(
     report_dir: Path,
     *,
     target_paths: tuple[str, ...] | None = None,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
 ) -> ActionResult:
     """Apply the approved tag plan.
 
@@ -409,6 +413,7 @@ def apply_tag_plan_action(
             require_reviewed=True,
             quiet=True,
             target_paths=target_paths,
+            progress_callback=progress_callback,
         )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("tag_apply", e)

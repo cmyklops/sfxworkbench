@@ -183,16 +183,46 @@ def _desktop_open_command(
     platform: str = sys.platform,
     which: Callable[[str], str | None] = shutil.which,
 ) -> list[str]:
-    """Return a best-effort desktop file-browser command for the current OS."""
-    if platform == "darwin":
-        return ["open", "-R", str(target)] if reveal else ["open", str(target)]
-    if platform == "win32":
-        return ["explorer", f"/select,{target}"] if reveal else ["explorer", str(target)]
+    """Return a desktop command — Reveal-in-Finder/Explorer or Audition.
 
-    opener = which("xdg-open")
-    if opener is None:
-        return []
-    return [opener, str(target.parent if reveal else target)]
+    Reveal uses the OS file browser (``open -R`` / ``explorer /select`` /
+    ``xdg-open`` on the parent folder). Audition (``reveal=False``) plays
+    the file via a built-in audio CLI to avoid the LaunchServices route
+    that bounces ``.wav`` to Music.app on macOS:
+
+    - **macOS**: ``afplay`` — built-in, plays inline, no GUI app launches.
+    - **Linux**: prefer ``paplay`` → fall back to ``aplay`` → ``play`` (sox).
+      Probed at call time via ``shutil.which`` so we degrade gracefully.
+    - **Windows**: ``powershell -c (New-Object Media.SoundPlayer ...).PlaySync()``.
+
+    Returns ``[]`` if no playback tool is available on Linux — the caller
+    surfaces this as an action error.
+    """
+    if reveal:
+        if platform == "darwin":
+            return ["open", "-R", str(target)]
+        if platform == "win32":
+            return ["explorer", f"/select,{target}"]
+        opener = which("xdg-open")
+        if opener is None:
+            return []
+        return [opener, str(target.parent)]
+
+    # Audition path — play the audio without launching a GUI app.
+    if platform == "darwin":
+        return ["afplay", str(target)]
+    if platform == "win32":
+        return [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            f"(New-Object Media.SoundPlayer '{target}').PlaySync()",
+        ]
+    for tool in ("paplay", "aplay", "play"):
+        path = which(tool)
+        if path is not None:
+            return [path, str(target)]
+    return []
 
 
 def _state_token(state: str) -> Text:
@@ -512,6 +542,16 @@ def run_tui(
             background: #111a23;
             color: #9fb0c1;
         }
+        /* Tier post-feedback: history list + detail render side-by-side
+           rather than stacked. Each pane gets half the row width. */
+        .history-pair {
+            height: 1fr;
+            min-height: 16;
+        }
+        .history-pane {
+            width: 1fr;
+            padding-right: 1;
+        }
         """
 
         BINDINGS = [
@@ -533,6 +573,7 @@ def run_tui(
             # Tier 3.8: toggle selection on the focused files-table row; the
             # collected paths constrain subsequent apply actions.
             ("space", "toggle_file_selection", "Select"),
+            ("ctrl+a", "select_all_files", "Select all"),
             ("x", "clear_file_selection", "Clear selection"),
         ]
 
@@ -660,6 +701,28 @@ def run_tui(
             """Yield a ``Static`` pane-title followed by an empty ``DataTable``."""
             yield Static(title, classes="pane-title")
             yield DataTable(id=table_id)
+
+        def _titled_table_pair(
+            self,
+            left_title: str,
+            left_id: str,
+            right_title: str,
+            right_id: str,
+        ) -> ComposeResult:
+            """Yield two titled tables side-by-side in a horizontal split.
+
+            Used by every tab module for the History / History Detail pair so
+            the user sees the list and detail simultaneously rather than
+            scrolling between vertically-stacked panes. CSS sizes both panes
+            at ``1fr`` width so they share the row evenly.
+            """
+            with Horizontal(classes="history-pair"):
+                with Vertical(classes="history-pane"):
+                    yield Static(left_title, classes="pane-title")
+                    yield DataTable(id=left_id)
+                with Vertical(classes="history-pane"):
+                    yield Static(right_title, classes="pane-title")
+                    yield DataTable(id=right_id)
 
         def _scan_page(self) -> ComposeResult:
             from sfxworkbench.tui_screens import scan_tab
@@ -815,6 +878,41 @@ def run_tui(
             except NoMatches:
                 pass
             self._fill_status_strip()
+
+        def action_select_all_files(self) -> None:
+            """Add every currently-visible file row to the selection set.
+
+            "Visible" means the rows in ``self._file_rows`` — i.e. what's
+            currently rendered after any active search filter. We deliberately
+            don't expand to the entire 50k-row index because that would let
+            a stray Apply DB Tags target every file in the library through a
+            single keystroke. Users who want everything can clear the search
+            first.
+
+            Repaints all filename cells in place via ``update_cell_at`` to
+            avoid re-running the Files SQL.
+            """
+            if not self._file_rows:
+                return
+            self._selected_paths.update(row.path for row in self._file_rows)
+            from textual.coordinate import Coordinate
+
+            try:
+                table = self.query_one("#files-table", DataTable)
+                for index, row in enumerate(self._file_rows):
+                    try:
+                        table.update_cell_at(Coordinate(index, 0), "● " + row.filename)
+                    except Exception:
+                        self._fill_files()
+                        break
+            except NoMatches:
+                pass
+            self._fill_status_strip()
+            try:
+                cursor = self.query_one("#files-table", DataTable).cursor_row
+            except NoMatches:
+                cursor = None
+            self._show_file_detail(cursor)
 
         def action_open_command_palette(self) -> None:
             """``p`` binding — push the command palette (Tier 3.9 scaffolding)."""
@@ -1105,7 +1203,9 @@ def run_tui(
             def _h_metadata_plan() -> None:
                 root = self._root_path()
                 _start(
-                    "metadata_plan", "Generate Suggestions", lambda: tag_plan_action(root, db_path, self._report_dir)
+                    "metadata_plan",
+                    "Generate Suggestions",
+                    lambda: tag_plan_action(root, db_path, self._report_dir, progress_callback=pcb),
                 )
 
             handlers["metadata-plan"] = _h_metadata_plan
@@ -1115,7 +1215,9 @@ def run_tui(
                 _start(
                     "metadata_plan_synonyms",
                     "Generate Synonyms",
-                    lambda: tag_plan_action(root, db_path, self._report_dir, include_synonyms=True),
+                    lambda: tag_plan_action(
+                        root, db_path, self._report_dir, include_synonyms=True, progress_callback=pcb
+                    ),
                 )
 
             handlers["metadata-plan-synonyms"] = _h_metadata_plan_synonyms
@@ -1123,7 +1225,12 @@ def run_tui(
                 "metadata_apply",
                 "Apply DB Tags",
                 "This writes approved tag decisions into the SQLite index. Required first: Generate Suggestions, then Approve DB Tags.",
-                lambda: apply_tag_plan_action(db_path, self._report_dir, target_paths=self._selection_tuple()),
+                lambda: apply_tag_plan_action(
+                    db_path,
+                    self._report_dir,
+                    target_paths=self._selection_tuple(),
+                    progress_callback=pcb,
+                ),
             )
             handlers["metadata-approve"] = lambda: _start(
                 "metadata_approve",
@@ -1183,6 +1290,17 @@ def run_tui(
                 "Approve Permanent Delete",
                 lambda: approve_delete_plan_action(self._report_dir),
             )
+
+            # Tier post-feedback: expose Textual built-in themes via the
+            # command palette. Each handler flips ``App.theme`` (a reactive
+            # attribute) so the UI restyles immediately. The ``button_id``
+            # prefix encodes the theme name; default-arg ``n=name`` captures
+            # the loop variable per-iteration so each closure binds correctly.
+            from sfxworkbench.tui_screens.command_palette import THEME_BUTTON_IDS
+
+            for theme_button_id in THEME_BUTTON_IDS:
+                theme_name = theme_button_id.removeprefix("theme-")
+                handlers[theme_button_id] = lambda n=theme_name: setattr(self, "theme", n)
 
             return handlers
 
@@ -1659,6 +1777,12 @@ def run_tui(
             if self._selected_paths:
                 status.append("  selected: ", style="bold")
                 status.append(f"{len(self._selected_paths)} file(s)", style="magenta")
+                # Tier post-feedback discoverability: surface what the
+                # selection can be applied to so the user doesn't have to
+                # discover it by trial. Three apply actions read
+                # ``_selection_tuple()`` — list them inline.
+                status.append("  scoped applies: ", style="dim")
+                status.append("Apply DB Tags · Apply Dedupe · Apply Embedded Metadata", style="dim cyan")
             self.query_one("#status-strip", Static).update(status)
 
         def _fill_operation_strip(self) -> None:

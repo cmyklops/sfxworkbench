@@ -10,7 +10,16 @@ from sfxworkbench.rename import build_rename_plan
 from sfxworkbench.scan import scan_library
 
 
-def test_tmp_library_matches_basic_manifest(tmp_library: Path, tmp_db: Path) -> None:
+def test_tmp_library_matches_basic_manifest(tmp_library: Path, tmp_db: Path, monkeypatch) -> None:
+    """Pin the basic fixture's expected junk count under Linux semantics.
+
+    ``.DS_Store`` is platform-conditional junk (skipped on macOS — Finder
+    regenerates it). The manifest captures the canonical counts; force a
+    consistent platform here so the assertion is stable on any host.
+    """
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "linux")
     manifest = json.loads((Path(__file__).parent / "fixtures" / "library_basic_manifest.json").read_text())
 
     junk_files, junk_dirs = find_junk(tmp_library, quiet=True)

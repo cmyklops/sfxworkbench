@@ -40,8 +40,12 @@ def compose(app) -> ComposeResult:
         ("Apply Permanent Delete", "delete-apply", "error"),
     )
     yield DataTable(id="advanced-findings-table")
-    yield from app._titled_table("History", "advanced-reports-table")
-    yield from app._titled_table("History Detail", "advanced-report-detail-table")
+    yield from app._titled_table_pair(
+        "History",
+        "advanced-reports-table",
+        "History Detail",
+        "advanced-report-detail-table",
+    )
     yield from app._titled_table("Last Action", "action-result-table")
 
 

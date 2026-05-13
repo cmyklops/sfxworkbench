@@ -36,8 +36,12 @@ def compose(app) -> ComposeResult:
     yield DataTable(id="metadata-findings-table")
     yield Input(placeholder="Filter prioritized files (by filename or path)", id="metadata-search")
     yield from app._titled_table("Metadata Values - First 100 Prioritized Files", "metadata-rows-table")
-    yield from app._titled_table("History", "metadata-reports-table")
-    yield from app._titled_table("History Detail", "metadata-report-detail-table")
+    yield from app._titled_table_pair(
+        "History",
+        "metadata-reports-table",
+        "History Detail",
+        "metadata-report-detail-table",
+    )
 
 
 def fill(app) -> None:

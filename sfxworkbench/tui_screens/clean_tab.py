@@ -48,8 +48,12 @@ def compose(app) -> ComposeResult:
     )
     yield DataTable(id="clean-findings-table")
     yield from app._titled_table("Previewed Junk", "clean-items-table")
-    yield from app._titled_table("History", "clean-reports-table")
-    yield from app._titled_table("History Detail", "clean-report-detail-table")
+    yield from app._titled_table_pair(
+        "History",
+        "clean-reports-table",
+        "History Detail",
+        "clean-report-detail-table",
+    )
 
 
 def fill(app) -> None:
