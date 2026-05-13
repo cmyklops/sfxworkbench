@@ -767,6 +767,18 @@ def metadata_workbench_rows(
     like_sql, params = _like_filter_clause(("f.filename", "f.path"), query)
     conn = get_connection(db_path)
     try:
+        # Inlining one ``?`` per pending path overflowed SQLite's variable
+        # limit (~32k) on real libraries — the user hit 107k pending entries.
+        # Bulk-load the pending set into a temp table so the ORDER BY clause
+        # can ``IN (SELECT path FROM _pending_paths)`` without binding any
+        # placeholders for the path list itself.
+        conn.execute("CREATE TEMP TABLE IF NOT EXISTS _pending_paths (path TEXT PRIMARY KEY)")
+        conn.execute("DELETE FROM _pending_paths")
+        if pending_by_path:
+            conn.executemany(
+                "INSERT OR IGNORE INTO _pending_paths (path) VALUES (?)",
+                ((path,) for path in pending_by_path),
+            )
         rows = conn.execute(
             f"""
             WITH embedded AS (
@@ -858,7 +870,7 @@ def metadata_workbench_rows(
             WHERE 1 = 1 {like_sql}
             ORDER BY
                 CASE
-                    WHEN f.path IN ({",".join("?" for _ in pending_by_path) if pending_by_path else "NULL"}) THEN 0
+                    WHEN f.path IN (SELECT path FROM _pending_paths) THEN 0
                     WHEN COALESCE(a.accepted_tags, 0) > 0 THEN 1
                     WHEN COALESCE(e.embedded_fields, 0) > 0 THEN 2
                     ELSE 3
@@ -866,7 +878,7 @@ def metadata_workbench_rows(
                 f.path
             LIMIT ?
             """,
-            params + tuple(pending_by_path.keys()) + (limit,),
+            params + (limit,),
         ).fetchall()
         file_ids = tuple(int(row["id"]) for row in rows)
         embedded_items_by_id: dict[int, list[TagDisplayItem]] = {file_id: [] for file_id in file_ids}
