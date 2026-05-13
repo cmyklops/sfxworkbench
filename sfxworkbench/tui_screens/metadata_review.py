@@ -22,7 +22,6 @@ installed — handy for unit tests that exercise the pure helpers below.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -87,11 +86,10 @@ def build_review_queue(plan_path: Path, db_path: Path = DEFAULT_DB_PATH) -> list
     files produce an empty queue rather than raising, matching the TUI's
     other "no plan loaded" code paths.
     """
-    if not plan_path.exists():
-        return []
-    try:
-        payload = json.loads(plan_path.read_text())
-    except (OSError, json.JSONDecodeError):
+    from sfxworkbench.utils import load_plan_json_cached
+
+    payload = load_plan_json_cached(plan_path)
+    if payload is None:
         return []
 
     by_path: dict[str, list[TagCandidate]] = {}

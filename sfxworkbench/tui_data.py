@@ -722,10 +722,9 @@ def metadata_workbench_rows(
     """Return current/pending metadata state for the metadata workbench."""
     pending_by_path: dict[str, dict[str, int | set[str] | list[str] | list[TagDisplayItem]]] = {}
     if plan_path is not None and plan_path.exists():
-        try:
-            payload = json.loads(plan_path.read_text())
-        except json.JSONDecodeError:
-            payload = {}
+        from sfxworkbench.utils import load_plan_json_cached
+
+        payload = load_plan_json_cached(plan_path) or {}
         for entry in payload.get("entries", []):
             path = str(entry.get("path", ""))
             if not path:
@@ -1032,11 +1031,10 @@ def metadata_tag_change_rows(
     limit: int = 500,
 ) -> list[TagChangeRow]:
     """Return planned DB tag changes from the active metadata plan."""
-    if not plan_path.exists():
-        return []
-    try:
-        payload = json.loads(plan_path.read_text())
-    except json.JSONDecodeError:
+    from sfxworkbench.utils import load_plan_json_cached
+
+    payload = load_plan_json_cached(plan_path)
+    if payload is None:
         return []
 
     entries = list(payload.get("entries", []))
@@ -1885,10 +1883,9 @@ def file_detail(
     quoted_root = _quote_path(_command_root(db_path, library_path))
     proposed_rows: list[tuple[str, str]] = []
     if plan_path is not None and plan_path.exists():
-        try:
-            payload = json.loads(plan_path.read_text())
-        except json.JSONDecodeError:
-            payload = {}
+        from sfxworkbench.utils import load_plan_json_cached
+
+        payload = load_plan_json_cached(plan_path) or {}
         for entry in payload.get("entries", []):
             if str(entry.get("path", "")) != row["path"]:
                 continue

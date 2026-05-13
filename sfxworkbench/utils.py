@@ -81,3 +81,53 @@ def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> N
 def atomic_write_json(path: Path, value: Any) -> None:
     """Atomic counterpart to ``path.write_text(json_dumps(value), encoding="utf-8")``."""
     atomic_write_text(path, json_dumps(value))
+
+
+# Single-slot in-process cache for parsed plan JSON. Real-world plans hit
+# ~100MB on libraries with 139k+ tag entries; each ``json.loads`` of one is
+# multi-second + 2-3x peak memory. The TUI loads the same plan from at
+# least three places per Metadata-tab activation: the workbench rows
+# query, the review-screen mount, and the tag-change-rows panel. Caching
+# the parsed dict across those callers within a single session collapses
+# repeated work to a single load.
+#
+# Keyed on (path, mtime, size) so any rewrite invalidates automatically.
+# Single slot — overwriting on key mismatch keeps memory bounded.
+_PLAN_JSON_CACHE: dict[tuple[str, float, int], dict] = {}
+
+
+def _plan_signature(path: Path) -> tuple[str, float, int]:
+    """Cheap stat-only cache key for a plan JSON file."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return (str(path), 0.0, 0)
+    return (str(path), stat.st_mtime, stat.st_size)
+
+
+def load_plan_json_cached(path: Path) -> dict | None:
+    """Return parsed plan JSON as a dict, reusing the parse if the file is unchanged.
+
+    Returns ``None`` if the file doesn't exist or fails to parse — callers
+    should treat that the same as "no plan loaded" rather than raise, which
+    matches how the existing TUI data adapters handle missing plans.
+
+    The returned dict is shared with other callers in the same session; do
+    NOT mutate it in place. Read-only iteration is the only safe access.
+    """
+    if not path.exists():
+        return None
+    key = _plan_signature(path)
+    cached = _PLAN_JSON_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        parsed = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    # Single slot: evict everything else so memory stays bounded.
+    _PLAN_JSON_CACHE.clear()
+    _PLAN_JSON_CACHE[key] = parsed
+    return parsed
