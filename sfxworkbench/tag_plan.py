@@ -53,6 +53,12 @@ _SINGLE_VALUE_SENTINEL = "<single-value-field>"
 # growth against commit overhead — 1000 gave the most responsive cancel
 # without measurable slowdown on the synthetic 100k-entry benchmark.
 _COMMIT_CHUNK_SIZE = 1000
+# Run ``PRAGMA wal_checkpoint(TRUNCATE)`` after this many chunks. WAL grows
+# between SQLite's auto-checkpoints (default every 1000 pages); on apply
+# runs with hundreds of thousands of entries the WAL can hit GB scale on
+# slow disks before auto-checkpoint catches up. 10 chunks = every 10k
+# entries = at most ~100 checkpoints on a 1M-entry apply.
+_WAL_CHECKPOINT_EVERY_N_CHUNKS = 10
 
 
 def _now_iso() -> str:
@@ -721,18 +727,29 @@ def apply_tag_plan(
     now = _now_iso()
     planned_values: dict[tuple[int, str], set[str]] = {}
     log_payload = None
+    from sfxworkbench.utils import progress_interval
+
     total_entries = len(plan.entries)
+    report_every = progress_interval(total_entries)
     if progress_callback is not None:
         progress_callback("applying", 0, total_entries, f"Applying {total_entries:,} tag plan entrie(s)...")
+    chunks_since_checkpoint = 0
     with connection(effective_db) as conn:
         for entry_index, entry in enumerate(plan.entries):
-            if progress_callback is not None and (entry_index % 100 == 0 or entry_index + 1 == total_entries):
+            if progress_callback is not None and (entry_index % report_every == 0 or entry_index + 1 == total_entries):
                 progress_callback("applying", entry_index, total_entries, entry.path)
-            # Periodic checkpoint: commit pending work and check cancel.
-            # Cheap when nothing's pending (no-op commit); responsive when
-            # a 100k-entry apply needs to stop mid-flight.
+            # Periodic checkpoint: commit pending work, optionally truncate
+            # the WAL, and check cancel. Cheap when nothing's pending; keeps
+            # WAL size + cancel latency bounded on million-entry applies.
             if not dry_run and entry_index > 0 and entry_index % _COMMIT_CHUNK_SIZE == 0:
                 conn.commit()
+                chunks_since_checkpoint += 1
+                if chunks_since_checkpoint >= _WAL_CHECKPOINT_EVERY_N_CHUNKS:
+                    # TRUNCATE merges the WAL into the main DB and resets the
+                    # WAL file size. No concurrent readers during apply, so
+                    # the blocking property of TRUNCATE is irrelevant here.
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    chunks_since_checkpoint = 0
                 if cancel_requested is not None and cancel_requested():
                     result.cancelled = True
                     break

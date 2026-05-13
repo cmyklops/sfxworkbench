@@ -105,6 +105,24 @@ def _plan_signature(path: Path) -> tuple[str, float, int]:
     return (str(path), stat.st_mtime, stat.st_size)
 
 
+def progress_interval(total: int) -> int:
+    """Return the per-iteration interval at which progress should be reported.
+
+    Targets ~100 progress callbacks across the whole run regardless of total
+    size, so a 1M-entry apply doesn't spam the UI with 10k status updates
+    (each of which re-renders the Rich-formatted status strip). The result
+    stays at 1 for tiny runs so per-entry detail is preserved when there's
+    only a handful of items.
+
+    Callers should still poll ``cancel_requested`` at a tighter cadence —
+    the cancel callback is cheap and users want sub-second cancellation
+    response, but the visual progress bar doesn't need that frequency.
+    """
+    if total < 100:
+        return 1
+    return max(1, total // 100)
+
+
 def load_plan_json_cached(path: Path) -> dict | None:
     """Return parsed plan JSON as a dict, reusing the parse if the file is unchanged.
 

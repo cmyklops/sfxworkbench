@@ -854,7 +854,10 @@ def build_tag_suggestion_report(
     files_with_suggestions = 0
     total_suggestions = 0
 
+    from sfxworkbench.utils import progress_interval
+
     total_rows = len(rows)
+    report_every = progress_interval(total_rows)
     if progress_callback is not None:
         progress_callback("suggesting", 0, total_rows, f"Processing {total_rows:,} indexed file(s)...")
 
@@ -903,9 +906,10 @@ def build_tag_suggestion_report(
                 suggestions=all_suggestions,
             )
         )
-        # Report every 50 files to keep the TUI responsive without dominating
-        # this hot loop with callback overhead. Always report on the final row.
-        if progress_callback is not None and ((row_index + 1) % 50 == 0 or row_index + 1 == total_rows):
+        # Report at the log-scaled interval so a 1M-file suggestion run
+        # doesn't fire 20k status updates. Always report the final row so
+        # the bar lands at 100%.
+        if progress_callback is not None and ((row_index + 1) % report_every == 0 or row_index + 1 == total_rows):
             progress_callback(
                 "suggesting",
                 row_index + 1,

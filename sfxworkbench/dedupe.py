@@ -312,11 +312,14 @@ def apply_dedupe_plan(
     # Tier 3.8: scope quarantine to selected files when the TUI passes them.
     # Only entries whose path is in the selection are touched.
     selection: frozenset[str] | None = frozenset(target_paths) if target_paths is not None else None
+    from sfxworkbench.utils import progress_interval
+
     # Count up-front so progress reporting has a meaningful denominator.
     total_remove_entries = sum(
         1 for group in plan.get("groups", []) for entry in group if entry.get("action") == "remove"
     )
     processed_entries = 0
+    report_every = progress_interval(total_remove_entries)
     if progress_callback is not None:
         progress_callback("applying", 0, total_remove_entries, f"Quarantining {total_remove_entries:,} duplicate(s)...")
     rules = build_preservation_rules(
@@ -345,15 +348,15 @@ def apply_dedupe_plan(
         for entry in group:
             if entry["action"] != "remove":
                 continue
-            # Poll cancel + report progress every 50 candidates so the TUI
-            # status strip animates and Request Cancel is responsive on
-            # quarantine plans with tens of thousands of entries.
+            # Cancel polled every 50 entries (cheap, sub-second response).
+            # Progress reported at the log-scaled interval so a 100k-entry
+            # quarantine doesn't fire 2k status updates.
             if processed_entries > 0 and processed_entries % 50 == 0:
-                if progress_callback is not None:
-                    progress_callback("applying", processed_entries, total_remove_entries, entry.get("path", ""))
                 if cancel_requested is not None and cancel_requested():
                     cancelled = True
                     break
+            if progress_callback is not None and processed_entries > 0 and processed_entries % report_every == 0:
+                progress_callback("applying", processed_entries, total_remove_entries, entry.get("path", ""))
             processed_entries += 1
             if selection is not None and entry["path"] not in selection:
                 # Mirror the other Tier 3.8 executors: count selection-skipped

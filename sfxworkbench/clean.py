@@ -185,7 +185,10 @@ def clean_library(
 
     cancelled = False
     if not dry_run:
+        from sfxworkbench.utils import progress_interval
+
         total = len(junk_files) + len(junk_dirs)
+        report_every = progress_interval(total)
         completed = 0
         for f, _ in junk_files:
             try:
@@ -194,7 +197,7 @@ def clean_library(
                 if not quiet:
                     console.print(f"[red]Error removing {f}: {e}[/red]")
             completed += 1
-            if progress_callback is not None:
+            if progress_callback is not None and (completed % report_every == 0 or completed == total):
                 progress_callback("cleaning", completed, total, f"Removed {f.name}")
             # Cancellation poll: every 50 file deletes (cheap individually)
             # so a tens-of-thousands-of-DS_Store-siblings cleanup is responsive.
@@ -209,7 +212,7 @@ def clean_library(
                     if not quiet:
                         console.print(f"[red]Error removing {d}: {e}[/red]")
                 completed += 1
-                if progress_callback is not None:
+                if progress_callback is not None and (completed % report_every == 0 or completed == total):
                     progress_callback("cleaning", completed, total, f"Removed {d.name}")
                 if completed % 50 == 0 and cancel_requested is not None and cancel_requested():
                     cancelled = True

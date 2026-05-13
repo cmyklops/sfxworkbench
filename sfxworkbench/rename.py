@@ -395,17 +395,20 @@ def apply_rename_plan(
     applied: list[RenameEntry] = []
     root = Path(plan.root)
 
+    from sfxworkbench.utils import progress_interval
+
     total_entries = len(plan.entries)
+    report_every = progress_interval(total_entries)
     if progress_callback is not None:
         progress_callback("renaming", 0, total_entries, f"Renaming {total_entries:,} file(s)...")
     cancelled = False
     for entry_index, entry in enumerate(plan.entries):
         if entry_index > 0 and entry_index % 50 == 0:
-            if progress_callback is not None:
-                progress_callback("renaming", entry_index, total_entries, entry.old_path)
             if cancel_requested is not None and cancel_requested():
                 cancelled = True
                 break
+        if progress_callback is not None and entry_index > 0 and entry_index % report_every == 0:
+            progress_callback("renaming", entry_index, total_entries, entry.old_path)
         if selection is not None and entry.old_path not in selection:
             result.skipped += 1
             continue

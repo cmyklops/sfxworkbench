@@ -7,7 +7,30 @@ import os
 from pathlib import Path
 
 import pytest
-from sfxworkbench.utils import atomic_write_json, atomic_write_text, fmt_bytes, json_dumps
+from sfxworkbench.utils import atomic_write_json, atomic_write_text, fmt_bytes, json_dumps, progress_interval
+
+
+def test_progress_interval_keeps_full_detail_for_small_runs() -> None:
+    """Runs under 100 entries report every iteration — per-item detail
+    matters more than callback throttling at that scale.
+    """
+    assert progress_interval(0) == 1
+    assert progress_interval(1) == 1
+    assert progress_interval(99) == 1
+
+
+def test_progress_interval_scales_to_keep_callback_count_bounded() -> None:
+    """The interval grows linearly with total so callbacks fire ~100 times
+    regardless of run size. A 1M-entry apply would otherwise emit 10k status
+    updates at the old fixed-100 interval.
+    """
+    assert progress_interval(1000) == 10
+    assert progress_interval(10_000) == 100
+    assert progress_interval(100_000) == 1_000
+    assert progress_interval(1_000_000) == 10_000
+    # Sanity: at the user's existing 139k plan the bar still fires often
+    # enough to feel responsive (one update every ~1390 entries).
+    assert 1000 <= progress_interval(139_448) <= 2000
 
 
 def test_fmt_bytes_b() -> None:

@@ -685,18 +685,22 @@ def build_metadata_write_plan(
     if limit:
         rows = rows[:limit]
 
+    from sfxworkbench.utils import progress_interval
+
     entries: list[MetadataWritePlanEntry] = []
     total_rows = len(rows)
+    plan_report_every = progress_interval(total_rows)
     if progress_callback is not None:
         progress_callback("probing", 0, total_rows, f"Probing {total_rows:,} accepted-tag row(s)...")
     for entry_id, row in enumerate(rows, start=1):
         # Per-row work: a Mutagen open + namespace lookup. Cheap-but-not-free.
-        # Report every 50, poll cancel at the same boundary.
+        # Cancel polled every 50 for sub-second response; progress reported
+        # at the log-scaled interval.
         if entry_id > 1 and entry_id % 50 == 0:
-            if progress_callback is not None:
-                progress_callback("probing", entry_id, total_rows, row["path"])
             if cancel_requested is not None and cancel_requested():
                 break
+        if progress_callback is not None and entry_id > 1 and entry_id % plan_report_every == 0:
+            progress_callback("probing", entry_id, total_rows, row["path"])
         entry_backend, target_namespace, target_key, action, supported = _target_for_row(
             row["field"], row["extension"] or "", backend
         )
@@ -1171,24 +1175,27 @@ def apply_metadata_write_plan(
         errors=list(preview.errors),
     )
 
+    from sfxworkbench.utils import progress_interval
+
     selection: frozenset[str] | None = frozenset(target_paths) if target_paths is not None else None
     conn = get_connection(effective_db) if not dry_run else None
     total_commands = len(preview.commands)
+    report_every = progress_interval(total_commands)
     if progress_callback is not None:
         progress_callback("writing", 0, total_commands, f"Writing metadata for {total_commands:,} file(s)...")
     cancelled = False
     try:
         for command_index, command in enumerate(preview.commands):
             # Each metadata write is expensive (MD5, copy backup, mutagen
-            # write, readback verify). Report progress + poll cancel every
-            # 10 commands — cheaper interval than the 50/100 used for SQL
-            # loops because per-iteration cost is so much higher.
+            # write, readback verify). Cancel polled every 10 commands for
+            # sub-second response; progress reported at the log-scaled
+            # interval to avoid spamming the UI on six-figure plans.
             if command_index > 0 and command_index % 10 == 0:
-                if progress_callback is not None:
-                    progress_callback("writing", command_index, total_commands, command.path)
                 if cancel_requested is not None and cancel_requested():
                     cancelled = True
                     break
+            if progress_callback is not None and command_index > 0 and command_index % report_every == 0:
+                progress_callback("writing", command_index, total_commands, command.path)
             if selection is not None and command.path not in selection:
                 # Tier 3.8: count selection-filtered commands toward
                 # ``result.skipped`` so the apply diagnostic balances —
