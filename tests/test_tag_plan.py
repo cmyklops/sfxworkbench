@@ -323,6 +323,83 @@ def test_apply_tag_plan_partial_interruption_is_recoverable(tmp_path: Path, tmp_
     assert after[0] == 1
 
 
+def test_apply_tag_plan_honors_cancel_requested(tmp_path: Path, tmp_db: Path, monkeypatch) -> None:
+    """``cancel_requested`` polled at chunk boundaries breaks the apply loop.
+
+    Originally the loop ran as a single transaction committed once at the
+    end — "Request Cancel" did nothing on a 100k-entry plan. Now commits
+    chunk every ``_COMMIT_CHUNK_SIZE`` entries and the cancel callback is
+    polled at each boundary. Already-committed chunks survive; re-running
+    the plan converges via the ``ON CONFLICT … DO UPDATE`` upsert.
+    """
+    from sfxworkbench import tag_plan as tag_plan_module
+
+    # Tiny chunk size so the test can exercise a chunk boundary without
+    # building 1000+ fixture entries.
+    monkeypatch.setattr(tag_plan_module, "_COMMIT_CHUNK_SIZE", 2)
+
+    audio_a = tmp_path / "AMB_RAIN_A.wav"
+    audio_b = tmp_path / "AMB_RAIN_B.wav"
+    audio_c = tmp_path / "AMB_RAIN_C.wav"
+    for index, audio in enumerate((audio_a, audio_b, audio_c), start=300):
+        audio.write_bytes(b"x")
+        _seed_files_row(
+            tmp_db,
+            file_id=index,
+            path=audio,
+            mtime=audio.stat().st_mtime,
+            size=audio.stat().st_size,
+            md5="0" * 32,
+        )
+
+    # Build a three-entry plan by stitching three single-entry plans.
+    plans = [
+        _make_plan_from_suggestion(
+            tmp_path / f"plan_{i}", file_id=300 + i, path=audio, field="description", value=f"v{i}"
+        )
+        for i, audio in enumerate((audio_a, audio_b, audio_c))
+    ]
+    combined = json.loads(plans[0].read_text())
+    next_entries = []
+    for offset, plan_path in enumerate(plans[1:], start=2):
+        plan_data = json.loads(plan_path.read_text())
+        for entry in plan_data["entries"]:
+            entry["entry_id"] = offset
+            next_entries.append(entry)
+        offset += 1
+    combined["entries"].extend(next_entries)
+    combined["summary"]["candidate_entries"] = len(combined["entries"])
+    combined["summary"]["add_entries"] = len(combined["entries"])
+    plan_path = tmp_path / "combined_plan.json"
+    plan_path.write_text(json.dumps(combined))
+
+    # Cancel as soon as the loop polls — should fire after the first chunk
+    # (entries 0,1) commits.
+    cancel_calls = {"n": 0}
+
+    def cancel() -> bool:
+        cancel_calls["n"] += 1
+        return True
+
+    result = apply_tag_plan(
+        plan_path,
+        db_path=tmp_db,
+        dry_run=False,
+        require_reviewed=True,
+        quiet=True,
+        cancel_requested=cancel,
+    )
+
+    assert result.cancelled is True
+    assert cancel_calls["n"] >= 1
+    # The first chunk (entries 0, 1) committed before cancel fired; entry 2 did not.
+    assert result.applied == 2
+
+    with connection(tmp_db) as conn:
+        applied_rows = conn.execute("SELECT file_id FROM accepted_tags ORDER BY file_id").fetchall()
+    assert [row[0] for row in applied_rows] == [300, 301]
+
+
 def test_apply_tag_plan_dry_run_idempotent(tmp_path: Path, tmp_db: Path) -> None:
     """Dry-run apply is also idempotent — counts match across consecutive runs."""
     audio = tmp_path / "AMB_RAIN_02.wav"

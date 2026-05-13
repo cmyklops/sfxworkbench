@@ -49,6 +49,10 @@ _VALID_REVIEW_STATES = {"approved", "rejected", "pending"}
 # Sentinel used as the per-file dedup key for single-value fields, where any
 # already-planned value blocks further adds regardless of the new value.
 _SINGLE_VALUE_SENTINEL = "<single-value-field>"
+# Apply loop commits + polls cancel every N entries. Balances WAL/journal
+# growth against commit overhead — 1000 gave the most responsive cancel
+# without measurable slowdown on the synthetic 100k-entry benchmark.
+_COMMIT_CHUNK_SIZE = 1000
 
 
 def _now_iso() -> str:
@@ -676,6 +680,7 @@ def apply_tag_plan(
     quiet: bool = False,
     target_paths: tuple[str, ...] | None = None,
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> TagApplyResult:
     """Apply approved tag plan entries into the DB-only accepted_tags table.
 
@@ -686,6 +691,21 @@ def apply_tag_plan(
     ``progress_callback``: fires once per 100 entries so the TUI status
     strip can advance a progress bar. Signature
     ``(phase, completed, total, message)`` matches ``scan_action`` etc.
+
+    ``cancel_requested``: polled every ``_COMMIT_CHUNK_SIZE`` entries. When
+    it returns True the loop commits pending work and exits early with
+    ``result.cancelled = True``. Mid-stream cancellation preserves the
+    chunks already committed — re-running converges via the
+    ``ON CONFLICT … DO UPDATE`` upsert in the INSERT below.
+
+    Transaction shape: pre-feedback this ran as a single transaction
+    committed once at the end, giving an all-or-nothing rollback on
+    interruption. On real libraries that strategy ballooned the SQLite
+    WAL on 100k+ entry plans and left ``Request Cancel`` doing nothing.
+    Commits now run every ``_COMMIT_CHUNK_SIZE`` entries so cancellation
+    is responsive and WAL growth is bounded; per-entry atomicity is
+    unchanged because each ``INSERT … ON CONFLICT … DO UPDATE`` is its
+    own logical unit and the upsert makes a re-run idempotent.
     """
     plan = load_tag_plan(plan_path)
     effective_db = db_path or Path(plan.db_path)
@@ -708,6 +728,14 @@ def apply_tag_plan(
         for entry_index, entry in enumerate(plan.entries):
             if progress_callback is not None and (entry_index % 100 == 0 or entry_index + 1 == total_entries):
                 progress_callback("applying", entry_index, total_entries, entry.path)
+            # Periodic checkpoint: commit pending work and check cancel.
+            # Cheap when nothing's pending (no-op commit); responsive when
+            # a 100k-entry apply needs to stop mid-flight.
+            if not dry_run and entry_index > 0 and entry_index % _COMMIT_CHUNK_SIZE == 0:
+                conn.commit()
+                if cancel_requested is not None and cancel_requested():
+                    result.cancelled = True
+                    break
             if selection is not None and entry.path not in selection:
                 result.skipped += 1
                 continue

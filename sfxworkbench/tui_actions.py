@@ -393,12 +393,17 @@ def apply_tag_plan_action(
     *,
     target_paths: tuple[str, ...] | None = None,
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> ActionResult:
     """Apply the approved tag plan.
 
     ``target_paths`` (Tier 3.8): if given, only plan entries whose path is in
     this set are applied. Used by the TUI to scope an apply to the user's
     Files-tab selection.
+
+    ``cancel_requested``: polled by the executor every ``_COMMIT_CHUNK_SIZE``
+    entries. Cancellation preserves already-committed chunks; re-running the
+    same plan converges via the ``ON CONFLICT … DO UPDATE`` upsert.
     """
     plan_path = report_dir / "metadata_tag_plan.json"
     if not plan_path.exists():
@@ -414,15 +419,18 @@ def apply_tag_plan_action(
             quiet=True,
             target_paths=target_paths,
             progress_callback=progress_callback,
+            cancel_requested=cancel_requested,
         )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("tag_apply", e)
     errors = _result_errors(result)
     scope_note = f" (scoped to {len(target_paths)} selected file(s))" if target_paths else ""
+    cancel_note = " — cancelled mid-apply, partial commits preserved" if result.cancelled else ""
+    status = "cancelled" if result.cancelled else ("applied" if not errors else "error")
     return ActionResult(
         action="tag_apply",
-        status="applied" if not errors else "error",
-        message=f"Applied {result.applied:,} DB-only metadata tag(s), skipped {result.skipped:,}.{scope_note}",
+        status=status,
+        message=f"Applied {result.applied:,} DB-only metadata tag(s), skipped {result.skipped:,}.{scope_note}{cancel_note}",
         output_path=result.log_path,
         errors=errors,
         refresh=("metadata", "files", "reports"),

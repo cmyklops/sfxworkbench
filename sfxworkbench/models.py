@@ -1371,6 +1371,7 @@ class TagApplyResult(BaseModel):
     dry_run: bool = True
     target: str = "db"
     log_path: str | None = None
+    cancelled: bool = False  # set when the cancel_requested callback fires mid-loop
 
 
 class TagSidecarTag(BaseModel):

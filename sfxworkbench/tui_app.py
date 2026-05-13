@@ -1230,6 +1230,7 @@ def run_tui(
                     self._report_dir,
                     target_paths=self._selection_tuple(),
                     progress_callback=pcb,
+                    cancel_requested=cancel,
                 ),
             )
             handlers["metadata-approve"] = lambda: _start(
