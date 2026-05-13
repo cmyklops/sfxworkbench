@@ -59,13 +59,49 @@ def _quarantine_target(path: Path, quarantine_dir: Path) -> Path:
         i += 1
 
 
+# Single-slot cache for ``find_duplicates`` keyed on a cheap DB-mutation
+# signature: (main db mtime, WAL mtime, WAL size). On a 50k-file library the
+# GROUP BY MD5 query is a few hundred ms — fine in isolation, but on the
+# Dedupe tab it ran on every search-input keystroke debounce. Now it runs
+# at most once per DB write, with subsequent reads short-circuiting the cache.
+_FIND_DUPLICATES_CACHE: dict[tuple[str, float, float, int], list[DedupeGroup]] = {}
+
+
+def _db_mutation_signature(db_path: Path) -> tuple[float, float, int]:
+    """Return a cheap (stat-only) signal that changes after any DB write.
+
+    SQLite in WAL mode writes commits to the ``-wal`` sidecar; the main DB
+    file's mtime only updates during checkpoint. Checking both files'
+    mtimes plus the WAL size catches every commit without opening a
+    connection. Returns zeros if the DB doesn't exist yet.
+    """
+    try:
+        main_stat = db_path.stat()
+    except OSError:
+        return (0.0, 0.0, 0)
+    wal_path = db_path.with_name(db_path.name + "-wal")
+    if wal_path.exists():
+        wal_stat = wal_path.stat()
+        return (main_stat.st_mtime, wal_stat.st_mtime, wal_stat.st_size)
+    return (main_stat.st_mtime, 0.0, 0)
+
+
 def find_duplicates(db_path: Path) -> list[DedupeGroup]:
     """Query the index for files grouped by MD5 where count > 1.
 
     Uses `json_group_array` so paths are returned as a proper JSON array — no
     fragile ad-hoc separator. Sorted within each group by path for
     deterministic ordering, so the same plan is generated on every run.
+
+    Results are cached per ``(db_path, mutation-signature)``. Any DB write
+    invalidates by changing the WAL signature; the next call recomputes.
     """
+    signature = _db_mutation_signature(db_path)
+    cache_key = (str(db_path), *signature)
+    cached = _FIND_DUPLICATES_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     conn = get_connection(db_path)
     rows = conn.execute(
         """
@@ -97,6 +133,10 @@ def find_duplicates(db_path: Path) -> list[DedupeGroup]:
                 files=files,
             )
         )
+    # Single-slot cache: evict every other entry so memory doesn't grow
+    # with the number of distinct DB paths a session sees.
+    _FIND_DUPLICATES_CACHE.clear()
+    _FIND_DUPLICATES_CACHE[cache_key] = groups
     return groups
 
 

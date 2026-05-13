@@ -181,6 +181,15 @@ def build_metadata_review_screen(plan_path: Path, *, db_path: Path = DEFAULT_DB_
             # same field are reviewed independently. Fixes the P2 bug where
             # two ``keyword`` candidates on one file would flip together.
             self._approvals: dict[tuple[str, str, str], str] = {}
+            # Cache of (pending, approved, rejected) per path. On a real-world
+            # plan with tens of thousands of files, the previous behavior
+            # recomputed all counts and rebuilt the whole left table on every
+            # approve/reject keystroke — multi-second lag per press. With the
+            # cache + ``_refresh_file_row`` we only touch the changed row.
+            self._counts_by_path: dict[str, list[int]] = {}
+            # Path → row index in the files DataTable. Same purpose: surgical
+            # cell updates instead of a full ``table.clear(); add_row x N``.
+            self._row_index_by_path: dict[str, int] = {}
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=False)
@@ -214,14 +223,61 @@ def build_metadata_review_screen(plan_path: Path, *, db_path: Path = DEFAULT_DB_
             return current.candidates[self.candidate_cursor]
 
         def _refresh_files(self) -> None:
+            """Build the left files table from scratch.
+
+            Populates ``_counts_by_path`` and ``_row_index_by_path`` so
+            subsequent approve/reject can update a single row via
+            ``_refresh_file_row`` rather than rebuilding everything.
+            """
             table = self.query_one("#review-files-table", DataTable)
             table.clear(columns=True)
             table.add_columns("File", "Pending", "Approved", "Rejected")
-            for item in self.items:
-                pending = sum(1 for c in item.candidates if self._effective_status(item.path, c) == "pending")
-                approved = sum(1 for c in item.candidates if self._effective_status(item.path, c) == "approved")
-                rejected = sum(1 for c in item.candidates if self._effective_status(item.path, c) == "rejected")
+            self._counts_by_path.clear()
+            self._row_index_by_path.clear()
+            for row_index, item in enumerate(self.items):
+                pending = approved = rejected = 0
+                for candidate in item.candidates:
+                    status = self._effective_status(item.path, candidate)
+                    if status == "pending":
+                        pending += 1
+                    elif status == "approved":
+                        approved += 1
+                    elif status == "rejected":
+                        rejected += 1
+                self._counts_by_path[item.path] = [pending, approved, rejected]
+                self._row_index_by_path[item.path] = row_index
                 table.add_row(item.filename, str(pending), str(approved), str(rejected))
+
+        def _refresh_file_row(self, path: str, previous_status: str, new_status: str) -> None:
+            """Update a single file row's pending/approved/rejected cells in place.
+
+            Replaces the previous "rebuild every row on every keystroke"
+            approach that took multi-second hits on 30k+-file plans.
+            """
+            counts = self._counts_by_path.get(path)
+            row_index = self._row_index_by_path.get(path)
+            if counts is None or row_index is None:
+                # Fallback: a row we don't have cached — full rebuild.
+                self._refresh_files()
+                return
+            # Adjust the counter buckets by the status transition.
+            _status_index = {"pending": 0, "approved": 1, "rejected": 2}
+            if previous_status in _status_index:
+                counts[_status_index[previous_status]] = max(0, counts[_status_index[previous_status]] - 1)
+            if new_status in _status_index:
+                counts[_status_index[new_status]] += 1
+            from textual.coordinate import Coordinate
+
+            table = self.query_one("#review-files-table", DataTable)
+            try:
+                # Columns: 0=File, 1=Pending, 2=Approved, 3=Rejected.
+                table.update_cell_at(Coordinate(row_index, 1), str(counts[0]))
+                table.update_cell_at(Coordinate(row_index, 2), str(counts[1]))
+                table.update_cell_at(Coordinate(row_index, 3), str(counts[2]))
+            except Exception:
+                # If Textual's coordinate addressing fails for any reason,
+                # fall back to the full rebuild — slow but correct.
+                self._refresh_files()
 
         def _refresh_candidates(self) -> None:
             table = self.query_one("#review-candidates-table", DataTable)
@@ -255,8 +311,9 @@ def build_metadata_review_screen(plan_path: Path, *, db_path: Path = DEFAULT_DB_
             candidate = self._current_candidate()
             if current is None or candidate is None:
                 return
+            previous_status = self._effective_status(current.path, candidate)
             self._approvals[self._approval_key(current.path, candidate)] = "approved"
-            self._refresh_files()
+            self._refresh_file_row(current.path, previous_status, "approved")
             self._refresh_candidates()
 
         def action_reject(self) -> None:
@@ -264,16 +321,26 @@ def build_metadata_review_screen(plan_path: Path, *, db_path: Path = DEFAULT_DB_
             candidate = self._current_candidate()
             if current is None or candidate is None:
                 return
+            previous_status = self._effective_status(current.path, candidate)
             self._approvals[self._approval_key(current.path, candidate)] = "rejected"
-            self._refresh_files()
+            self._refresh_file_row(current.path, previous_status, "rejected")
             self._refresh_candidates()
 
         def action_skip(self) -> None:
             current = self._current_file()
             if current is None:
                 return
+            # Track only candidates whose status actually transitions to
+            # "skipped" so the counter delta is accurate.
+            transitions: list[tuple[str, str]] = []
             for candidate in current.candidates:
-                self._approvals.setdefault(self._approval_key(current.path, candidate), "skipped")
+                key = self._approval_key(current.path, candidate)
+                previous = self._approvals.get(key, candidate.status)
+                self._approvals.setdefault(key, "skipped")
+                if previous != "skipped":
+                    transitions.append((previous, "skipped"))
+            for previous_status, new_status in transitions:
+                self._refresh_file_row(current.path, previous_status, new_status)
             self.action_next_file()
 
         def action_next_file(self) -> None:
