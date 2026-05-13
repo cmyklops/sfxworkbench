@@ -192,6 +192,18 @@ def _shared_counts(a: _FolderStats, b: _FolderStats) -> tuple[int, int]:
     return shared_files, shared_bytes
 
 
+_HIGH_FANOUT_THRESHOLD = 25
+"""A single MD5 in more than this many folders is treated as noise (common
+stock samples, license files, etc.) rather than evidence of pack overlap.
+
+Skipping these hashes prevents the O(k²) pair explosion when the audit hits
+a hash that appears across hundreds of folders — pair generation for a
+50-folder hash is 1225 pairs; for 100 folders it's 4950; for 500 folders
+it's 124,750. Real pack overlap shows up via the many *other* hashes those
+folders share, so the signal is unaffected by dropping high-fanout ones.
+"""
+
+
 def _overlap_candidates(
     candidates: list[_FolderStats],
     threshold: float,
@@ -206,6 +218,12 @@ def _overlap_candidates(
     candidate_pairs: set[tuple[str, str]] = set()
     folder_by_path = {str(folder.path): folder for folder in candidates}
     for folders in by_hash.values():
+        # Cap fanout per hash: a single MD5 spreading across N folders gives
+        # N*(N-1)/2 pairs, and on real libraries N can hit the hundreds for
+        # stock content. Pack overlap is evidenced by *many* shared hashes
+        # between two folders, so dropping the noisy ones is signal-safe.
+        if len(folders) > _HIGH_FANOUT_THRESHOLD:
+            continue
         for a, b in combinations(sorted(folders, key=lambda folder: str(folder.path)), 2):
             if _is_relative_to(a.path, b.path) or _is_relative_to(b.path, a.path):
                 continue
