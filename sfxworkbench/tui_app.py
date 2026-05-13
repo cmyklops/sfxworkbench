@@ -1277,7 +1277,13 @@ def run_tui(
                 _start(
                     "metadata_write_plan",
                     "Plan Embedded Metadata",
-                    lambda: build_embedded_metadata_plan_action(root, db_path, self._report_dir),
+                    lambda: build_embedded_metadata_plan_action(
+                        root,
+                        db_path,
+                        self._report_dir,
+                        progress_callback=pcb,
+                        cancel_requested=cancel,
+                    ),
                 )
 
             handlers["metadata-write-plan"] = _h_metadata_write_plan

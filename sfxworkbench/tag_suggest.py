@@ -827,8 +827,18 @@ def build_tag_suggestion_report(
     field_filters = normalize_filter_values(fields, option_name="--field")
 
     root = root.resolve()
+    # Surface the prep phase explicitly — these two queries each pull every
+    # in-scope file from the DB (and ``_build_group_index`` runs the audit
+    # itself). On a 50k-file library they're several seconds combined and
+    # the UI used to show nothing.
+    if progress_callback is not None:
+        progress_callback("loading", 0, None, "Loading indexed files...")
     rows = _load_files(root, db_path)
+    if progress_callback is not None:
+        progress_callback("loading", len(rows), len(rows), f"Loaded {len(rows):,} file(s); building group index...")
     group_index = _build_group_index(root, db_path)
+    if progress_callback is not None:
+        progress_callback("loading", len(rows), len(rows), "Loaded group index. Loading UCS catalog...")
     catalog: UcsCatalog | None = None
     resolved_catalog_path: Path | None = None
     if use_ucs_catalog or ucs_catalog_path is not None:

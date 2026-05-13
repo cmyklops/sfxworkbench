@@ -88,15 +88,21 @@ def _load_matching_file_rows(db_path: Path, query: str, limit: int):
     tags_by_file: dict[int, list[MetadataViewTag]] = {}
     embedded_by_file: dict[int, list[MetadataViewEmbeddedField]] = {}
     if file_ids:
-        placeholders = ",".join("?" for _ in file_ids)
+        # Use a temp table rather than inlining one ``?`` per file_id. Caller
+        # currently bounds ``limit`` to ~100, but bumping the CLI flag (or a
+        # future caller forgetting this constraint) would otherwise blow past
+        # SQLite's variable cap silently. Same hardening pattern as
+        # ``metadata_workbench_rows`` / ``metadata_tag_change_rows``.
+        conn.execute("CREATE TEMP TABLE IF NOT EXISTS _view_file_ids (file_id INTEGER PRIMARY KEY)")
+        conn.execute("DELETE FROM _view_file_ids")
+        conn.executemany("INSERT OR IGNORE INTO _view_file_ids (file_id) VALUES (?)", ((fid,) for fid in file_ids))
         tag_rows = conn.execute(
-            f"""
-            SELECT file_id, field, value, source, method, confidence, evidence
-            FROM accepted_tags
-            WHERE file_id IN ({placeholders})
-            ORDER BY field, value, source
-            """,
-            file_ids,
+            """
+            SELECT t.file_id, t.field, t.value, t.source, t.method, t.confidence, t.evidence
+            FROM accepted_tags t
+            JOIN _view_file_ids v ON v.file_id = t.file_id
+            ORDER BY t.field, t.value, t.source
+            """
         ).fetchall()
         for tag in tag_rows:
             tags_by_file.setdefault(tag["file_id"], []).append(
@@ -110,13 +116,12 @@ def _load_matching_file_rows(db_path: Path, query: str, limit: int):
                 )
             )
         embedded_rows = conn.execute(
-            f"""
-            SELECT file_id, namespace, key, value, source
-            FROM metadata_fields
-            WHERE file_id IN ({placeholders})
-            ORDER BY namespace, key, value, source
-            """,
-            file_ids,
+            """
+            SELECT mf.file_id, mf.namespace, mf.key, mf.value, mf.source
+            FROM metadata_fields mf
+            JOIN _view_file_ids v ON v.file_id = mf.file_id
+            ORDER BY mf.namespace, mf.key, mf.value, mf.source
+            """
         ).fetchall()
         for field in embedded_rows:
             embedded_by_file.setdefault(field["file_id"], []).append(

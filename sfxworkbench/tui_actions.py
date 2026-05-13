@@ -856,7 +856,14 @@ def undo_nesting_action(db_path: Path, report_dir: Path) -> ActionResult:
     )
 
 
-def build_embedded_metadata_plan_action(root: Path, db_path: Path, report_dir: Path) -> ActionResult:
+def build_embedded_metadata_plan_action(
+    root: Path,
+    db_path: Path,
+    report_dir: Path,
+    *,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
+) -> ActionResult:
     try:
         output = _ensure_report_dir(report_dir) / "metadata_write_plan.json"
         plan = build_metadata_write_plan(
@@ -864,6 +871,8 @@ def build_embedded_metadata_plan_action(root: Path, db_path: Path, report_dir: P
             root=root,
             backend="auto",
             limit=0,
+            progress_callback=progress_callback,
+            cancel_requested=cancel_requested,
         )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("metadata_write_plan", e)

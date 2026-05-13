@@ -639,8 +639,17 @@ def build_metadata_write_plan(
     bwfmetaedit: str | Path | None = None,
     limit: int = 0,
     replace_existing: bool = False,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> MetadataWritePlan:
-    """Build a reviewed dry-run embedded metadata write plan from accepted tags."""
+    """Build a reviewed dry-run embedded metadata write plan from accepted tags.
+
+    Plan construction probes every accepted-tag row against the actual audio
+    file via Mutagen / bwfmetaedit to detect existing values. On a library
+    with 100k accepted tags this is 100k file opens — wire
+    ``progress_callback`` to keep the TUI animated and ``cancel_requested``
+    to let the user back out of a misclick.
+    """
     if limit < 0:
         raise ValueError("--limit must be 0 or greater")
     if backend not in {"auto", "bwfmetaedit", "mutagen"}:
@@ -677,7 +686,17 @@ def build_metadata_write_plan(
         rows = rows[:limit]
 
     entries: list[MetadataWritePlanEntry] = []
+    total_rows = len(rows)
+    if progress_callback is not None:
+        progress_callback("probing", 0, total_rows, f"Probing {total_rows:,} accepted-tag row(s)...")
     for entry_id, row in enumerate(rows, start=1):
+        # Per-row work: a Mutagen open + namespace lookup. Cheap-but-not-free.
+        # Report every 50, poll cancel at the same boundary.
+        if entry_id > 1 and entry_id % 50 == 0:
+            if progress_callback is not None:
+                progress_callback("probing", entry_id, total_rows, row["path"])
+            if cancel_requested is not None and cancel_requested():
+                break
         entry_backend, target_namespace, target_key, action, supported = _target_for_row(
             row["field"], row["extension"] or "", backend
         )

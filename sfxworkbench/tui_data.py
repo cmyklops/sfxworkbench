@@ -884,29 +884,38 @@ def metadata_workbench_rows(
         embedded_items_by_id: dict[int, list[TagDisplayItem]] = {file_id: [] for file_id in file_ids}
         accepted_items_by_id: dict[int, list[TagDisplayItem]] = {file_id: [] for file_id in file_ids}
         if file_ids:
-            placeholders = ",".join("?" for _ in file_ids)
+            # Caller currently bounds ``limit`` to 100 so this list stays
+            # small, but hardening to a temp table now means a future caller
+            # who bumps the limit (or builds the workbench for a whole
+            # library at once) doesn't silently blow past SQLite's variable
+            # cap. Same pattern used elsewhere in this module.
+            conn.execute("CREATE TEMP TABLE IF NOT EXISTS _workbench_file_ids (file_id INTEGER PRIMARY KEY)")
+            conn.execute("DELETE FROM _workbench_file_ids")
+            conn.executemany(
+                "INSERT OR IGNORE INTO _workbench_file_ids (file_id) VALUES (?)",
+                ((fid,) for fid in file_ids),
+            )
             for item in conn.execute(
-                f"""
-                SELECT file_id, namespace, key, value
-                FROM metadata_fields
-                WHERE file_id IN ({placeholders})
-                  AND value IS NOT NULL AND TRIM(value) != ''
+                """
+                SELECT mf.file_id, mf.namespace, mf.key, mf.value
+                FROM metadata_fields mf
+                JOIN _workbench_file_ids w ON w.file_id = mf.file_id
+                WHERE mf.value IS NOT NULL AND TRIM(mf.value) != ''
                   AND (
-                      lower(key) IN ('description', 'comment', 'keywords', 'title', 'category', 'subcategory')
-                      OR key IN ('ICMT', 'IKEY', 'INAM', 'IGNR', 'ISBJ')
+                      lower(mf.key) IN ('description', 'comment', 'keywords', 'title', 'category', 'subcategory')
+                      OR mf.key IN ('ICMT', 'IKEY', 'INAM', 'IGNR', 'ISBJ')
                   )
                 ORDER BY
                     CASE
-                        WHEN lower(key) = 'description' THEN 0
-                        WHEN key IN ('IKEY', 'ICMT') THEN 1
-                        WHEN key IN ('INAM', 'ISBJ', 'IGNR') THEN 2
-                        WHEN lower(key) IN ('title', 'comment', 'keywords', 'category', 'subcategory') THEN 3
+                        WHEN lower(mf.key) = 'description' THEN 0
+                        WHEN mf.key IN ('IKEY', 'ICMT') THEN 1
+                        WHEN mf.key IN ('INAM', 'ISBJ', 'IGNR') THEN 2
+                        WHEN lower(mf.key) IN ('title', 'comment', 'keywords', 'category', 'subcategory') THEN 3
                         ELSE 10
                     END,
-                    namespace,
-                    key
-                """,
-                file_ids,
+                    mf.namespace,
+                    mf.key
+                """
             ):
                 embedded_items_by_id.setdefault(int(item["file_id"]), []).append(
                     TagDisplayItem(
@@ -916,13 +925,13 @@ def metadata_workbench_rows(
                     )
                 )
             for item in conn.execute(
-                f"""
-                SELECT file_id, field, value, source
-                FROM accepted_tags
-                WHERE file_id IN ({placeholders})
-                  AND value IS NOT NULL AND TRIM(value) != ''
+                """
+                SELECT t.file_id, t.field, t.value, t.source
+                FROM accepted_tags t
+                JOIN _workbench_file_ids w ON w.file_id = t.file_id
+                WHERE t.value IS NOT NULL AND TRIM(t.value) != ''
                 ORDER BY
-                    CASE lower(field)
+                    CASE lower(t.field)
                         WHEN 'description' THEN 0
                         WHEN 'keywords' THEN 1
                         WHEN 'category' THEN 2
@@ -933,10 +942,9 @@ def metadata_workbench_rows(
                         WHEN 'comment' THEN 7
                         ELSE 20
                     END,
-                    field,
-                    value
-                """,
-                file_ids,
+                    t.field,
+                    t.value
+                """
             ):
                 accepted_items_by_id.setdefault(int(item["file_id"]), []).append(
                     TagDisplayItem(
