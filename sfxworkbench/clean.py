@@ -141,9 +141,15 @@ def clean_library(
     log_path: Path | None = None,
     quiet: bool = False,
     progress_callback: ProgressCallback | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> CleanResult:
     """Find and optionally delete junk. Always dry_run unless dry_run=False.
-    Writes JSON log of everything removed to log_path if provided."""
+    Writes JSON log of everything removed to log_path if provided.
+
+    ``cancel_requested`` polled every 50 entries during the delete loop.
+    Already-removed files stay removed — there is no rollback. The log
+    still reflects whatever was completed before cancellation fired.
+    """
     root = root.resolve()
     junk_files, junk_dirs = find_junk(root, quiet=quiet, progress_callback=progress_callback)
 
@@ -177,6 +183,7 @@ def clean_library(
             f"{action} [yellow]{fmt_bytes(bytes_freed)}[/yellow]"
         )
 
+    cancelled = False
     if not dry_run:
         total = len(junk_files) + len(junk_dirs)
         completed = 0
@@ -189,20 +196,30 @@ def clean_library(
             completed += 1
             if progress_callback is not None:
                 progress_callback("cleaning", completed, total, f"Removed {f.name}")
-        for d, _ in junk_dirs:
-            try:
-                shutil.rmtree(d)
-            except OSError as e:
-                if not quiet:
-                    console.print(f"[red]Error removing {d}: {e}[/red]")
-            completed += 1
-            if progress_callback is not None:
-                progress_callback("cleaning", completed, total, f"Removed {d.name}")
+            # Cancellation poll: every 50 file deletes (cheap individually)
+            # so a tens-of-thousands-of-DS_Store-siblings cleanup is responsive.
+            if completed % 50 == 0 and cancel_requested is not None and cancel_requested():
+                cancelled = True
+                break
+        if not cancelled:
+            for d, _ in junk_dirs:
+                try:
+                    shutil.rmtree(d)
+                except OSError as e:
+                    if not quiet:
+                        console.print(f"[red]Error removing {d}: {e}[/red]")
+                completed += 1
+                if progress_callback is not None:
+                    progress_callback("cleaning", completed, total, f"Removed {d.name}")
+                if completed % 50 == 0 and cancel_requested is not None and cancel_requested():
+                    cancelled = True
+                    break
     elif progress_callback is not None:
         total = len(junk_files) + len(junk_dirs)
         progress_callback("preview", total, total, f"Previewed {total:,} junk item(s)")
         if not quiet:
             console.print("[green]Done.[/green]")
+    result.cancelled = cancelled
 
     if log_path is not None:
         log_data = {

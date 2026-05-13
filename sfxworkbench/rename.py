@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from collections.abc import Callable
 from datetime import UTC, datetime
 from hashlib import md5
 from pathlib import Path
@@ -348,6 +349,8 @@ def apply_rename_plan(
     config_path: Path | None = None,
     safe_folders: list[Path] | None = None,
     target_paths: tuple[str, ...] | None = None,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> RenameResult:
     """Apply a rename plan, refusing collisions and writing an undo log.
 
@@ -392,7 +395,17 @@ def apply_rename_plan(
     applied: list[RenameEntry] = []
     root = Path(plan.root)
 
-    for entry in plan.entries:
+    total_entries = len(plan.entries)
+    if progress_callback is not None:
+        progress_callback("renaming", 0, total_entries, f"Renaming {total_entries:,} file(s)...")
+    cancelled = False
+    for entry_index, entry in enumerate(plan.entries):
+        if entry_index > 0 and entry_index % 50 == 0:
+            if progress_callback is not None:
+                progress_callback("renaming", entry_index, total_entries, entry.old_path)
+            if cancel_requested is not None and cancel_requested():
+                cancelled = True
+                break
         if selection is not None and entry.old_path not in selection:
             result.skipped += 1
             continue
@@ -441,6 +454,7 @@ def apply_rename_plan(
         conn.commit()
         conn.close()
 
+    result.cancelled = cancelled
     log_plan = plan.model_copy(update={"entries": applied})
     write_rename_log(log_plan, log_path)
     result.log_path = str(log_path)

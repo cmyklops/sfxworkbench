@@ -1067,7 +1067,13 @@ def run_tui(
                 _start(
                     "clean_preview",
                     "Preview Junk",
-                    lambda: clean_action(root, self._report_dir, apply=False, progress_callback=pcb),
+                    lambda: clean_action(
+                        root,
+                        self._report_dir,
+                        apply=False,
+                        progress_callback=pcb,
+                        cancel_requested=cancel,
+                    ),
                 )
 
             handlers["clean-preview"] = _h_clean_preview
@@ -1078,7 +1084,13 @@ def run_tui(
                     "clean_apply",
                     "Apply Junk Cleanup",
                     "This removes known junk files and folders. Recommended first: run Preview Junk and inspect the Previewed Junk table.",
-                    lambda: clean_action(root, self._report_dir, apply=True, progress_callback=pcb),
+                    lambda: clean_action(
+                        root,
+                        self._report_dir,
+                        apply=True,
+                        progress_callback=pcb,
+                        cancel_requested=cancel,
+                    ),
                 )
 
             handlers["clean-apply"] = _h_clean_apply
@@ -1094,7 +1106,13 @@ def run_tui(
                 "dedupe_apply",
                 "Apply Dedupe",
                 "This quarantines approved duplicate files from the current dedupe plan. Required first: Build Dedupe Plan, then Approve Dedupe.",
-                lambda: apply_dedupe_plan_action(db_path, self._report_dir, target_paths=self._selection_tuple()),
+                lambda: apply_dedupe_plan_action(
+                    db_path,
+                    self._report_dir,
+                    target_paths=self._selection_tuple(),
+                    progress_callback=pcb,
+                    cancel_requested=cancel,
+                ),
             )
 
             # Packs
@@ -1130,7 +1148,13 @@ def run_tui(
                 "rename_apply",
                 "Apply Name Cleanup",
                 "This renames files on disk and updates indexed paths. Recommended first: Preview Name Cleanup and review the generated plan.",
-                lambda: apply_rename_action(db_path, self._report_dir, pattern="portable"),
+                lambda: apply_rename_action(
+                    db_path,
+                    self._report_dir,
+                    pattern="portable",
+                    progress_callback=pcb,
+                    cancel_requested=cancel,
+                ),
             )
             handlers["organize-rename-undo"] = lambda: _start(
                 "rename_undo",
@@ -1261,7 +1285,13 @@ def run_tui(
                 "metadata_write_apply",
                 "Apply Embedded Metadata",
                 "This writes approved embedded metadata entries into audio files, backs up originals, and verifies readback. Required first: Plan Embedded Metadata, then Approve Embedded Metadata.",
-                lambda: apply_embedded_metadata_action(db_path, self._report_dir, target_paths=self._selection_tuple()),
+                lambda: apply_embedded_metadata_action(
+                    db_path,
+                    self._report_dir,
+                    target_paths=self._selection_tuple(),
+                    progress_callback=pcb,
+                    cancel_requested=cancel,
+                ),
             )
             handlers["metadata-write-approve"] = lambda: _start(
                 "metadata_write_approve",

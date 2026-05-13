@@ -53,6 +53,7 @@ class CleanResult(BaseModel):
     removed_dirs: list[str] = []
     bytes_freed: int = 0
     dry_run: bool = True
+    cancelled: bool = False  # set when cancel_requested fires mid-loop
 
 
 class ScanResult(BaseModel):
@@ -383,6 +384,7 @@ class DedupeApplyResult(BaseModel):
     quarantine_dir: str | None = None
     log_path: str | None = None
     dry_run: bool = True
+    cancelled: bool = False  # set when cancel_requested fires mid-loop
 
 
 class AuditResult(BaseModel):
@@ -722,6 +724,7 @@ class MetadataWriteApplyResult(BaseModel):
     errors: list[dict] = []
     dry_run: bool = True
     target: str = "embedded_metadata"
+    cancelled: bool = False  # set when cancel_requested fires mid-loop
 
 
 class MetadataWriteUndoResult(BaseModel):
@@ -1091,6 +1094,7 @@ class RenameResult(BaseModel):
     errors: list[dict] = []
     log_path: str | None = None
     dry_run: bool = True
+    cancelled: bool = False  # set when cancel_requested fires mid-loop
 
 
 # ---------------------------------------------------------------------------

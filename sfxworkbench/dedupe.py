@@ -3,6 +3,7 @@
 import hashlib
 import json
 import shutil
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -250,12 +251,19 @@ def apply_dedupe_plan(
     safe_folders: list[Path] | None = None,
     log_path: Path | None = None,
     target_paths: tuple[str, ...] | None = None,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> DedupeApplyResult:
     """Execute a reviewed dedupe plan.
 
     On apply (`dry_run=False`), files are moved into quarantine by default and
     removed from the SQLite index. Use permanent_delete=True only for an
     explicitly reviewed purge.
+
+    ``progress_callback`` fires every 50 remove-entries so the TUI status
+    strip animates during a long quarantine. ``cancel_requested`` is polled
+    every 50 entries — mid-stream cancellation preserves files already
+    moved (filesystem move is itself atomic per file).
     """
     plan = json.loads(plan_path.read_text())
     result = DedupeApplyResult(dry_run=dry_run)
@@ -264,6 +272,13 @@ def apply_dedupe_plan(
     # Tier 3.8: scope quarantine to selected files when the TUI passes them.
     # Only entries whose path is in the selection are touched.
     selection: frozenset[str] | None = frozenset(target_paths) if target_paths is not None else None
+    # Count up-front so progress reporting has a meaningful denominator.
+    total_remove_entries = sum(
+        1 for group in plan.get("groups", []) for entry in group if entry.get("action") == "remove"
+    )
+    processed_entries = 0
+    if progress_callback is not None:
+        progress_callback("applying", 0, total_remove_entries, f"Quarantining {total_remove_entries:,} duplicate(s)...")
     rules = build_preservation_rules(
         config_path=config_path,
         safe_folders=[Path(folder) for folder in plan.get("safe_folders", [])] + list(safe_folders or []),
@@ -280,13 +295,26 @@ def apply_dedupe_plan(
             console.print("[red]Refusing to apply: plan has no approved groups.[/red]")
         return result
 
+    cancelled = False
     for group_index, group in enumerate(plan["groups"]):
+        if cancelled:
+            break
         if require_reviewed and group_index not in approved_groups:
             result.errors.append({"path": str(plan_path), "error": f"group {group_index + 1} is not approved"})
             continue
         for entry in group:
             if entry["action"] != "remove":
                 continue
+            # Poll cancel + report progress every 50 candidates so the TUI
+            # status strip animates and Request Cancel is responsive on
+            # quarantine plans with tens of thousands of entries.
+            if processed_entries > 0 and processed_entries % 50 == 0:
+                if progress_callback is not None:
+                    progress_callback("applying", processed_entries, total_remove_entries, entry.get("path", ""))
+                if cancel_requested is not None and cancel_requested():
+                    cancelled = True
+                    break
+            processed_entries += 1
             if selection is not None and entry["path"] not in selection:
                 # Mirror the other Tier 3.8 executors: count selection-skipped
                 # entries in ``result.skipped`` so the user can see how many
@@ -370,6 +398,7 @@ def apply_dedupe_plan(
         if not quiet:
             console.print(f"Removed [cyan]{len(affected_paths):,}[/cyan] row(s) from index.")
 
+    result.cancelled = cancelled
     if not dry_run and log_entries:
         if log_path is None:
             log_path = _default_dedupe_log_path(plan_path)

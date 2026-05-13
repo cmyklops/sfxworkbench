@@ -260,12 +260,18 @@ def clean_action(
     *,
     apply: bool = False,
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> ActionResult:
     action = "clean_apply" if apply else "clean_preview"
     try:
         log_path = _ensure_report_dir(report_dir) / f"clean_{'apply' if apply else 'preview'}_{_now_stamp()}.json"
         result = clean_library(
-            root, dry_run=not apply, log_path=log_path, quiet=True, progress_callback=progress_callback
+            root,
+            dry_run=not apply,
+            log_path=log_path,
+            quiet=True,
+            progress_callback=progress_callback,
+            cancel_requested=cancel_requested,
         )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error(action, e)
@@ -495,6 +501,8 @@ def apply_dedupe_plan_action(
     report_dir: Path,
     *,
     target_paths: tuple[str, ...] | None = None,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> ActionResult:
     """Apply the approved dedupe plan by quarantining duplicate files.
 
@@ -514,14 +522,18 @@ def apply_dedupe_plan_action(
             quiet=True,
             log_path=log_path,
             target_paths=target_paths,
+            progress_callback=progress_callback,
+            cancel_requested=cancel_requested,
         )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("dedupe_apply", e)
     errors = _result_errors(result)
+    cancel_note = " — cancelled mid-apply" if result.cancelled else ""
+    status = "cancelled" if result.cancelled else ("applied" if not errors else "error")
     return ActionResult(
         action="dedupe_apply",
-        status="applied" if not errors else "error",
-        message=f"Quarantined {result.quarantined:,} duplicate file(s), freed {result.bytes_freed:,} byte(s).",
+        status=status,
+        message=f"Quarantined {result.quarantined:,} duplicate file(s), freed {result.bytes_freed:,} byte(s).{cancel_note}",
         output_path=result.log_path or result.quarantine_dir,
         errors=errors,
         refresh=("dedupe", "files", "reports"),
@@ -626,7 +638,14 @@ def rename_preview_action(root: Path, report_dir: Path, *, pattern: str = "porta
     )
 
 
-def apply_rename_action(db_path: Path, report_dir: Path, *, pattern: str = "portable") -> ActionResult:
+def apply_rename_action(
+    db_path: Path,
+    report_dir: Path,
+    *,
+    pattern: str = "portable",
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
+) -> ActionResult:
     plan_path = report_dir / f"{pattern}_rename_plan.json"
     if not plan_path.exists():
         return ActionResult("rename_apply", "error", "No rename plan found.", errors=("No rename plan found.",))
@@ -634,14 +653,23 @@ def apply_rename_action(db_path: Path, report_dir: Path, *, pattern: str = "port
 
     try:
         plan = RenamePlan.model_validate_json(plan_path.read_text())
-        result = apply_rename_plan(plan, db_path=db_path, dry_run=False, quiet=True)
+        result = apply_rename_plan(
+            plan,
+            db_path=db_path,
+            dry_run=False,
+            quiet=True,
+            progress_callback=progress_callback,
+            cancel_requested=cancel_requested,
+        )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("rename_apply", e)
     errors = _result_errors(result)
+    cancel_note = " — cancelled mid-apply" if result.cancelled else ""
+    status = "cancelled" if result.cancelled else ("applied" if not errors else "error")
     return ActionResult(
         action="rename_apply",
-        status="applied" if not errors else "error",
-        message=f"Renamed {result.renamed:,} path(s).",
+        status=status,
+        message=f"Renamed {result.renamed:,} path(s).{cancel_note}",
         output_path=result.log_path,
         errors=errors,
         refresh=("clean", "files", "reports"),
@@ -882,6 +910,8 @@ def apply_embedded_metadata_action(
     report_dir: Path,
     *,
     target_paths: tuple[str, ...] | None = None,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> ActionResult:
     """Apply the embedded metadata write plan.
 
@@ -903,15 +933,19 @@ def apply_embedded_metadata_action(
             dry_run=False,
             quiet=True,
             target_paths=target_paths,
+            progress_callback=progress_callback,
+            cancel_requested=cancel_requested,
         )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("metadata_write_apply", e)
     errors = _result_errors(result)
     scope_note = f" (scoped to {len(target_paths)} selected file(s))" if target_paths else ""
+    cancel_note = " — cancelled mid-apply" if result.cancelled else ""
+    status = "cancelled" if result.cancelled else ("applied" if not errors else "error")
     return ActionResult(
         action="metadata_write_apply",
-        status="applied" if not errors else "error",
-        message=f"Wrote {result.applied:,} embedded metadata entrie(s) to {result.files_written:,} file(s).{scope_note}",
+        status=status,
+        message=f"Wrote {result.applied:,} embedded metadata entrie(s) to {result.files_written:,} file(s).{scope_note}{cancel_note}",
         output_path=result.log_path,
         errors=errors,
         refresh=("metadata", "files", "advanced", "reports"),

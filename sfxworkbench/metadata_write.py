@@ -5,6 +5,7 @@ import json
 import shutil
 import struct
 import subprocess
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -1119,6 +1120,8 @@ def apply_metadata_write_plan(
     safe_folders: list[Path] | None = None,
     backup: bool = True,
     target_paths: tuple[str, ...] | None = None,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> MetadataWriteApplyResult:
     """Apply reviewed Mutagen metadata writes to original files, with backups.
 
@@ -1151,8 +1154,22 @@ def apply_metadata_write_plan(
 
     selection: frozenset[str] | None = frozenset(target_paths) if target_paths is not None else None
     conn = get_connection(effective_db) if not dry_run else None
+    total_commands = len(preview.commands)
+    if progress_callback is not None:
+        progress_callback("writing", 0, total_commands, f"Writing metadata for {total_commands:,} file(s)...")
+    cancelled = False
     try:
-        for command in preview.commands:
+        for command_index, command in enumerate(preview.commands):
+            # Each metadata write is expensive (MD5, copy backup, mutagen
+            # write, readback verify). Report progress + poll cancel every
+            # 10 commands — cheaper interval than the 50/100 used for SQL
+            # loops because per-iteration cost is so much higher.
+            if command_index > 0 and command_index % 10 == 0:
+                if progress_callback is not None:
+                    progress_callback("writing", command_index, total_commands, command.path)
+                if cancel_requested is not None and cancel_requested():
+                    cancelled = True
+                    break
             if selection is not None and command.path not in selection:
                 # Tier 3.8: count selection-filtered commands toward
                 # ``result.skipped`` so the apply diagnostic balances —
@@ -1257,6 +1274,7 @@ def apply_metadata_write_plan(
         if conn is not None:
             conn.close()
 
+    result.cancelled = cancelled
     if log_path is None and not dry_run:
         log_path = _default_apply_log_path(plan_path)
     if log_path is not None:
