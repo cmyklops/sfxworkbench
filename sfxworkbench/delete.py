@@ -191,7 +191,13 @@ def apply_delete_plan(
     config_path: Path | None = None,
     safe_folders: list[Path] | None = None,
     quiet: bool = False,
+    target_paths: tuple[str, ...] | None = None,
 ) -> DeleteApplyResult:
+    """Apply approved delete plan entries.
+
+    ``target_paths`` (Tier 3.8): if given, only entries whose ``path`` is in
+    this set are deleted. Other entries are silently skipped.
+    """
     plan = load_delete_plan(plan_path)
     result = DeleteApplyResult(planned=len(plan.entries), dry_run=dry_run)
     if not dry_run and not understand_permanent_delete:
@@ -200,12 +206,16 @@ def apply_delete_plan(
     if require_reviewed and not any(entry.review_status == "approved" for entry in plan.entries):
         result.errors.append({"path": str(plan_path), "error": "plan has no approved entries"})
         return result
+    selection: frozenset[str] | None = frozenset(target_paths) if target_paths is not None else None
     rules = build_preservation_rules(
         config_path=config_path,
         safe_folders=[Path(folder) for folder in plan.safe_folders] + list(safe_folders or []),
     )
     deleted_entries: list[dict] = []
     for entry in plan.entries:
+        if selection is not None and entry.path not in selection:
+            result.skipped += 1
+            continue
         if require_reviewed and entry.review_status != "approved":
             result.skipped += 1
             continue

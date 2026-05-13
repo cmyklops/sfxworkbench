@@ -1118,6 +1118,7 @@ def apply_metadata_write_plan(
     config_path: Path | None = None,
     safe_folders: list[Path] | None = None,
     backup: bool = True,
+    target_paths: tuple[str, ...] | None = None,
 ) -> MetadataWriteApplyResult:
     """Apply reviewed Mutagen metadata writes to original files, with backups.
 
@@ -1148,9 +1149,12 @@ def apply_metadata_write_plan(
         errors=list(preview.errors),
     )
 
+    selection: frozenset[str] | None = frozenset(target_paths) if target_paths is not None else None
     conn = get_connection(effective_db) if not dry_run else None
     try:
         for command in preview.commands:
+            if selection is not None and command.path not in selection:
+                continue
             entry_count = len(command.fields)
             backend = _command_backend(command)
             source = Path(command.path)

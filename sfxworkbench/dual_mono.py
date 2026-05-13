@@ -285,7 +285,13 @@ def apply_dual_mono_plan(
     config_path: Path | None = None,
     safe_folders: list[Path] | None = None,
     quiet: bool = False,
+    target_paths: tuple[str, ...] | None = None,
 ) -> DualMonoApplyResult:
+    """Apply a dual-mono plan.
+
+    ``target_paths`` (Tier 3.8): if given, only entries whose ``path`` is in
+    this set are merged. Other entries are silently skipped.
+    """
     import soundfile as sf
 
     plan = load_dual_mono_plan(plan_path)
@@ -300,8 +306,12 @@ def apply_dual_mono_plan(
             {"path": str(output_root), "safe_folder": protected_output, "error": "protected by safe folder"}
         )
         return result
+    selection: frozenset[str] | None = frozenset(target_paths) if target_paths is not None else None
     written: list[dict] = []
     for entry in plan.entries:
+        if selection is not None and entry.path not in selection:
+            result.skipped += 1
+            continue
         if require_reviewed and entry.review_status != "approved":
             result.skipped += 1
             continue

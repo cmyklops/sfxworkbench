@@ -180,7 +180,13 @@ def apply_scan_error_plan(
     quarantine_dir: Path | None = None,
     dry_run: bool = True,
     quiet: bool = False,
+    target_paths: tuple[str, ...] | None = None,
 ) -> ScanErrorApplyResult:
+    """Apply a scan-error plan.
+
+    ``target_paths`` (Tier 3.8): if given, only entries whose ``path`` is in
+    this set are quarantined. Other entries are silently skipped.
+    """
     plan = ScanErrorPlan.model_validate(json.loads(plan_path.read_text()))
     if db_path is None:
         db_path = Path(plan.db_path)
@@ -193,9 +199,12 @@ def apply_scan_error_plan(
         dry_run=dry_run,
     )
     affected_paths: list[str] = []
+    selection: frozenset[str] | None = frozenset(target_paths) if target_paths is not None else None
 
     for entry in plan.entries:
         if entry.action != "quarantine":
+            continue
+        if selection is not None and entry.path not in selection:
             continue
         path = Path(entry.path)
         validation_error = _validate_candidate(path, entry.size_bytes, entry.hash)

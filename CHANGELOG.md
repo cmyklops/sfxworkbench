@@ -56,26 +56,59 @@ Files tab used to re-fill Files (50k-row SQL), Clean, Dedupe, and
 Advanced. Now it re-fills only Metadata + Scan. Same story for plan-only
 and audit-only actions across every tab.
 
-### Tier 3.8 — Multi-Select (Deferred, Awaiting Implementation)
+### Tier 3.8 — Multi-Select For Apply-Scope
 
-Selection should persist between tabs but invalidate on re-scan (user
-preference confirmed). The contract choice resolved to **Option (a)**:
-add ``target_paths: tuple[Path, ...] | None`` to every plan dataclass and
-filter candidates inside each executor. Reasons:
+Files-tab row selection scopes subsequent apply actions to just the picked
+files. Implemented as Option (a) (resolved with user): every applicable
+executor takes an optional ``target_paths: tuple[str, ...] | None`` and
+filters entries against it.
 
-- Plans already carry optional fields (``dry_run``, ``--no-backup``);
-  adding one more is consistent.
-- Executors already filter candidates by rule predicates; one more
-  filter step is the same pattern.
-- The "forgot to wire it" failure mode is loud (visible regression) vs.
-  the silent-failure mode in Option (b)'s implicit-scope alternative.
-- The TUI holds ``_selected_paths: set[Path]`` invalidated on scan
-  completion; every action call site adds
-  ``target_paths=tuple(self._selected_paths) or None``.
+**TUI surface:**
 
-Implementation: ~12 plan dataclasses × 2 changes each, plus selection
-UI on the Files table (DataTable cursor + space-to-toggle binding, count
-shown in the status strip).
+- **``space``** toggles selection on the cursor row of ``#files-table``.
+  Cells update in place via ``DataTable.update_cell_at`` rather than
+  re-running the Files SQL on every keystroke. A ``●`` glyph prefixes
+  the Filename column for selected rows.
+- **``x``** clears the entire selection set.
+- **Status strip** shows ``selected: N file(s)`` whenever the set is
+  non-empty.
+- **Scan + Full Audit** automatically clear the selection — the file
+  index is rebuilding, so previously-selected paths may have moved.
+  Selection persists across tab switches otherwise.
+
+**Wired apply actions:** ``apply_tag_plan_action`` (metadata-apply),
+``apply_dedupe_plan_action`` (dedupe-apply),
+``apply_embedded_metadata_action`` (metadata-write-apply). Each gained
+a keyword-only ``target_paths`` parameter and threads it to the
+underlying executor. Action result messages get a ``(scoped to N
+selected file(s))`` suffix when a selection was active.
+
+**Executors with the filter:** ``apply_delete_plan``,
+``apply_dedupe_plan``, ``apply_dual_mono_plan``,
+``apply_metadata_write_plan``, ``apply_rename_plan``,
+``apply_scan_error_plan``, ``apply_tag_plan``. The default
+``target_paths=None`` preserves pre-3.8 behavior — every existing caller
+keeps working unchanged.
+
+**Not wired:** ``apply_pack_plan`` and ``apply_nesting_plan`` operate on
+folder paths, not file paths. The current selection model is file-level
+only, so these would never have a useful target_paths match. The
+``apply_delete_plan_action`` TUI wrapper isn't wired either — it
+operates on quarantine-folder paths that aren't reachable from the
+Files-tab selection.
+
+**New tests** in ``tests/test_target_paths_filter.py``:
+
+- ``test_apply_delete_plan_target_paths_scopes_to_named_paths`` — two
+  files, scope to one, only that one deletes.
+- ``test_apply_delete_plan_target_paths_empty_tuple_drops_everything`` —
+  explicit empty selection means "act on nothing."
+- ``test_apply_delete_plan_target_paths_none_means_no_filter`` — the
+  default preserves whole-plan apply.
+- ``test_every_filterable_executor_accepts_target_paths`` — introspection
+  check that every Tier 3.8 executor exposes ``target_paths`` with a
+  default of ``None``. Guards against regressions where a refactor drops
+  the parameter from a single signature.
 
 ### Tier 5.14 — Lazy Tab Fill
 

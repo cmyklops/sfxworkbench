@@ -530,6 +530,10 @@ def run_tui(
             # on the current page, so power users don't need to mouse to a button.
             ("c", "cancel_running_action", "Cancel"),
             ("p", "open_command_palette", "Commands"),
+            # Tier 3.8: toggle selection on the focused files-table row; the
+            # collected paths constrain subsequent apply actions.
+            ("space", "toggle_file_selection", "Select"),
+            ("x", "clear_file_selection", "Clear selection"),
         ]
 
         def __init__(self) -> None:
@@ -576,6 +580,12 @@ def run_tui(
             # tab's dirty flag by filling it. Tabs the user never opens stay
             # dirty and skip the work entirely.
             self._dirty_tabs: set[str] = set()
+            # Tier 3.8: file paths the user has selected on the Files tab (via
+            # space-toggle). Persists across tab switches; cleared automatically
+            # on scan completion since the index is rebuilding. Apply action
+            # wrappers read this and pass it as ``target_paths`` to scope an
+            # operation to the picked files.
+            self._selected_paths: set[str] = set()
             # Declarative button → handler mapping built once. Replaces the
             # 250-line ``on_button_pressed`` elif chain. Each handler is a
             # zero-arg callable bound to ``self`` so it sees current state
@@ -735,6 +745,76 @@ def run_tui(
             """``c`` binding from Tier 1.3 — cancels whatever worker is running, if any."""
             if self._running_worker is not None and not self._running_worker.is_finished:
                 self._cancel_running_action()
+
+        def action_toggle_file_selection(self) -> None:
+            """Toggle the cursor row's path in/out of ``_selected_paths``.
+
+            Only fires when the Files tab's table is focused — otherwise the
+            spacebar keeps its native behavior (scroll, etc.). Updates the
+            cursor row's Filename cell in place via ``update_cell_at`` rather
+            than re-running the Files SQL on every toggle.
+            """
+            focused = self.focused
+            if focused is None or focused.id != "files-table":
+                return
+            try:
+                table = self.query_one("#files-table", DataTable)
+            except NoMatches:
+                return
+            cursor_row = table.cursor_row
+            if cursor_row is None or cursor_row < 0 or cursor_row >= len(self._file_rows):
+                return
+            row = self._file_rows[cursor_row]
+            if row.path in self._selected_paths:
+                self._selected_paths.discard(row.path)
+            else:
+                self._selected_paths.add(row.path)
+            marker = "● " if row.path in self._selected_paths else ""
+            from textual.coordinate import Coordinate
+
+            try:
+                table.update_cell_at(Coordinate(cursor_row, 0), marker + row.filename)
+            except Exception:
+                # Fallback if the Textual API shape ever changes — a full refill
+                # is correct, just more expensive (re-runs the SQL).
+                self._fill_files()
+            self._fill_status_strip()
+            self._show_file_detail(cursor_row)
+
+        def _selection_tuple(self) -> tuple[str, ...] | None:
+            """Snapshot of ``_selected_paths`` for action call sites.
+
+            Returns ``None`` (not an empty tuple) when nothing is selected so
+            executors take the "no scope" fast path and apply to every entry.
+            """
+            return tuple(self._selected_paths) if self._selected_paths else None
+
+        def action_clear_file_selection(self) -> None:
+            """Drop every file from ``_selected_paths``.
+
+            Re-renders the Filename column to strip the selection glyphs.
+            """
+            if not self._selected_paths:
+                return
+            self._selected_paths.clear()
+            from textual.coordinate import Coordinate
+
+            try:
+                table = self.query_one("#files-table", DataTable)
+                for index, row in enumerate(self._file_rows):
+                    try:
+                        table.update_cell_at(Coordinate(index, 0), row.filename)
+                    except Exception:
+                        break
+                else:
+                    self._fill_status_strip()
+                    self._show_file_detail(table.cursor_row)
+                    return
+                # If any update failed, fall through to a full refill.
+                self._fill_files()
+            except NoMatches:
+                pass
+            self._fill_status_strip()
 
         def action_open_command_palette(self) -> None:
             """``p`` binding — push the command palette (Tier 3.9 scaffolding)."""
@@ -916,7 +996,7 @@ def run_tui(
                 "dedupe_apply",
                 "Apply Dedupe",
                 "This quarantines approved duplicate files from the current dedupe plan. Required first: Build Dedupe Plan, then Approve Dedupe.",
-                lambda: apply_dedupe_plan_action(db_path, self._report_dir),
+                lambda: apply_dedupe_plan_action(db_path, self._report_dir, target_paths=self._selection_tuple()),
             )
 
             # Packs
@@ -1043,7 +1123,7 @@ def run_tui(
                 "metadata_apply",
                 "Apply DB Tags",
                 "This writes approved tag decisions into the SQLite index. Required first: Generate Suggestions, then Approve DB Tags.",
-                lambda: apply_tag_plan_action(db_path, self._report_dir),
+                lambda: apply_tag_plan_action(db_path, self._report_dir, target_paths=self._selection_tuple()),
             )
             handlers["metadata-approve"] = lambda: _start(
                 "metadata_approve",
@@ -1073,7 +1153,7 @@ def run_tui(
                 "metadata_write_apply",
                 "Apply Embedded Metadata",
                 "This writes approved embedded metadata entries into audio files, backs up originals, and verifies readback. Required first: Plan Embedded Metadata, then Approve Embedded Metadata.",
-                lambda: apply_embedded_metadata_action(db_path, self._report_dir),
+                lambda: apply_embedded_metadata_action(db_path, self._report_dir, target_paths=self._selection_tuple()),
             )
             handlers["metadata-write-approve"] = lambda: _start(
                 "metadata_write_approve",
@@ -1412,6 +1492,12 @@ def run_tui(
             )
             if self._report_dir.exists() and self._report_dir not in self._resolved_report_paths:
                 self._resolved_report_paths.insert(0, self._report_dir)
+            # Tier 3.8: scan and full-audit rebuild the file index, so any
+            # previously-selected paths may no longer exist or may have moved.
+            # Drop the selection set rather than leaving the user with stale
+            # references that would silently no-op on the next apply.
+            if result.action in {"scan", "full_audit"}:
+                self._selected_paths.clear()
             # Tier 5.12: honor the action's declared refresh hints instead of
             # blindly re-filling every tab. ``result.refresh`` is a tuple like
             # ``("metadata", "reports")`` — only the named tabs are marked
@@ -1552,6 +1638,9 @@ def run_tui(
             if self._running_worker is not None and not self._running_worker.is_finished:
                 status.append("  running: ", style="bold yellow")
                 status.append(self._running_label, style="yellow")
+            if self._selected_paths:
+                status.append("  selected: ", style="bold")
+                status.append(f"{len(self._selected_paths)} file(s)", style="magenta")
             self.query_one("#status-strip", Static).update(status)
 
         def _fill_operation_strip(self) -> None:
@@ -1745,10 +1834,16 @@ def run_tui(
                 )
                 return
             for row in self._file_rows:
+                # Tier 3.8: prepend a marker glyph to the Filename column when
+                # this row is in the user's selection set. Sort keys read
+                # ``row.filename`` (above), not this display string, so sorting
+                # by filename is unaffected.
+                marker = "● " if row.path in self._selected_paths else ""
+                filename_display = marker + row.filename
                 if self._compact:
                     meta = ("B" if row.has_bext else "-") + ("I" if row.has_ixml else "-")
                     table.add_row(
-                        row.filename,
+                        filename_display,
                         _fmt(row.sample_rate),
                         _fmt(row.channels),
                         meta,
@@ -1758,7 +1853,7 @@ def run_tui(
                     )
                 else:
                     table.add_row(
-                        row.filename,
+                        filename_display,
                         row.extension or "",
                         _fmt(row.sample_rate),
                         _fmt(row.bit_depth),

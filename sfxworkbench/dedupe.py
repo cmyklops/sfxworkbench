@@ -249,6 +249,7 @@ def apply_dedupe_plan(
     config_path: Path | None = None,
     safe_folders: list[Path] | None = None,
     log_path: Path | None = None,
+    target_paths: tuple[str, ...] | None = None,
 ) -> DedupeApplyResult:
     """Execute a reviewed dedupe plan.
 
@@ -260,6 +261,9 @@ def apply_dedupe_plan(
     result = DedupeApplyResult(dry_run=dry_run)
     affected_paths: list[str] = []
     log_entries: list[dict] = []
+    # Tier 3.8: scope quarantine to selected files when the TUI passes them.
+    # Only entries whose path is in the selection are touched.
+    selection: frozenset[str] | None = frozenset(target_paths) if target_paths is not None else None
     rules = build_preservation_rules(
         config_path=config_path,
         safe_folders=[Path(folder) for folder in plan.get("safe_folders", [])] + list(safe_folders or []),
@@ -282,6 +286,8 @@ def apply_dedupe_plan(
             continue
         for entry in group:
             if entry["action"] != "remove":
+                continue
+            if selection is not None and entry["path"] not in selection:
                 continue
             p = Path(entry["path"])
             sz = entry.get("size_bytes", 0)

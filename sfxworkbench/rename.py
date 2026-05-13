@@ -347,8 +347,16 @@ def apply_rename_plan(
     allow_partial: bool = False,
     config_path: Path | None = None,
     safe_folders: list[Path] | None = None,
+    target_paths: tuple[str, ...] | None = None,
 ) -> RenameResult:
-    """Apply a rename plan, refusing collisions and writing an undo log."""
+    """Apply a rename plan, refusing collisions and writing an undo log.
+
+    ``target_paths`` (Tier 3.8): if given, only entries whose ``old_path``
+    is in this set are renamed. Other entries are silently skipped.
+    """
+    if target_paths is not None:
+        selection = frozenset(target_paths)
+        plan = plan.model_copy(update={"entries": [e for e in plan.entries if e.old_path in selection]})
     result = RenameResult(planned=len(plan.entries), dry_run=dry_run)
     rules = build_preservation_rules(config_path=config_path, safe_folders=safe_folders)
     protection_errors = [

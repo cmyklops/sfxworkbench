@@ -671,8 +671,14 @@ def apply_tag_plan(
     require_reviewed: bool = False,
     log_path: Path | None = None,
     quiet: bool = False,
+    target_paths: tuple[str, ...] | None = None,
 ) -> TagApplyResult:
-    """Apply approved tag plan entries into the DB-only accepted_tags table."""
+    """Apply approved tag plan entries into the DB-only accepted_tags table.
+
+    ``target_paths`` (Tier 3.8): if given, only entries whose ``path`` is in
+    this set are applied. The TUI passes the user's row selection through
+    so an apply can be scoped to "just these files I picked".
+    """
     plan = load_tag_plan(plan_path)
     effective_db = db_path or Path(plan.db_path)
     result = TagApplyResult(planned=len(plan.entries), dry_run=dry_run, target=plan.target)
@@ -683,11 +689,15 @@ def apply_tag_plan(
     if require_reviewed and not approved_entries:
         result.errors.append({"path": str(plan_path), "error": "plan has no approved entries"})
         return result
+    selection: frozenset[str] | None = frozenset(target_paths) if target_paths is not None else None
     now = _now_iso()
     planned_values: dict[tuple[int, str], set[str]] = {}
     log_payload = None
     with connection(effective_db) as conn:
         for entry in plan.entries:
+            if selection is not None and entry.path not in selection:
+                result.skipped += 1
+                continue
             if require_reviewed and entry.review_status != "approved":
                 result.skipped += 1
                 continue

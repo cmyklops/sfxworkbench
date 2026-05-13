@@ -379,21 +379,40 @@ def approve_tag_plan_action(report_dir: Path) -> ActionResult:
     )
 
 
-def apply_tag_plan_action(db_path: Path, report_dir: Path) -> ActionResult:
+def apply_tag_plan_action(
+    db_path: Path,
+    report_dir: Path,
+    *,
+    target_paths: tuple[str, ...] | None = None,
+) -> ActionResult:
+    """Apply the approved tag plan.
+
+    ``target_paths`` (Tier 3.8): if given, only plan entries whose path is in
+    this set are applied. Used by the TUI to scope an apply to the user's
+    Files-tab selection.
+    """
     plan_path = report_dir / "metadata_tag_plan.json"
     if not plan_path.exists():
         return ActionResult(
             "tag_apply", "error", "No metadata tag plan found.", errors=("No metadata tag plan found.",)
         )
     try:
-        result = apply_tag_plan(plan_path, db_path=db_path, dry_run=False, require_reviewed=True, quiet=True)
+        result = apply_tag_plan(
+            plan_path,
+            db_path=db_path,
+            dry_run=False,
+            require_reviewed=True,
+            quiet=True,
+            target_paths=target_paths,
+        )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("tag_apply", e)
     errors = _result_errors(result)
+    scope_note = f" (scoped to {len(target_paths)} selected file(s))" if target_paths else ""
     return ActionResult(
         action="tag_apply",
         status="applied" if not errors else "error",
-        message=f"Applied {result.applied:,} DB-only metadata tag(s), skipped {result.skipped:,}.",
+        message=f"Applied {result.applied:,} DB-only metadata tag(s), skipped {result.skipped:,}.{scope_note}",
         output_path=result.log_path,
         errors=errors,
         refresh=("metadata", "files", "reports"),
@@ -453,7 +472,17 @@ def approve_dedupe_plan_action(report_dir: Path) -> ActionResult:
     )
 
 
-def apply_dedupe_plan_action(db_path: Path, report_dir: Path) -> ActionResult:
+def apply_dedupe_plan_action(
+    db_path: Path,
+    report_dir: Path,
+    *,
+    target_paths: tuple[str, ...] | None = None,
+) -> ActionResult:
+    """Apply the approved dedupe plan by quarantining duplicate files.
+
+    ``target_paths`` (Tier 3.8): if given, only entries whose path is in this
+    set are quarantined.
+    """
     plan_path = report_dir / "dedupe_plan.json"
     if not plan_path.exists():
         return ActionResult("dedupe_apply", "error", "No dedupe plan found.", errors=("No dedupe plan found.",))
@@ -466,6 +495,7 @@ def apply_dedupe_plan_action(db_path: Path, report_dir: Path) -> ActionResult:
             require_reviewed=True,
             quiet=True,
             log_path=log_path,
+            target_paths=target_paths,
         )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("dedupe_apply", e)
@@ -829,7 +859,16 @@ def approve_embedded_metadata_action(report_dir: Path) -> ActionResult:
     )
 
 
-def apply_embedded_metadata_action(db_path: Path, report_dir: Path) -> ActionResult:
+def apply_embedded_metadata_action(
+    db_path: Path,
+    report_dir: Path,
+    *,
+    target_paths: tuple[str, ...] | None = None,
+) -> ActionResult:
+    """Apply the embedded metadata write plan.
+
+    ``target_paths`` (Tier 3.8): scope the write to the user's selected files.
+    """
     plan_path = report_dir / "metadata_write_plan.json"
     if not plan_path.exists():
         return ActionResult(
@@ -839,14 +878,22 @@ def apply_embedded_metadata_action(db_path: Path, report_dir: Path) -> ActionRes
             errors=("No embedded metadata write plan found.",),
         )
     try:
-        result = apply_metadata_write_plan(plan_path, db_path=db_path, require_reviewed=True, dry_run=False, quiet=True)
+        result = apply_metadata_write_plan(
+            plan_path,
+            db_path=db_path,
+            require_reviewed=True,
+            dry_run=False,
+            quiet=True,
+            target_paths=target_paths,
+        )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("metadata_write_apply", e)
     errors = _result_errors(result)
+    scope_note = f" (scoped to {len(target_paths)} selected file(s))" if target_paths else ""
     return ActionResult(
         action="metadata_write_apply",
         status="applied" if not errors else "error",
-        message=f"Wrote {result.applied:,} embedded metadata entrie(s) to {result.files_written:,} file(s).",
+        message=f"Wrote {result.applied:,} embedded metadata entrie(s) to {result.files_written:,} file(s).{scope_note}",
         output_path=result.log_path,
         errors=errors,
         refresh=("metadata", "files", "advanced", "reports"),
