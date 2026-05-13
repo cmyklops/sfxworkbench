@@ -167,7 +167,9 @@ def test_tui_file_detail_includes_indexed_metadata_fields(tmp_library: Path, tmp
     assert ("Description (bext)", "Steady rain [test]") in indexed.rows
 
 
-def test_tui_metadata_rows_hide_provenance_fields_from_main_review_table(tmp_library: Path, tmp_db: Path) -> None:
+def test_tui_metadata_rows_hide_provenance_fields_from_main_review_table(
+    tmp_library: Path, tmp_db: Path, tmp_path: Path
+) -> None:
     scan_library(tmp_library, tmp_db, skip_hash=True, quiet=True)
     target = tmp_library / "sounds" / "AMB_RAIN_01.wav"
 
@@ -197,12 +199,34 @@ def test_tui_metadata_rows_hide_provenance_fields_from_main_review_table(tmp_lib
     finally:
         conn.close()
 
-    rows = metadata_workbench_rows(tmp_db, query="AMB_RAIN")
+    plan_path = tmp_path / "metadata_tag_plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "path": str(target),
+                        "filename": target.name,
+                        "field": "description",
+                        "proposed_value": "Steady rain tail",
+                        "source": "filename",
+                        "review_status": "pending",
+                        "action": "add",
+                    }
+                ]
+            }
+        )
+    )
+
+    rows = metadata_workbench_rows(tmp_db, plan_path=plan_path, query="AMB_RAIN")
 
     assert "Description: Steady   rain  tail" in rows[0].embedded_summary
     assert "Steady rain tail" in rows[0].tags_summary
+    assert rows[0].pending_changes == 0
     assert rows[0].tag_items[0].source == "file"
     assert rows[0].tag_items[0].field == "description"
+    assert [item.source for item in rows[0].tag_items] == ["file"]
+    assert metadata_tag_change_rows(plan_path, db_path=tmp_db) == []
     assert "OriginatorReference" not in rows[0].embedded_summary
     assert "vendor.example" not in rows[0].embedded_summary
 
@@ -278,8 +302,9 @@ def test_tui_feature_pages_cover_full_operations_workbench(tmp_library: Path, tm
     pages = feature_pages(tmp_db)
     by_key = {page.key: page for page in pages}
 
-    assert list(by_key) == ["scan", "clean", "dedupe", "metadata", "advanced"]
+    assert list(by_key) == ["scan", "files", "clean", "dedupe", "metadata", "advanced"]
     assert by_key["scan"].label == "Scan"
+    assert by_key["files"].label == "Files"
     assert by_key["clean"].label == "Declutter"
     assert by_key["clean"].description.startswith("Remove junk")
     assert by_key["dedupe"].description.startswith("Review exact")
@@ -328,6 +353,15 @@ def test_tui_dedupe_rows_and_metadata_rows_surface_review_state(
                         "source": "synonym",
                         "review_status": "approved",
                     },
+                    {
+                        "path": str(target),
+                        "filename": target.name,
+                        "field": "keywords",
+                        "proposed_value": "rain ;  exterior",
+                        "source": "synonym",
+                        "review_status": "pending",
+                        "action": "skip_existing",
+                    },
                 ]
             }
         )
@@ -341,12 +375,14 @@ def test_tui_dedupe_rows_and_metadata_rows_surface_review_state(
     assert metadata[0].sources == "synonym, ucs_catalog"
     assert "Steady rain" in metadata[0].tags_summary
     assert "rain, exterior" in metadata[0].tags_summary
+    assert metadata[0].tags_summary.count("rain, exterior") == 1
     assert [item.source for item in metadata[0].tag_items] == ["plan", "plan"]
     assert [item.status for item in metadata[0].tag_items] == ["pending", "approved"]
 
     changes = metadata_tag_change_rows(plan_path)
     assert [change.status for change in changes] == ["pending", "approved"]
     assert changes[1].value == "rain, exterior"
+    assert [change.value for change in changes].count("rain, exterior") == 1
     assert isinstance(dedupe_group_rows(tmp_db), list)
 
 

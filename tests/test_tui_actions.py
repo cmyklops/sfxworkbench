@@ -256,9 +256,10 @@ def test_tui_tag_plan_falls_back_when_ucs_catalog_is_missing(
     result = tag_plan_action(tmp_library, tmp_db, report_dir)
 
     assert result.ok
-    assert "UCS catalog is optional" in result.message
+    assert "UCS catalog" not in result.message
     assert result.details is not None
     assert result.details["used_ucs_catalog"] is False
+    assert "warning" not in result.details
     assert (report_dir / "metadata_tag_plan.json").exists()
 
 

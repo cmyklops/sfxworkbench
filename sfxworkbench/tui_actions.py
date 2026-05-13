@@ -314,7 +314,6 @@ def tag_plan_action(
     min_confidence: float = 0.8,
 ) -> ActionResult:
     used_catalog = True
-    warning: str | None = None
     try:
         try:
             plan = build_tag_plan(
@@ -334,10 +333,6 @@ def tag_plan_action(
                 raise
             used_catalog = False
             fallback_confidence = min(min_confidence, 0.55)
-            warning = (
-                "UCS catalog is optional and was not loaded; generated review-first suggestions "
-                "from filename, path, and related-group evidence."
-            )
             plan = build_tag_plan(
                 root,
                 db_path=db_path,
@@ -354,14 +349,13 @@ def tag_plan_action(
         write_tag_plan(plan, output, quiet=True)
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("tag_plan", e)
-    suffix = f" {warning}" if warning else ""
     return ActionResult(
         action="tag_plan",
         status="ok",
-        message=f"Built metadata tag plan with {plan.summary.candidate_entries:,} pending entrie(s).{suffix}",
+        message=f"Built metadata tag plan with {plan.summary.add_entries:,} planned DB tag write(s).",
         output_path=str(output),
         refresh=("metadata", "reports"),
-        details={**plan.model_dump(), "used_ucs_catalog": used_catalog, "warning": warning},
+        details={**plan.model_dump(), "used_ucs_catalog": used_catalog},
     )
 
 

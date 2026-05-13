@@ -697,6 +697,89 @@ def test_tag_plan_can_import_reviewed_csv_bulk_updates(tmp_path: Path, tmp_db: P
     ]
 
 
+def test_tag_plan_skips_existing_and_duplicate_pending_tags(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "Impacts"
+    folder.mkdir(parents=True)
+    audio = folder / "Hit 01.wav"
+    audio.write_bytes(b"not really audio")
+    _seed_files(tmp_db, [{"path": audio, "md5": "A", "size": len(audio.read_bytes())}])
+    conn = get_connection(tmp_db)
+    try:
+        file_id = conn.execute("SELECT id FROM files WHERE path = ?", (str(audio),)).fetchone()[0]
+        conn.execute(
+            """
+            INSERT INTO accepted_tags (
+                file_id, field, value, source, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (file_id, "keyword", "impact", "test", "2026-05-12T00:00:00", "2026-05-12T00:00:00"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    csv_path = tmp_path / "bulk_tags.csv"
+    csv_path.write_text(
+        "path,field,value,source,review_status\n"
+        "Impacts/Hit 01.wav,keyword,impact,user_csv,approved\n"
+        "Impacts/Hit 01.wav,keyword,whoosh,user_csv,approved\n"
+        "Impacts/Hit 01.wav,keyword, whoosh ,user_csv,approved\n",
+        encoding="utf-8",
+    )
+
+    plan = build_tag_plan(root, db_path=tmp_db, csv_path=csv_path)
+
+    assert [entry.action for entry in plan.entries] == ["skip_existing", "add", "skip_existing"]
+    assert plan.summary.add_entries == 1
+    assert plan.summary.skip_existing_entries == 2
+
+    plan_path = tmp_path / "csv_tag_plan.json"
+    write_tag_plan(plan, plan_path, quiet=True)
+    dry_run = apply_tag_plan(plan_path, db_path=tmp_db, require_reviewed=True, quiet=True)
+    applied = apply_tag_plan(plan_path, db_path=tmp_db, dry_run=False, require_reviewed=True, quiet=True)
+
+    assert dry_run.applied == 1
+    assert dry_run.skipped == 2
+    assert applied.applied == 1
+    assert applied.skipped == 2
+    conn = get_connection(tmp_db)
+    rows = conn.execute("SELECT field, value FROM accepted_tags ORDER BY value").fetchall()
+    conn.close()
+    assert [(row["field"], row["value"]) for row in rows] == [("keyword", "impact"), ("keyword", "whoosh")]
+
+
+def test_tag_plan_skips_description_when_embedded_description_exists(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "Impacts"
+    folder.mkdir(parents=True)
+    audio = folder / "Hit 01.wav"
+    audio.write_bytes(b"not really audio")
+    _seed_files(tmp_db, [{"path": audio, "md5": "A", "size": len(audio.read_bytes())}])
+    conn = get_connection(tmp_db)
+    try:
+        file_id = conn.execute("SELECT id FROM files WHERE path = ?", (str(audio),)).fetchone()[0]
+        conn.execute(
+            """
+            INSERT INTO metadata_fields (
+                file_id, namespace, key, value, source, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (file_id, "bext", "description", "Hit", "test", "2026-05-12T00:00:00"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    plan = build_tag_plan(root, db_path=tmp_db, min_confidence=0.0)
+    description_entries = [entry for entry in plan.entries if entry.field == "description"]
+
+    assert description_entries
+    assert {entry.action for entry in description_entries} == {"skip_existing"}
+    assert all("Hit" in entry.existing_values for entry in description_entries)
+
+
 def test_tag_plan_summarize_groups_values_for_review(tmp_path: Path, tmp_db: Path) -> None:
     root = tmp_path / "library"
     folder = root / "Impacts"

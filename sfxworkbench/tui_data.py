@@ -243,6 +243,26 @@ _SEARCH_TAG_FIELDS: dict[str, int] = {
 }
 
 
+_MULTIVALUE_TAG_FIELDS = {"keyword", "keywords"}
+
+
+def _canonical_tag_field(field: str) -> str:
+    normalized = field.strip().lower()
+    if normalized in _MULTIVALUE_TAG_FIELDS:
+        return "keyword"
+    if normalized == "ikey":
+        return "keyword"
+    if normalized == "ignr":
+        return "category"
+    if normalized == "isbj":
+        return "subcategory"
+    if normalized == "inam":
+        return "title"
+    if normalized == "icmt":
+        return "comment"
+    return normalized
+
+
 def _clean_tag_value(value: object) -> str:
     text = str(value or "")
     text = text.replace("\u2010", "-").replace("\u2011", "-").replace("\u2012", "-")
@@ -258,6 +278,24 @@ def _clean_tag_value(value: object) -> str:
 
 def _combined_tags_summary(items: tuple[TagDisplayItem, ...]) -> str:
     return " | ".join(item.value for item in items[:8])
+
+
+def _is_duplicate_tag_item(item: TagDisplayItem, existing_items: tuple[TagDisplayItem, ...]) -> bool:
+    field = _canonical_tag_field(item.field)
+    if not field:
+        return False
+    matching_items = [existing for existing in existing_items if _canonical_tag_field(existing.field) == field]
+    if not matching_items:
+        return False
+    if field in _MULTIVALUE_TAG_FIELDS:
+        value = _clean_tag_value(item.value).casefold()
+        return any(_clean_tag_value(existing.value).casefold() == value for existing in matching_items)
+    return True
+
+
+def _pending_value_summary(item: TagDisplayItem) -> str:
+    source_suffix = f" [{item.evidence_source}]" if item.evidence_source else ""
+    return f"{item.status.upper()} {_tag_label(item.field)}: {item.value}{source_suffix}"
 
 
 def _metadata_key_rank(namespace: str, key: str) -> int:
@@ -547,6 +585,7 @@ def feature_pages(db_path: Path = DEFAULT_DB_PATH, config_path: Path | None = No
 
     return [
         FeaturePage("scan", "Scan", "ready", metric_count("indexed_files"), "Refresh the index and run full audits."),
+        FeaturePage("files", "Files", "ready", metric_count("indexed_files"), "Browse and audition indexed files."),
         FeaturePage(
             "clean",
             "Declutter",
@@ -680,6 +719,8 @@ def metadata_workbench_rows(
         for entry in payload.get("entries", []):
             path = str(entry.get("path", ""))
             if not path:
+                continue
+            if str(entry.get("action", "add")).strip() != "add":
                 continue
             state = pending_by_path.setdefault(
                 path,
@@ -891,26 +932,28 @@ def metadata_workbench_rows(
         pending = pending_by_path.get(
             row["path"], {"pending": 0, "approved": 0, "rejected": 0, "sources": set(), "values": [], "items": []}
         )
-        sources = pending["sources"]
-        assert isinstance(sources, set)
-        values = pending["values"]
-        assert isinstance(values, list)
         pending_items = pending["items"]
         assert isinstance(pending_items, list)
-        pending_count = int(pending["pending"])
-        approved_count = int(pending["approved"])
-        rejected_count = int(pending["rejected"])
+        file_id = int(row["id"])
+        embedded_items = tuple(embedded_items_by_id.get(file_id, []))
+        accepted_items = tuple(accepted_items_by_id.get(file_id, []))
+        existing_items = (*embedded_items, *accepted_items)
+        visible_pending_items = tuple(
+            item for item in pending_items if not _is_duplicate_tag_item(item, existing_items)
+        )
+        pending_count = sum(1 for item in visible_pending_items if item.status == "pending")
+        approved_count = sum(1 for item in visible_pending_items if item.status == "approved")
+        rejected_count = sum(1 for item in visible_pending_items if item.status == "rejected")
         status = "pending" if pending_count or approved_count else ("accepted" if row["accepted_tags"] else "info")
         embedded_summary = str(row["embedded_summary"] or "")
         accepted_summary = str(row["accepted_summary"] or "")
-        pending_summary = " | ".join(values[:4])
-        file_id = int(row["id"])
+        pending_summary = " | ".join(_pending_value_summary(item) for item in visible_pending_items[:4])
         tag_items = tuple(
             item
             for item in (
-                *embedded_items_by_id.get(file_id, [])[:4],
-                *pending_items[:8],
-                *accepted_items_by_id.get(file_id, [])[:4],
+                *embedded_items[:4],
+                *visible_pending_items[:8],
+                *accepted_items[:4],
             )
             if item.value
         )
@@ -928,7 +971,9 @@ def metadata_workbench_rows(
                 pending_summary=pending_summary,
                 tags_summary=_combined_tags_summary(tag_items),
                 tag_items=tag_items,
-                sources=", ".join(sorted(sources)),
+                sources=", ".join(
+                    sorted(item.evidence_source for item in visible_pending_items if item.evidence_source)
+                ),
                 status=status,
             )
         )
@@ -952,6 +997,7 @@ def metadata_findings(db_path: Path = DEFAULT_DB_PATH, *, plan_path: Path | None
 def metadata_tag_change_rows(
     plan_path: Path,
     *,
+    db_path: Path | None = None,
     query: str = "",
     limit: int = 500,
 ) -> list[TagChangeRow]:
@@ -963,9 +1009,73 @@ def metadata_tag_change_rows(
     except json.JSONDecodeError:
         return []
 
+    entries = list(payload.get("entries", []))
+    existing_by_path: dict[str, tuple[TagDisplayItem, ...]] = {}
+    if db_path is not None:
+        paths = tuple(sorted({str(entry.get("path", "")).strip() for entry in entries if entry.get("path")}))
+        if paths:
+            conn = get_connection(db_path)
+            try:
+                placeholders = ",".join("?" for _ in paths)
+                file_rows = conn.execute(
+                    f"""
+                    SELECT id, path
+                    FROM files
+                    WHERE path IN ({placeholders})
+                    """,
+                    paths,
+                ).fetchall()
+                path_by_id = {int(row["id"]): str(row["path"]) for row in file_rows}
+                existing_lists: dict[str, list[TagDisplayItem]] = {path: [] for path in path_by_id.values()}
+                file_ids = tuple(path_by_id)
+                if file_ids:
+                    file_placeholders = ",".join("?" for _ in file_ids)
+                    for item in conn.execute(
+                        f"""
+                        SELECT file_id, namespace, key, value
+                        FROM metadata_fields
+                        WHERE file_id IN ({file_placeholders})
+                          AND value IS NOT NULL AND TRIM(value) != ''
+                          AND (
+                              lower(key) IN ('description', 'comment', 'keywords', 'title', 'category', 'subcategory')
+                              OR key IN ('ICMT', 'IKEY', 'INAM', 'IGNR', 'ISBJ')
+                          )
+                        """,
+                        file_ids,
+                    ):
+                        existing_lists.setdefault(path_by_id[int(item["file_id"])], []).append(
+                            TagDisplayItem(
+                                source="file",
+                                field=str(item["key"]),
+                                value=_clean_tag_value(item["value"]),
+                            )
+                        )
+                    for item in conn.execute(
+                        f"""
+                        SELECT file_id, field, value, source
+                        FROM accepted_tags
+                        WHERE file_id IN ({file_placeholders})
+                          AND value IS NOT NULL AND TRIM(value) != ''
+                        """,
+                        file_ids,
+                    ):
+                        existing_lists.setdefault(path_by_id[int(item["file_id"])], []).append(
+                            TagDisplayItem(
+                                source="db",
+                                field=str(item["field"]),
+                                value=_clean_tag_value(item["value"]),
+                                evidence_source=str(item["source"] or ""),
+                            )
+                        )
+                existing_by_path = {path: tuple(items) for path, items in existing_lists.items()}
+            finally:
+                conn.close()
+
     needle = query.casefold().strip()
     rows: list[TagChangeRow] = []
-    for entry in payload.get("entries", []):
+    for entry in entries:
+        if str(entry.get("action", "add")).strip() != "add":
+            continue
         path = str(entry.get("path", "")).strip()
         filename = str(entry.get("filename", "")).strip() or (Path(path).name if path else "")
         field = str(entry.get("field", "")).strip()
@@ -973,6 +1083,11 @@ def metadata_tag_change_rows(
         status = str(entry.get("review_status", "pending")).strip() or "pending"
         source = str(entry.get("source", "")).strip()
         if not field or not value:
+            continue
+        if _is_duplicate_tag_item(
+            TagDisplayItem(source="plan", field=field, value=value, status=status, evidence_source=source),
+            existing_by_path.get(path, ()),
+        ):
             continue
         haystack = " ".join((filename, path, field, value, status, source)).casefold()
         if needle and needle not in haystack:

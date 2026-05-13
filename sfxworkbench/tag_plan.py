@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,6 +33,15 @@ console = Console()
 PLAN_SCHEMA_VERSION = 1
 _VALID_REVIEW_STATES = {"approved", "rejected", "pending"}
 _MULTIVALUE_FIELDS = {"keyword", "keywords"}
+_SINGLE_VALUE_SENTINEL = "<single-value-field>"
+_EMBEDDED_FIELD_KEYS: dict[str, tuple[tuple[str, str], ...]] = {
+    "description": (("bext", "description"), ("tag", "description")),
+    "keyword": (("riff_info", "ikey"), ("tag", "keywords")),
+    "category": (("riff_info", "ignr"), ("tag", "category")),
+    "subcategory": (("tag", "subcategory"),),
+    "title": (("riff_info", "inam"), ("tag", "title")),
+    "comment": (("riff_info", "icmt"), ("tag", "comment")),
+}
 
 
 def _now_iso() -> str:
@@ -76,29 +86,85 @@ def _matches_selector(
     return True
 
 
+def _canonical_tag_field(field: str) -> str:
+    normalized = field.strip().lower()
+    if normalized in _MULTIVALUE_FIELDS:
+        return "keyword"
+    return normalized
+
+
 def _normalized_selector(values: list[str] | None, *, option_name: str) -> set[str]:
     return set(normalize_filter_values(values, option_name=option_name))
 
 
 def _existing_tag_values(conn, *, file_id: int, field: str) -> list[str]:
+    canonical = _canonical_tag_field(field)
+    fields = ("keyword", "keywords") if canonical == "keyword" else (canonical,)
+    placeholders = ",".join("?" for _ in fields)
     rows = conn.execute(
-        """
+        f"""
         SELECT value
         FROM accepted_tags
-        WHERE file_id = ? AND field = ?
+        WHERE file_id = ? AND lower(field) IN ({placeholders})
         ORDER BY value
         """,
-        (file_id, field),
+        (file_id, *fields),
     ).fetchall()
     return [row["value"] for row in rows]
+
+
+def _existing_embedded_values(conn, *, file_id: int, field: str) -> list[str]:
+    field_keys = _EMBEDDED_FIELD_KEYS.get(_canonical_tag_field(field), ())
+    if not field_keys:
+        return []
+    clauses = " OR ".join("(lower(namespace) = ? AND lower(key) = ?)" for _ in field_keys)
+    params = [value for pair in field_keys for value in pair]
+    rows = conn.execute(
+        f"""
+        SELECT value
+        FROM metadata_fields
+        WHERE file_id = ?
+          AND value IS NOT NULL
+          AND TRIM(value) != ''
+          AND ({clauses})
+        ORDER BY value
+        """,
+        (file_id, *params),
+    ).fetchall()
+    return [row["value"] for row in rows]
+
+
+def _existing_values(conn, *, file_id: int, field: str) -> list[str]:
+    return _existing_tag_values(conn, file_id=file_id, field=field) + _existing_embedded_values(
+        conn, file_id=file_id, field=field
+    )
+
+
+def _normalized_tag_value(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip().casefold()
 
 
 def _should_skip_existing(field: str, proposed_value: str, existing_values: list[str]) -> bool:
     if not existing_values:
         return False
-    if field.lower() in _MULTIVALUE_FIELDS:
-        return proposed_value in existing_values
+    if _canonical_tag_field(field) in _MULTIVALUE_FIELDS:
+        proposed_key = _normalized_tag_value(proposed_value)
+        return any(_normalized_tag_value(value) == proposed_key for value in existing_values)
     return True
+
+
+def _planned_seen_key(field: str, proposed_value: str) -> str:
+    if _canonical_tag_field(field) in _MULTIVALUE_FIELDS:
+        return _normalized_tag_value(proposed_value)
+    return _SINGLE_VALUE_SENTINEL
+
+
+def _should_skip_planned_duplicate(field: str, proposed_value: str, seen_values: set[str]) -> bool:
+    return _planned_seen_key(field, proposed_value) in seen_values
+
+
+def _remember_planned_add(field: str, proposed_value: str, seen_values: set[str]) -> None:
+    seen_values.add(_planned_seen_key(field, proposed_value))
 
 
 def _summarize_plan(plan: TagPlan) -> TagPlanSummary:
@@ -125,14 +191,21 @@ def _plan_from_suggestion_report(
     source_filters = normalize_filter_values(sources, option_name="--source")
     field_filters = normalize_filter_values(fields, option_name="--field")
     entries: list[TagPlanEntry] = []
+    planned_values: dict[tuple[int, str], set[str]] = {}
     entry_id = 1
     for suggestion_entry in report.entries:
         suggestions = filter_suggestions(suggestion_entry.suggestions, sources=source_filters, fields=field_filters)
         for suggestion in suggestions:
-            existing_values = _existing_tag_values(conn, file_id=suggestion_entry.file_id, field=suggestion.field)
-            action = (
-                "skip_existing" if _should_skip_existing(suggestion.field, suggestion.value, existing_values) else "add"
-            )
+            existing_values = _existing_values(conn, file_id=suggestion_entry.file_id, field=suggestion.field)
+            seen_key = (suggestion_entry.file_id, _canonical_tag_field(suggestion.field))
+            seen_values = planned_values.setdefault(seen_key, set())
+            action = "add"
+            if _should_skip_existing(
+                suggestion.field, suggestion.value, existing_values
+            ) or _should_skip_planned_duplicate(suggestion.field, suggestion.value, seen_values):
+                action = "skip_existing"
+            else:
+                _remember_planned_add(suggestion.field, suggestion.value, seen_values)
             entries.append(
                 TagPlanEntry(
                     entry_id=entry_id,
@@ -264,6 +337,7 @@ def _plan_from_csv(
     conn = get_connection(db_path)
     entries: list[TagPlanEntry] = []
     errors: list[dict] = []
+    planned_values: dict[tuple[int, str], set[str]] = {}
     entry_id = 1
     with csv_path.open(newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
@@ -296,8 +370,16 @@ def _plan_from_csv(
                 errors.append({"row": row_number, "error": f"invalid review_status: {review_status}"})
                 continue
             evidence = [_csv_row_value(row, "evidence") or f"csv:{csv_path.name}:row:{row_number}"]
-            existing_values = _existing_tag_values(conn, file_id=int(file_row["id"]), field=field)
-            action = "skip_existing" if _should_skip_existing(field, value, existing_values) else "add"
+            existing_values = _existing_values(conn, file_id=int(file_row["id"]), field=field)
+            seen_key = (int(file_row["id"]), _canonical_tag_field(field))
+            seen_values = planned_values.setdefault(seen_key, set())
+            action = "add"
+            if _should_skip_existing(field, value, existing_values) or _should_skip_planned_duplicate(
+                field, value, seen_values
+            ):
+                action = "skip_existing"
+            else:
+                _remember_planned_add(field, value, seen_values)
             entries.append(
                 TagPlanEntry(
                     entry_id=entry_id,
@@ -615,6 +697,7 @@ def apply_tag_plan(
         return result
     conn = get_connection(effective_db)
     now = _now_iso()
+    planned_values: dict[tuple[int, str], set[str]] = {}
     for entry in plan.entries:
         if require_reviewed and entry.review_status != "approved":
             result.skipped += 1
@@ -629,12 +712,20 @@ def apply_tag_plan(
         if validation_error is not None:
             result.errors.append({"entry_id": entry.entry_id, "path": entry.path, "error": validation_error})
             continue
-        existing_values = _existing_tag_values(conn, file_id=entry.file_id, field=entry.field)
-        if entry.action == "skip_existing" or _should_skip_existing(entry.field, entry.proposed_value, existing_values):
+        if entry.action != "add":
+            result.skipped += 1
+            continue
+        existing_values = _existing_values(conn, file_id=entry.file_id, field=entry.field)
+        seen_key = (entry.file_id, _canonical_tag_field(entry.field))
+        seen_values = planned_values.setdefault(seen_key, set())
+        if _should_skip_existing(entry.field, entry.proposed_value, existing_values) or _should_skip_planned_duplicate(
+            entry.field, entry.proposed_value, seen_values
+        ):
             result.skipped += 1
             continue
         if dry_run:
             result.applied += 1
+            _remember_planned_add(entry.field, entry.proposed_value, seen_values)
             continue
         conn.execute(
             """
@@ -664,6 +755,7 @@ def apply_tag_plan(
             ),
         )
         result.applied += 1
+        _remember_planned_add(entry.field, entry.proposed_value, seen_values)
     if log_path is None and not dry_run:
         log_path = _default_log_path(plan_path)
     if log_path is not None:

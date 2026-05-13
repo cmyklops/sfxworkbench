@@ -61,7 +61,6 @@ from sfxworkbench.tui_data import (
     library_root,
     list_files,
     metadata_findings,
-    metadata_tag_change_rows,
     metadata_workbench_rows,
     plan_detail_rows,
     preferred_library_path,
@@ -72,6 +71,7 @@ from sfxworkbench.tui_data import (
 
 _FEATURES: tuple[tuple[str, str], ...] = (
     ("scan", "Scan"),
+    ("files", "Files"),
     ("clean", "Declutter"),
     ("dedupe", "Dedupe"),
     ("metadata", "Metadata"),
@@ -80,6 +80,7 @@ _FEATURES: tuple[tuple[str, str], ...] = (
 
 _REPORT_QUERIES = {
     "scan": "audit scan metadata format groups ucs pack",
+    "files": "scan metadata",
     "clean": "clean scan_error rename organize nesting",
     "dedupe": "dedupe pack quarantine",
     "metadata": "metadata tag sidecar",
@@ -90,6 +91,10 @@ _PAGE_HEADERS = {
     "scan": (
         "Scan",
         "Refresh the SQLite index and generate read-only reports that feed the rest of the workbench.",
+    ),
+    "files": (
+        "Files",
+        "Browse indexed files, search filenames, audition audio, and inspect per-file facts.",
     ),
     "clean": (
         "Declutter",
@@ -486,11 +491,12 @@ def run_tui(
         #files-table, #dedupe-groups-table {
             height: 16;
         }
-        #metadata-rows-table {
-            height: 14;
+        #metadata-findings-table {
+            height: 6;
         }
-        #metadata-tag-changes-table {
-            height: 12;
+        #metadata-rows-table {
+            height: 1fr;
+            min-height: 24;
         }
         .pane-title {
             text-style: bold;
@@ -518,10 +524,11 @@ def run_tui(
             ("q", "quit", "Quit"),
             ("r", "refresh", "Refresh"),
             ("1", "focus_scan", "Scan"),
-            ("2", "focus_clean", "Declutter"),
-            ("3", "focus_dedupe", "Dedupe"),
-            ("4", "focus_metadata", "Metadata"),
-            ("5", "focus_advanced", "Advanced"),
+            ("2", "focus_files", "Files"),
+            ("3", "focus_clean", "Declutter"),
+            ("4", "focus_dedupe", "Dedupe"),
+            ("5", "focus_metadata", "Metadata"),
+            ("6", "focus_advanced", "Advanced"),
             ("s", "focus_file_search", "File Search"),
         ]
 
@@ -568,6 +575,7 @@ def run_tui(
             with ContentSwitcher(initial="loading-page", id="feature-pages"):
                 yield from self._loading_page()
                 yield from self._page("scan", self._scan_page)
+                yield from self._page("files", self._files_page)
                 yield from self._page("clean", self._clean_page)
                 yield from self._page("dedupe", self._dedupe_page)
                 yield from self._page("metadata", self._metadata_page)
@@ -668,24 +676,9 @@ def run_tui(
                 yield Button("Approve DB Tags", id="metadata-approve")
                 yield Button("Apply DB Tags", id="metadata-apply", variant="warning")
                 yield Button("Export Sidecar", id="metadata-sidecar")
-            yield Static(
-                "Tags combines existing embedded search text, planned DB tags, and already accepted DB tags. DB tags are review state, not embedded audio writes.",
-                classes="note",
-            )
             yield DataTable(id="metadata-findings-table")
             yield Static("Metadata Values - First 100 Prioritized Files", classes="pane-title")
             yield DataTable(id="metadata-rows-table")
-            yield Static("Tag Changes - Active Plan", classes="pane-title")
-            yield DataTable(id="metadata-tag-changes-table")
-            yield Static("Indexed Files", classes="pane-title")
-            yield Input(placeholder="Search indexed files", id="file-search")
-            with Horizontal(classes="button-row"):
-                yield Button("Clear Search", id="files-clear-search")
-                yield Button("Scan Library", id="files-scan-library")
-                yield Button("Audition", id="files-open-file")
-                yield Button("Reveal in Files", id="files-reveal-file")
-            yield DataTable(id="files-table")
-            yield Static("", id="file-detail", classes="detail")
             yield Static("History", classes="pane-title")
             yield DataTable(id="metadata-reports-table")
             yield Static("History Detail", classes="pane-title")
@@ -747,7 +740,7 @@ def run_tui(
             self._open_feature("scan")
 
         def action_focus_files(self) -> None:
-            self._open_feature("metadata")
+            self._open_feature("files")
 
         def action_focus_clean(self) -> None:
             self._open_feature("clean")
@@ -762,7 +755,7 @@ def run_tui(
             self._open_feature("advanced")
 
         def action_focus_file_search(self) -> None:
-            self._open_feature("metadata")
+            self._open_feature("files")
             self.query_one("#file-search", Input).focus()
 
         def _open_feature(self, key: str) -> None:
@@ -1541,35 +1534,11 @@ def run_tui(
             )
             if not rows:
                 table.add_row(_state_token("info"), "", "No indexed files")
-                self._fill_metadata_tag_changes(plan_path)
                 return
             for row in rows:
                 table.add_row(
                     _state_token(row.status),
                     _tags_cell(row),
-                    row.filename,
-                )
-            self._fill_metadata_tag_changes(plan_path)
-
-        def _fill_metadata_tag_changes(self, plan_path: Path) -> None:
-            table = self._reset_table(
-                "metadata-tag-changes-table",
-                (
-                    ("State", "state", 12),
-                    ("Tag", "tag", 110),
-                    ("Source", "source", 22),
-                    ("Filename", "filename", 56),
-                ),
-            )
-            rows = metadata_tag_change_rows(plan_path, limit=500)
-            if not rows:
-                table.add_row(_state_token("info"), "No active metadata_tag_plan.json changes found.", "", "")
-                return
-            for row in rows:
-                table.add_row(
-                    _state_token(row.status),
-                    _tag_text(row.value, row.field),
-                    _clip_middle(row.source, width=22),
                     row.filename,
                 )
 
