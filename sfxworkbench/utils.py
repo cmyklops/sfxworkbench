@@ -140,7 +140,12 @@ def load_plan_json_cached(path: Path) -> dict | None:
     if cached is not None:
         return cached
     try:
-        parsed = json.loads(path.read_text())
+        try:
+            import orjson
+        except ImportError:
+            parsed = json.loads(path.read_text())
+        else:
+            parsed = orjson.loads(path.read_bytes())
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(parsed, dict):

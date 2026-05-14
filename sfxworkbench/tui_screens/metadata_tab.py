@@ -50,8 +50,9 @@ def compose(app) -> ComposeResult:
 
 
 def fill(app) -> None:
-    from sfxworkbench.tui_app import _sort_text, _state_token, _tags_cell
+    from sfxworkbench.tui_app import _sort_text, _state_token
     from sfxworkbench.tui_data import metadata_findings, metadata_workbench_rows
+    from sfxworkbench.tui_text import _tags_cell
 
     plan_path = app._report_dir / "metadata_tag_plan.json"
     app._fill_findings(
@@ -66,12 +67,19 @@ def fill(app) -> None:
             ("Filename", "filename", 56),
         ),
     )
-    # ``Random Pending`` results can't be cached (random order varies per
-    # fetch), so the warm thread hands them back via ``_metadata_prewarmed_rows``
-    # instead of going through the adapter cache.
-    prewarmed = getattr(app, "_metadata_prewarmed_rows", None)
-    if prewarmed is not None:
-        rows = prewarmed
+    # ``Random Pending`` results can't use the adapter cache (random order
+    # varies), so the warm thread hands them back under the current warm key.
+    warm_key = None
+    if hasattr(app, "_metadata_warm_key"):
+        warm_key = app._metadata_warm_key(
+            plan_path,
+            random_pending=getattr(app, "_metadata_random_pending", False),
+        )
+    prewarmed_by_key = getattr(app, "_metadata_prewarmed_rows_by_key", {})
+    prewarmed = prewarmed_by_key.pop(warm_key, None) if warm_key is not None else None
+    legacy_prewarmed = getattr(app, "_metadata_prewarmed_rows", None)
+    if prewarmed is not None or legacy_prewarmed is not None:
+        rows = prewarmed if prewarmed is not None else legacy_prewarmed
         app._metadata_prewarmed_rows = None
     else:
         rows = metadata_workbench_rows(
@@ -95,6 +103,11 @@ def fill(app) -> None:
     if not rows:
         table.add_row(_state_token("info"), "", "No indexed files")
         return
+
+    def tags_cell(row):
+        cell = getattr(row, "prerendered_tags_cell", None)
+        return cell.copy() if cell is not None else _tags_cell(row)
+
     # Batch insert: one ``add_rows`` call beats 500 reactive ``add_row`` calls
     # by ~10× on a real-library Metadata refresh.
-    table.add_rows((_state_token(row.status), _tags_cell(row), row.filename) for row in rows)
+    table.add_rows((_state_token(row.status), tags_cell(row), row.filename) for row in rows)

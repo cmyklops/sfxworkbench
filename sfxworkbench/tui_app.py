@@ -63,6 +63,12 @@ from sfxworkbench.tui_data import (
 from sfxworkbench.tui_data import (
     file_signature as _data_file_signature,
 )
+from sfxworkbench.tui_perf import begin_trace as _perf_begin_trace
+from sfxworkbench.tui_perf import snapshot_trace as _perf_snapshot_trace
+from sfxworkbench.tui_perf import timed as _perf_timed
+from sfxworkbench.tui_perf import write_trace as _perf_write_trace
+from sfxworkbench.tui_text import _tag_text as _tag_text
+from sfxworkbench.tui_text import _tags_cell as _tags_cell
 
 _FEATURES: tuple[tuple[str, str], ...] = (
     ("scan", "Scan"),
@@ -241,73 +247,6 @@ def _finding_status(status: str, count: object) -> str:
     if isinstance(count, int) and count == 0:
         return "clear"
     return status
-
-
-_TAG_FIELD_STYLES = {
-    "description": "cyan",
-    "icmt": "cyan",
-    "keywords": "magenta",
-    "ikey": "magenta",
-    "category": "green",
-    "ignr": "green",
-    "subcategory": "blue",
-    "ucs_category": "yellow",
-    "ucs_subcategory": "yellow",
-    "title": "white",
-    "inam": "white",
-    "comment": "dim cyan",
-    "isbj": "blue",
-}
-
-_TAG_STATUS_SYMBOLS = {
-    "pending": ("!", "bold yellow"),
-    "approved": ("+", "green"),
-    "rejected": ("x", "red"),
-}
-
-_TAG_SOURCE_SYMBOLS = {
-    "filename": ("#", "dim cyan"),
-    "group": ("~", "dim magenta"),
-    "path": ("/", "dim blue"),
-    "ucs_catalog": ("^", "dim yellow"),
-    "ucs_stem": ("^", "dim yellow"),
-    "synonym": ("*", "dim green"),
-}
-
-
-def _tag_text(value: str, field: str, *, status: str = "", source: str = "") -> Text:
-    style = _TAG_FIELD_STYLES.get(field.lower(), "white")
-    if status == "pending":
-        style = f"bold {style}"
-    text = Text()
-    status_symbol = _TAG_STATUS_SYMBOLS.get(status)
-    source_symbol = _TAG_SOURCE_SYMBOLS.get(source)
-    if status_symbol is not None:
-        text.append(status_symbol[0], style=status_symbol[1])
-    if source_symbol is not None:
-        text.append(source_symbol[0], style=source_symbol[1])
-    if status_symbol is not None or source_symbol is not None:
-        text.append(" ")
-    text.append(value, style=style)
-    return text
-
-
-def _tags_cell(row) -> Text:
-    if not row.tag_items:
-        return Text("No searchable tags found", style="dim")
-    text = Text()
-    for index, item in enumerate(row.tag_items):
-        if index:
-            text.append("  |  ", style="dim")
-        text.append_text(
-            _tag_text(
-                item.value,
-                item.field,
-                status=item.status if item.source == "plan" else "",
-                source=item.evidence_source if item.source == "plan" else "",
-            )
-        )
-    return text
 
 
 def _latest_metadata_tag_plan(report_dir: Path) -> Path | None:
@@ -613,6 +552,8 @@ def run_tui(
             self._metadata_offset = 0
             self._metadata_random_pending = False
             self._metadata_page_size = 500
+            self._metadata_warming_keys: set[tuple[object, ...]] = set()
+            self._metadata_prewarmed_rows_by_key: dict[tuple[object, ...], list] = {}
             self._dedupe_query = ""
             self._dedupe_search_debounce = None
             # Tier 5.14: tabs whose data is stale and need a fill before the user
@@ -965,6 +906,18 @@ def run_tui(
             self._metadata_random_pending = True
             self._metadata_offset = 0
             self._fill_metadata()
+
+        def _metadata_warm_key(self, plan_path: Path, *, random_pending: bool) -> tuple[object, ...]:
+            return (
+                "metadata_warm",
+                _data_file_signature(self.db_path),
+                _data_file_signature(plan_path),
+                getattr(self, "_metadata_query", ""),
+                int(getattr(self, "_metadata_page_size", 500)),
+                int(getattr(self, "_metadata_offset", 0)),
+                bool(random_pending),
+                True,
+            )
 
         def _open_feature(self, key: str) -> None:
             if key == "organize":
@@ -1962,6 +1915,11 @@ def run_tui(
 
             plan_path = self._report_dir / "metadata_tag_plan.json"
             random_pending = getattr(self, "_metadata_random_pending", False)
+            warm_key = self._metadata_warm_key(plan_path, random_pending=random_pending)
+            if random_pending and warm_key in self._metadata_prewarmed_rows_by_key:
+                metadata_tab.fill(self)
+                self._dirty_tabs.discard("metadata")
+                return
             if not random_pending:
                 findings_key = (
                     "metadata_findings",
@@ -1977,10 +1935,7 @@ def run_tui(
                     int(getattr(self, "_metadata_offset", 0)),
                     True,
                 )
-                if (
-                    _data_cache_get(findings_key) is not None
-                    and _data_cache_get(rows_key) is not None
-                ):
+                if _data_cache_get(findings_key) is not None and _data_cache_get(rows_key) is not None:
                     metadata_tab.fill(self)
                     self._dirty_tabs.discard("metadata")
                     return
@@ -1989,11 +1944,13 @@ def run_tui(
                 table = self.query_one("#metadata-rows-table", DataTable)
                 table.clear(columns=True)
                 table.add_columns("Status")
-                table.add_row(
-                    "Loading random pending…" if random_pending else "Loading prioritized metadata rows…"
-                )
+                table.add_row("Loading random pending…" if random_pending else "Loading prioritized metadata rows…")
             except NoMatches:
                 pass
+
+            if warm_key in self._metadata_warming_keys:
+                return
+            self._metadata_warming_keys.add(warm_key)
 
             db_path_local = self.db_path
             query = getattr(self, "_metadata_query", "")
@@ -2004,33 +1961,58 @@ def run_tui(
                 from sfxworkbench.tui_data import metadata_findings as _mf
                 from sfxworkbench.tui_data import metadata_workbench_rows as _mw
 
-                prewarmed: list | None = None
+                _perf_begin_trace("cold_open")
+                prewarmed: list | None = [] if random_pending else None
                 try:
-                    _mf(db_path=db_path_local, plan_path=plan_path)
-                    result = _mw(
-                        db_path=db_path_local,
-                        plan_path=plan_path,
-                        query=query,
-                        limit=page_size,
-                        offset=offset,
-                        random_pending=random_pending,
-                        pending_only=True,
-                    )
+                    with _perf_timed("metadata_findings"):
+                        _mf(db_path=db_path_local, plan_path=plan_path)
+                    with _perf_timed("metadata_workbench_rows"):
+                        result = _mw(
+                            db_path=db_path_local,
+                            plan_path=plan_path,
+                            query=query,
+                            limit=page_size,
+                            offset=offset,
+                            random_pending=random_pending,
+                            pending_only=True,
+                        )
                     if random_pending:
                         prewarmed = list(result)
                 except Exception:  # pragma: no cover - defensive thread boundary
                     pass
-                if random_pending:
-                    self._metadata_prewarmed_rows = prewarmed
-                self.call_from_thread(self._fill_metadata_after_warm)
+                perf_trace = _perf_snapshot_trace()
+                self.call_from_thread(self._fill_metadata_after_warm, warm_key, prewarmed, perf_trace)
 
             threading.Thread(target=_warm, daemon=True).start()
 
-        def _fill_metadata_after_warm(self) -> None:
+        def _fill_metadata_after_warm(
+            self,
+            warm_key: tuple[object, ...],
+            prewarmed: list | None = None,
+            perf_trace: dict | None = None,
+        ) -> None:
             from sfxworkbench.tui_screens import metadata_tab
 
+            self._metadata_warming_keys.discard(warm_key)
+            if prewarmed is not None:
+                self._metadata_prewarmed_rows_by_key[warm_key] = prewarmed
+
+            current_key = self._metadata_warm_key(
+                self._report_dir / "metadata_tag_plan.json",
+                random_pending=getattr(self, "_metadata_random_pending", False),
+            )
+            active = self._active_feature() == "metadata"
+            if not active or warm_key != current_key:
+                self._dirty_tabs.add("metadata")
+                _perf_write_trace(perf_trace)
+                if active and warm_key != current_key:
+                    self._fill_metadata()
+                return
+
+            start = time.perf_counter()
             metadata_tab.fill(self)
             self._dirty_tabs.discard("metadata")
+            _perf_write_trace(perf_trace, extra_phases={"post_warm_fill": time.perf_counter() - start})
 
         def _fill_history(self) -> None:
             from sfxworkbench.tui_screens import history_tab

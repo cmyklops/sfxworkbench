@@ -45,6 +45,7 @@ Documentation = "https://github.com/cmyklops/sfxworkbench#readme"
 dev = ["pytest>=8.0", "pytest-cov", "ruff>=0.8", "poethepoet>=0.30", "mypy>=1.8"]
 metadata = ["wavinfo>=4.0", "mutagen>=1.47"]
 tui = [
+    "orjson>=3.10",
     "textual>=0.89",
 ]
 

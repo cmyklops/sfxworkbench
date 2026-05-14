@@ -5,9 +5,12 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+
+from rich.text import Text
 
 from sfxworkbench.apply_logs import APPLY_LOG_DIR_NAME
 from sfxworkbench.audit_cmd import _STANDARD_SAMPLE_RATES
@@ -21,6 +24,8 @@ from sfxworkbench.metadata_fields import (
     values_equal_for_dedup,
 )
 from sfxworkbench.preservation import build_preservation_rules
+from sfxworkbench.tui_perf import record_phase as _perf_record_phase
+from sfxworkbench.tui_perf import timed as _perf_timed
 
 _TUI_LIBRARY_PATH_KEY = "tui_library_path"
 _PLAN_SUMMARY_CACHE: dict[tuple[str, float, int, bool], PlanSummary] = {}
@@ -284,6 +289,7 @@ class MetadataWorkbenchRow:
     pending_summary: str = ""
     tags_summary: str = ""
     tag_items: tuple[TagDisplayItem, ...] = ()
+    prerendered_tags_cell: Text | None = None
     sources: str = ""
     status: str = "info"
 
@@ -935,74 +941,75 @@ def _metadata_plan_index(plan_path: Path) -> sqlite3.Connection | None:
             pass
         _METADATA_PLAN_INDEX_CACHE.pop(cached_key, None)
 
-    from sfxworkbench.utils import load_plan_json_cached
+    with _perf_timed("plan_index"):
+        from sfxworkbench.utils import load_plan_json_cached
 
-    payload = load_plan_json_cached(plan_path) or {}
-    entries = payload.get("entries", [])
-    if not isinstance(entries, list):
-        return None
+        payload = load_plan_json_cached(plan_path) or {}
+        entries = payload.get("entries", [])
+        if not isinstance(entries, list):
+            return None
 
-    # The TUI warms this cache on a background thread, then reads from it on
-    # the UI thread. The connection is populated before publication and is
-    # read-only after that, so disabling the same-thread guard avoids a hard
-    # sqlite3.ProgrammingError on the first post-warm render.
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute(
-        """
-        CREATE TABLE plan_entries (
-            entry_id INTEGER,
-            path TEXT NOT NULL,
-            filename TEXT NOT NULL,
-            field TEXT NOT NULL,
-            proposed_value TEXT NOT NULL,
-            source TEXT NOT NULL,
-            status TEXT NOT NULL,
-            action TEXT NOT NULL,
-            confidence REAL,
-            existing_value TEXT
-        )
-        """
-    )
-    rows: list[tuple[int, str, str, str, str, str, str, str, float | None, str]] = []
-    for ordinal, raw in enumerate(entries):
-        if not isinstance(raw, dict):
-            continue
-        path = str(raw.get("path", "")).strip()
-        if not path:
-            continue
-        existing_values = raw.get("existing_values") or []
-        existing_value = str(existing_values[0]) if isinstance(existing_values, list) and existing_values else ""
-        confidence = raw.get("confidence")
-        rows.append(
-            (
-                int(raw.get("entry_id")) if isinstance(raw.get("entry_id"), int) else ordinal,
-                path,
-                str(raw.get("filename", "") or Path(path).name),
-                str(raw.get("field", "")).strip(),
-                _clean_tag_value(raw.get("proposed_value", "")),
-                str(raw.get("source", "")).strip(),
-                str(raw.get("review_status", "pending")).strip() or "pending",
-                str(raw.get("action", "add")).strip() or "add",
-                float(confidence) if isinstance(confidence, int | float) else None,
-                _clean_tag_value(existing_value),
+        # The TUI warms this cache on a background thread, then reads from it on
+        # the UI thread. The connection is populated before publication and is
+        # read-only after that, so disabling the same-thread guard avoids a hard
+        # sqlite3.ProgrammingError on the first post-warm render.
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            """
+            CREATE TABLE plan_entries (
+                entry_id INTEGER,
+                path TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                field TEXT NOT NULL,
+                proposed_value TEXT NOT NULL,
+                source TEXT NOT NULL,
+                status TEXT NOT NULL,
+                action TEXT NOT NULL,
+                confidence REAL,
+                existing_value TEXT
             )
+            """
         )
-    conn.executemany(
-        """
-        INSERT INTO plan_entries (
-            entry_id, path, filename, field, proposed_value, source, status,
-            action, confidence, existing_value
+        rows: list[tuple[int, str, str, str, str, str, str, str, float | None, str]] = []
+        for ordinal, raw in enumerate(entries):
+            if not isinstance(raw, dict):
+                continue
+            path = str(raw.get("path", "")).strip()
+            if not path:
+                continue
+            existing_values = raw.get("existing_values") or []
+            existing_value = str(existing_values[0]) if isinstance(existing_values, list) and existing_values else ""
+            confidence = raw.get("confidence")
+            rows.append(
+                (
+                    int(raw.get("entry_id")) if isinstance(raw.get("entry_id"), int) else ordinal,
+                    path,
+                    str(raw.get("filename", "") or Path(path).name),
+                    str(raw.get("field", "")).strip(),
+                    _clean_tag_value(raw.get("proposed_value", "")),
+                    str(raw.get("source", "")).strip(),
+                    str(raw.get("review_status", "pending")).strip() or "pending",
+                    str(raw.get("action", "add")).strip() or "add",
+                    float(confidence) if isinstance(confidence, int | float) else None,
+                    _clean_tag_value(existing_value),
+                )
+            )
+        conn.executemany(
+            """
+            INSERT INTO plan_entries (
+                entry_id, path, filename, field, proposed_value, source, status,
+                action, confidence, existing_value
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        rows,
-    )
-    conn.execute("CREATE INDEX idx_plan_entries_path ON plan_entries(path)")
-    conn.execute("CREATE INDEX idx_plan_entries_action_status ON plan_entries(action, status)")
-    conn.commit()
-    _METADATA_PLAN_INDEX_CACHE[key] = conn
-    return conn
+        conn.execute("CREATE INDEX idx_plan_entries_path ON plan_entries(path)")
+        conn.execute("CREATE INDEX idx_plan_entries_action_status ON plan_entries(action, status)")
+        conn.commit()
+        _METADATA_PLAN_INDEX_CACHE[key] = conn
+        return conn
 
 
 def _metadata_plan_state_from_rows(
@@ -1136,6 +1143,7 @@ def metadata_workbench_rows(
         else:
             pending_by_path = _metadata_plan_state(plan_path)
 
+    sql_start = time.perf_counter()
     like_sql, params = _like_filter_clause(("f.filename", "f.path"), query)
     conn = get_connection(db_path)
     try:
@@ -1202,11 +1210,8 @@ def metadata_workbench_rows(
         embedded_summary_by_id: dict[int, list[str]] = {file_id: [] for file_id in file_ids}
         accepted_summary_by_id: dict[int, list[str]] = {file_id: [] for file_id in file_ids}
         if file_ids:
-            # Caller currently bounds ``limit`` to 100 so this list stays
-            # small, but hardening to a temp table now means a future caller
-            # who bumps the limit (or builds the workbench for a whole
-            # library at once) doesn't silently blow past SQLite's variable
-            # cap. Same pattern used elsewhere in this module.
+            # Keep this path safe if a future caller builds a much larger page
+            # or asks for a whole-library workbench view.
             conn.execute("CREATE TEMP TABLE IF NOT EXISTS _workbench_file_ids (file_id INTEGER PRIMARY KEY)")
             conn.execute("DELETE FROM _workbench_file_ids")
             conn.executemany(
@@ -1284,39 +1289,42 @@ def metadata_workbench_rows(
                 )
     finally:
         conn.close()
+        _perf_record_phase("workbench_sql", time.perf_counter() - sql_start)
 
-    results: list[MetadataWorkbenchRow] = []
-    for row in rows:
-        pending = pending_by_path.get(
-            row["path"], {"pending": 0, "approved": 0, "rejected": 0, "sources": set(), "values": [], "items": []}
-        )
-        pending_items = pending["items"]
-        assert isinstance(pending_items, list)
-        file_id = int(row["id"])
-        embedded_items = tuple(embedded_items_by_id.get(file_id, []))
-        accepted_items = tuple(accepted_items_by_id.get(file_id, []))
-        existing_items = (*embedded_items, *accepted_items)
-        visible_pending_items = tuple(
-            item for item in pending_items if not _is_duplicate_tag_item(item, existing_items)
-        )
-        pending_count = sum(1 for item in visible_pending_items if item.status == "pending")
-        approved_count = sum(1 for item in visible_pending_items if item.status == "approved")
-        rejected_count = sum(1 for item in visible_pending_items if item.status == "rejected")
-        status = "pending" if pending_count or approved_count else ("accepted" if row["accepted_tags"] else "info")
-        embedded_summary = " | ".join(embedded_summary_by_id.get(file_id, []))
-        accepted_summary = " | ".join(accepted_summary_by_id.get(file_id, []))
-        pending_summary = " | ".join(_pending_value_summary(item) for item in visible_pending_items[:4])
-        tag_items = tuple(
-            item
-            for item in (
-                *embedded_items[:4],
-                *visible_pending_items[:8],
-                *accepted_items[:4],
+    with _perf_timed("row_assembly"):
+        from sfxworkbench.tui_text import _tags_cell
+
+        results: list[MetadataWorkbenchRow] = []
+        for row in rows:
+            pending = pending_by_path.get(
+                row["path"], {"pending": 0, "approved": 0, "rejected": 0, "sources": set(), "values": [], "items": []}
             )
-            if item.value
-        )
-        results.append(
-            MetadataWorkbenchRow(
+            pending_items = pending["items"]
+            assert isinstance(pending_items, list)
+            file_id = int(row["id"])
+            embedded_items = tuple(embedded_items_by_id.get(file_id, []))
+            accepted_items = tuple(accepted_items_by_id.get(file_id, []))
+            existing_items = (*embedded_items, *accepted_items)
+            visible_pending_items = tuple(
+                item for item in pending_items if not _is_duplicate_tag_item(item, existing_items)
+            )
+            pending_count = sum(1 for item in visible_pending_items if item.status == "pending")
+            approved_count = sum(1 for item in visible_pending_items if item.status == "approved")
+            rejected_count = sum(1 for item in visible_pending_items if item.status == "rejected")
+            status = "pending" if pending_count or approved_count else ("accepted" if row["accepted_tags"] else "info")
+            embedded_summary = " | ".join(embedded_summary_by_id.get(file_id, []))
+            accepted_summary = " | ".join(accepted_summary_by_id.get(file_id, []))
+            pending_summary = " | ".join(_pending_value_summary(item) for item in visible_pending_items[:4])
+            tag_items = tuple(
+                item
+                for item in (
+                    *embedded_items[:4],
+                    *visible_pending_items[:8],
+                    *accepted_items[:4],
+                )
+                if item.value
+            )
+            result = MetadataWorkbenchRow(
                 path=row["path"],
                 filename=row["filename"],
                 embedded_fields=int(row["embedded_fields"]),
@@ -1334,7 +1342,7 @@ def metadata_workbench_rows(
                 ),
                 status=status,
             )
-        )
+            results.append(replace(result, prerendered_tags_cell=_tags_cell(result)))
     if cache_key is not None:
         _ADAPTER_CACHE[cache_key] = results
         while len(_ADAPTER_CACHE) > _ADAPTER_CACHE_MAX:
@@ -2037,34 +2045,41 @@ def review_queues(
     library_path: str | Path | None = None,
 ) -> list[QueueSummary]:
     """Return queue counts that map CLI reports into app review lanes."""
-    conn = get_connection(db_path)
-    try:
-        scan_errors = _count(conn, "SELECT COUNT(*) FROM files WHERE scan_error IS NOT NULL")
-        filename_issues = _count(conn, "SELECT COUNT(*) FROM fn_issues")
-        long_paths = _count(conn, "SELECT COUNT(*) FROM fn_issues WHERE issue = 'path_too_long'")
-        unicode_issues = _count(conn, "SELECT COUNT(*) FROM fn_issues WHERE issue = 'unicode_normalization'")
-        missing_bext = _count(conn, "SELECT COUNT(*) FROM files WHERE has_bext = 0")
-        missing_ixml = _count(conn, "SELECT COUNT(*) FROM files WHERE has_ixml = 0")
-        missing_metadata = _count(conn, "SELECT COUNT(*) FROM files WHERE has_bext = 0 AND has_ixml = 0")
-        unusual_rates = _count(
-            conn,
-            f"""
-            SELECT COUNT(*) FROM files
-            WHERE sample_rate IS NOT NULL
-              AND sample_rate NOT IN ({",".join("?" for _ in _STANDARD_SAMPLE_RATES)})
-            """,
-            tuple(sorted(_STANDARD_SAMPLE_RATES)),
-        )
-        duplicate_groups = _duplicate_group_count(conn)
-        db_only_tags = _count(conn, "SELECT COUNT(*) FROM accepted_tags")
-        ucs_named = _count(conn, "SELECT COUNT(*) FROM files WHERE is_ucs = 1")
-        similarity_feedback = _count(conn, "SELECT COUNT(*) FROM similarity_feedback")
-    finally:
-        conn.close()
+    library_key = str(library_path) if library_path is not None else ""
+    cache_key = ("review_queues", _file_signature(db_path), library_key)
+    cached = _ADAPTER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    with _perf_timed("review_queues"):
+        conn = get_connection(db_path)
+        try:
+            scan_errors = _count(conn, "SELECT COUNT(*) FROM files WHERE scan_error IS NOT NULL")
+            filename_issues = _count(conn, "SELECT COUNT(*) FROM fn_issues")
+            long_paths = _count(conn, "SELECT COUNT(*) FROM fn_issues WHERE issue = 'path_too_long'")
+            unicode_issues = _count(conn, "SELECT COUNT(*) FROM fn_issues WHERE issue = 'unicode_normalization'")
+            missing_bext = _count(conn, "SELECT COUNT(*) FROM files WHERE has_bext = 0")
+            missing_ixml = _count(conn, "SELECT COUNT(*) FROM files WHERE has_ixml = 0")
+            missing_metadata = _count(conn, "SELECT COUNT(*) FROM files WHERE has_bext = 0 AND has_ixml = 0")
+            unusual_rates = _count(
+                conn,
+                f"""
+                SELECT COUNT(*) FROM files
+                WHERE sample_rate IS NOT NULL
+                  AND sample_rate NOT IN ({",".join("?" for _ in _STANDARD_SAMPLE_RATES)})
+                """,
+                tuple(sorted(_STANDARD_SAMPLE_RATES)),
+            )
+            duplicate_groups = _duplicate_group_count(conn)
+            db_only_tags = _count(conn, "SELECT COUNT(*) FROM accepted_tags")
+            ucs_named = _count(conn, "SELECT COUNT(*) FROM files WHERE is_ucs = 1")
+            similarity_feedback = _count(conn, "SELECT COUNT(*) FROM similarity_feedback")
+        finally:
+            conn.close()
 
     db = _db_arg(db_path)
     quoted_root = _quote_path(_command_root(db_path, library_path))
-    return [
+    result = [
         QueueSummary(
             "scan_errors",
             "Health",
@@ -2166,6 +2181,11 @@ def review_queues(
             f"Review decisions: uv run sfx similarity feedback list {db} --json",
         ),
     ]
+    _ADAPTER_CACHE[cache_key] = result
+    while len(_ADAPTER_CACHE) > _ADAPTER_CACHE_MAX:
+        oldest = next(iter(_ADAPTER_CACHE))
+        _ADAPTER_CACHE.pop(oldest, None)
+    return result
 
 
 _REVIEW_PRESETS: dict[str, tuple[ReviewPreset, ...]] = {

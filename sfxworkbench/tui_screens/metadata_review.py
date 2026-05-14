@@ -471,7 +471,8 @@ def build_metadata_review_screen(plan_path: Path, *, db_path: Path = DEFAULT_DB_
     from textual.screen import Screen
     from textual.widgets import Button, DataTable, Footer, Header, Input, Static
 
-    from sfxworkbench.tui_app import _state_token, _tag_text
+    from sfxworkbench.tui_app import _state_token
+    from sfxworkbench.tui_text import _tag_text
 
     class MetadataReviewScreen(Screen):
         POPUP_KEY = "metadata-review"
@@ -616,9 +617,7 @@ def build_metadata_review_screen(plan_path: Path, *, db_path: Path = DEFAULT_DB_
                 conn = get_connection(db_path)
                 try:
                     for item in self.items:
-                        self._context_by_path[item.path] = build_metadata_context(
-                            item.path, db_path=db_path, conn=conn
-                        )
+                        self._context_by_path[item.path] = build_metadata_context(item.path, db_path=db_path, conn=conn)
                 finally:
                     conn.close()
 
