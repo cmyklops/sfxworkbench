@@ -37,39 +37,35 @@ _LABELS: dict[str, str] = {
     "files-reveal-file": "Reveal selected file",
     "clean-preview": "Preview junk cleanup",
     "clean-apply": "Apply junk cleanup",
-    "clean-refresh": "Refresh declutter view",
+    "clean-refresh": "Refresh cleanup view",
     "dedupe-build": "Build dedupe plan",
-    "dedupe-approve": "Approve dedupe plan",
     "dedupe-apply": "Apply dedupe (quarantine)",
     "pack-audit": "Audit packs",
     "pack-plan": "Build pack plan",
-    "pack-approve": "Approve pack plan",
     "pack-apply": "Apply pack plan",
     "organize-rename-preview": "Preview name cleanup",
     "organize-rename-apply": "Apply name cleanup",
     "organize-rename-undo": "Undo name cleanup",
     "organize-audit": "Preview folder cleanup",
     "organize-apply": "Apply folder cleanup",
-    "organize-approve": "Approve folder cleanup",
     "organize-undo": "Undo folder cleanup",
     "organize-nesting-audit": "Find nested folders",
     "organize-nesting-plan": "Build nesting plan",
     "organize-nesting-apply": "Apply nesting plan",
-    "organize-nesting-approve": "Approve nesting plan",
     "organize-nesting-undo": "Undo nesting",
     "metadata-audit": "Metadata audit",
     "metadata-plan": "Generate tag suggestions",
     "metadata-plan-synonyms": "Generate synonyms",
-    "metadata-approve": "Approve DB tags",
-    "metadata-apply": "Apply DB tags",
-    "metadata-sidecar": "Export tag sidecar",
-    "metadata-write-plan": "Plan embedded metadata write",
-    "metadata-write-approve": "Approve embedded metadata write",
+    "metadata-review-open": "Open metadata tag review screen",
+    "metadata-page-prev": "Previous metadata review page",
+    "metadata-page-next": "Next metadata review page",
+    "metadata-page-random": "Random pending metadata page",
+    "metadata-apply": "Apply tags & plan embedded write",
+    "metadata-sidecar": "Save tags file",
     "metadata-write-apply": "Apply embedded metadata write",
     "metadata-write-undo": "Undo embedded metadata write",
     "quarantine-reveal": "Reveal quarantine folder",
     "delete-plan": "Plan permanent delete",
-    "delete-approve": "Approve permanent delete",
     "delete-apply": "Apply permanent delete",
     # Tier post-feedback: theme switching via the palette. Each handler
     # assigns to ``App.theme`` (a reactive attribute) so Textual restyles
@@ -138,6 +134,8 @@ def build_command_palette(handlers: Mapping[str, Callable[[], None]]) -> Screen:
     button_ids = sorted(handlers)
 
     class CommandPalette(ModalScreen[None]):
+        POPUP_KEY = "command-palette"
+
         DEFAULT_CSS = """
         CommandPalette { align: center middle; }
         #palette-dialog { width: 64; max-width: 90%; height: 24; max-height: 70%;

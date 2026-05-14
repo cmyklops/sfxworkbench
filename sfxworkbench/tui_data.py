@@ -17,11 +17,61 @@ from sfxworkbench.metadata_fields import (
 )
 from sfxworkbench.metadata_fields import (
     is_multivalue,
+    normalize_value_for_dedup,
     values_equal_for_dedup,
 )
 from sfxworkbench.preservation import build_preservation_rules
 
 _TUI_LIBRARY_PATH_KEY = "tui_library_path"
+_PLAN_SUMMARY_CACHE: dict[tuple[str, float, int, bool], PlanSummary] = {}
+_METADATA_PLAN_INDEX_CACHE: dict[tuple[str, float, int], sqlite3.Connection] = {}
+
+# Session-level adapter cache. Stores results of heavy read-only adapters keyed
+# by inputs that include each file's ``(path, mtime, size)`` signature so a
+# fresh write (scan / apply / clean) naturally invalidates the cache entry.
+# Cleared explicitly from ``tui_app._refresh()`` after any action so a
+# library mutation that doesn't change file mtimes still flushes stale rows.
+_ADAPTER_CACHE: dict[tuple[Any, ...], Any] = {}
+_ADAPTER_CACHE_MAX = 96
+
+
+def clear_adapter_cache() -> None:
+    """Drop every cached adapter result. Cheap; safe to call frequently."""
+    _ADAPTER_CACHE.clear()
+
+
+def adapter_cache_get(key: tuple[Any, ...]) -> Any:
+    """Public peek at the session adapter cache. Returns ``None`` on miss."""
+    return _ADAPTER_CACHE.get(key)
+
+
+def file_signature(path: Path | str | None) -> tuple[str, float, int]:
+    """Public ``(path, mtime, size)`` signature used by the adapter cache."""
+    return _file_signature(path)
+
+
+def _file_signature(path: Path | str | None) -> tuple[str, float, int]:
+    """Stable signature for a filesystem path; missing files compare equal."""
+    if path is None:
+        return ("", 0.0, 0)
+    p = Path(path)
+    try:
+        stat = p.stat()
+    except OSError:
+        return (str(p), 0.0, 0)
+    return (str(p), stat.st_mtime, stat.st_size)
+
+
+def _adapter_cached(key: tuple[Any, ...], factory):
+    cached = _ADAPTER_CACHE.get(key)
+    if cached is not None:
+        return cached
+    value = factory()
+    _ADAPTER_CACHE[key] = value
+    while len(_ADAPTER_CACHE) > _ADAPTER_CACHE_MAX:
+        oldest = next(iter(_ADAPTER_CACHE))
+        _ADAPTER_CACHE.pop(oldest, None)
+    return value
 
 
 @dataclass(frozen=True)
@@ -142,6 +192,23 @@ class PlanDetailRow:
     detail: str = ""
 
 
+_HISTORY_FEATURE_LABELS = {
+    "scan": "Scan",
+    "files": "Files",
+    "clean": "Cleanup",
+    "dedupe": "Dedupe",
+    "metadata": "Metadata",
+}
+
+_HISTORY_FEATURE_QUERIES = {
+    "scan": "audit scan metadata format groups ucs pack",
+    "files": "scan delete quarantine compare processed",
+    "clean": "clean scan_error rename organize nesting",
+    "dedupe": "dedupe pack quarantine",
+    "metadata": "metadata tag sidecar metadata_write dual_mono",
+}
+
+
 @dataclass(frozen=True)
 class WorkflowCapability:
     area: str
@@ -218,6 +285,37 @@ class MetadataWorkbenchRow:
     tag_items: tuple[TagDisplayItem, ...] = ()
     sources: str = ""
     status: str = "info"
+
+
+@dataclass(frozen=True)
+class MetadataPlanCounts:
+    total_entries: int = 0
+    files_considered: int = 0
+    candidate_entries: int = 0
+    add_entries: int = 0
+    pending_add_entries: int = 0
+    approved_add_entries: int = 0
+    rejected_add_entries: int = 0
+    skipped_add_entries: int = 0
+    skip_existing_entries: int = 0
+    files_with_add_entries: int = 0
+
+
+@dataclass(frozen=True)
+class MetadataPlanDuplicateAwareCounts:
+    """Whole-plan tag counts that account for values already on disk.
+
+    The base ``MetadataPlanCounts`` is plan-side only — it cannot tell whether
+    a planned ``description = "Rain"`` already lives in the file's BWF
+    description or ``accepted_tags``. This adapter joins the SQLite plan
+    index against both metadata sources so the headline number reflects
+    how many entries are *actually* new work.
+    """
+
+    add_entries: int = 0
+    truly_pending_add_entries: int = 0
+    duplicate_add_entries: int = 0
+    files_with_truly_pending: int = 0
 
 
 _SEARCH_METADATA_KEYS: dict[tuple[str, str], int] = {
@@ -336,6 +434,50 @@ def _dedupe_paths(paths: list[Path]) -> list[Path]:
         seen.add(key)
         unique.append(expanded)
     return unique
+
+
+def _path_signature(path: Path, *, lightweight: bool = False) -> tuple[str, float, int, bool]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return (str(path), 0.0, 0, lightweight)
+    return (str(path), stat.st_mtime, stat.st_size, lightweight)
+
+
+def history_features_for_summary(summary: PlanSummary) -> tuple[str, ...]:
+    """Return feature filters that should include a generated history row."""
+    haystack = " ".join(
+        (
+            Path(summary.path).name,
+            summary.path,
+            summary.category,
+            summary.kind,
+            summary.title,
+            summary.description,
+        )
+    ).casefold()
+    matches: list[str] = []
+    for feature, query in _HISTORY_FEATURE_QUERIES.items():
+        terms = tuple(term for term in query.casefold().split() if term)
+        if any(term in haystack for term in terms):
+            matches.append(feature)
+    return tuple(matches)
+
+
+def history_feature_labels(summary: PlanSummary) -> str:
+    """Return user-facing feature labels for one history row."""
+    features = history_features_for_summary(summary)
+    if not features:
+        return "All"
+    return ", ".join(_HISTORY_FEATURE_LABELS[feature] for feature in features)
+
+
+def history_matches_feature(summary: PlanSummary, feature_filter: str) -> bool:
+    """Return whether ``summary`` belongs in a feature-filtered History view."""
+    normalized = feature_filter.strip().casefold().replace("declutter", "clean").replace("cleanup", "clean")
+    if normalized in {"", "all", "all recent", "recent"}:
+        return True
+    return normalized in history_features_for_summary(summary)
 
 
 def _like_filter_clause(
@@ -522,6 +664,10 @@ def indexed_library_size_gb(db_path: Path = DEFAULT_DB_PATH) -> float:
 
 def dashboard_metrics(db_path: Path = DEFAULT_DB_PATH, config_path: Path | None = None) -> list[DashboardMetric]:
     """Return the first dashboard signals for the review workbench."""
+    cache_key = ("dashboard_metrics", _file_signature(db_path), _file_signature(config_path))
+    cached = _ADAPTER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     conn = get_connection(db_path)
     try:
         total = _count(conn, "SELECT COUNT(*) FROM files")
@@ -546,7 +692,7 @@ def dashboard_metrics(db_path: Path = DEFAULT_DB_PATH, config_path: Path | None 
         conn.close()
 
     rules = build_preservation_rules(config_path=config_path)
-    return [
+    result = [
         DashboardMetric("indexed_files", "Indexed files", total),
         DashboardMetric("duplicate_groups", "Duplicate groups", duplicate_groups, severity="review"),
         DashboardMetric("missing_metadata", "Missing BEXT/iXML", missing_metadata, severity="review"),
@@ -563,52 +709,74 @@ def dashboard_metrics(db_path: Path = DEFAULT_DB_PATH, config_path: Path | None 
         DashboardMetric("similarity_segments", "Similarity segments", similarity_segments),
         DashboardMetric("safe_folders", "Protected folders", len(rules.safe_folders), severity="safe"),
     ]
+    _ADAPTER_CACHE[cache_key] = result
+    while len(_ADAPTER_CACHE) > _ADAPTER_CACHE_MAX:
+        oldest = next(iter(_ADAPTER_CACHE))
+        _ADAPTER_CACHE.pop(oldest, None)
+    return result
 
 
 def feature_pages(db_path: Path = DEFAULT_DB_PATH, config_path: Path | None = None) -> list[FeaturePage]:
     """Return top-level operation pages and their current signal state."""
-    metrics = {metric.key: metric for metric in dashboard_metrics(db_path=db_path, config_path=config_path)}
-    queues = {queue.key: queue for queue in review_queues(db_path=db_path)}
+    cache_key = ("feature_pages", _file_signature(db_path), _file_signature(config_path))
 
-    def metric_count(key: str) -> int | str:
-        return metrics.get(key, DashboardMetric(key, key, 0)).value
+    def _build() -> list[FeaturePage]:
+        metrics = {metric.key: metric for metric in dashboard_metrics(db_path=db_path, config_path=config_path)}
+        queues = {queue.key: queue for queue in review_queues(db_path=db_path)}
 
-    def queue_count(key: str) -> int:
-        return queues.get(key, QueueSummary(key, "", key, 0, "", "")).count
+        def metric_count(key: str) -> int | str:
+            return metrics.get(key, DashboardMetric(key, key, 0)).value
 
-    return [
-        FeaturePage("scan", "Scan", "ready", metric_count("indexed_files"), "Refresh the index and run full audits."),
-        FeaturePage("files", "Files", "ready", metric_count("indexed_files"), "Browse and audition indexed files."),
-        FeaturePage(
-            "clean",
-            "Declutter",
-            "ready",
-            queue_count("filename_issues") + queue_count("long_paths") + queue_count("unicode_normalization"),
-            "Remove junk, fix risky names, and review folder cleanup.",
-        ),
-        FeaturePage("dedupe", "Dedupe", "review", queue_count("duplicates"), "Review exact files and pack overlap."),
-        FeaturePage(
-            "metadata", "Metadata", "review", queue_count("missing_metadata"), "Review metadata gaps and tag changes."
-        ),
-        FeaturePage("advanced", "Advanced", "safe", metric_count("safe_folders"), "Advanced guarded operations."),
-    ]
+        def queue_count(key: str) -> int:
+            return queues.get(key, QueueSummary(key, "", key, 0, "", "")).count
+
+        return [
+            FeaturePage(
+                "scan", "Scan", "ready", metric_count("indexed_files"), "Refresh the index and run full audits."
+            ),
+            FeaturePage(
+                "clean",
+                "Cleanup",
+                "ready",
+                queue_count("filename_issues") + queue_count("long_paths") + queue_count("unicode_normalization"),
+                "Remove junk, fix risky names, and review folder cleanup.",
+            ),
+            FeaturePage(
+                "dedupe", "Dedupe", "review", queue_count("duplicates"), "Review exact files and pack overlap."
+            ),
+            FeaturePage(
+                "metadata",
+                "Metadata",
+                "review",
+                queue_count("missing_metadata"),
+                "Review metadata gaps and tag changes.",
+            ),
+            FeaturePage("files", "Files", "ready", metric_count("indexed_files"), "Browse and audition indexed files."),
+        ]
+
+    return _adapter_cached(cache_key, _build)
 
 
 def scan_findings(db_path: Path = DEFAULT_DB_PATH, config_path: Path | None = None) -> list[FeatureFinding]:
-    metrics = dashboard_metrics(db_path=db_path, config_path=config_path)
-    return [
-        FeatureFinding("scan", metric.label, metric.value, metric.severity, metric.detail)
-        for metric in metrics
-        if metric.key
-        in {
-            "indexed_files",
-            "scan_errors",
-            "filename_issues",
-            "missing_metadata",
-            "duplicate_groups",
-            "unusual_sample_rates",
-        }
-    ]
+    cache_key = ("scan_findings", _file_signature(db_path), _file_signature(config_path))
+
+    def _build() -> list[FeatureFinding]:
+        metrics = dashboard_metrics(db_path=db_path, config_path=config_path)
+        return [
+            FeatureFinding("scan", metric.label, metric.value, metric.severity, metric.detail)
+            for metric in metrics
+            if metric.key
+            in {
+                "indexed_files",
+                "scan_errors",
+                "filename_issues",
+                "missing_metadata",
+                "duplicate_groups",
+                "unusual_sample_rates",
+            }
+        ]
+
+    return _adapter_cached(cache_key, _build)
 
 
 def clean_findings(
@@ -656,6 +824,11 @@ def dedupe_group_rows(
     query: str = "",
     limit: int = 100,
 ) -> list[DuplicateGroupRow]:
+    cache_key = ("dedupe_group_rows", _file_signature(db_path), query, int(limit))
+    cached = _ADAPTER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     from sfxworkbench.dedupe import find_duplicates
 
     groups = find_duplicates(db_path)
@@ -687,20 +860,29 @@ def dedupe_group_rows(
         )
         if len(rows) >= limit:
             break
+    _ADAPTER_CACHE[cache_key] = rows
+    while len(_ADAPTER_CACHE) > _ADAPTER_CACHE_MAX:
+        oldest = next(iter(_ADAPTER_CACHE))
+        _ADAPTER_CACHE.pop(oldest, None)
     return rows
 
 
 def dedupe_findings(db_path: Path = DEFAULT_DB_PATH) -> list[FeatureFinding]:
-    from sfxworkbench.dedupe import find_duplicates, summarize_duplicates
+    cache_key = ("dedupe_findings", _file_signature(db_path))
 
-    groups = find_duplicates(db_path)
-    summary = summarize_duplicates(groups)
-    return [
-        FeatureFinding("dedupe", "Duplicate groups", summary.duplicate_groups, "review" if groups else "clear"),
-        FeatureFinding("dedupe", "Duplicate files", summary.duplicate_files, "review" if groups else "clear"),
-        FeatureFinding("dedupe", "Extra copies", summary.extra_copies, "review" if groups else "clear"),
-        FeatureFinding("dedupe", "Wasted bytes", summary.wasted_bytes, "review" if groups else "clear"),
-    ]
+    def _build() -> list[FeatureFinding]:
+        from sfxworkbench.dedupe import find_duplicates, summarize_duplicates
+
+        groups = find_duplicates(db_path)
+        summary = summarize_duplicates(groups)
+        return [
+            FeatureFinding("dedupe", "Duplicate groups", summary.duplicate_groups, "review" if groups else "clear"),
+            FeatureFinding("dedupe", "Duplicate files", summary.duplicate_files, "review" if groups else "clear"),
+            FeatureFinding("dedupe", "Extra copies", summary.extra_copies, "review" if groups else "clear"),
+            FeatureFinding("dedupe", "Wasted bytes", summary.wasted_bytes, "review" if groups else "clear"),
+        ]
+
+    return _adapter_cached(cache_key, _build)
 
 
 def organize_findings(db_path: Path = DEFAULT_DB_PATH) -> list[FeatureFinding]:
@@ -712,60 +894,235 @@ def organize_findings(db_path: Path = DEFAULT_DB_PATH) -> list[FeatureFinding]:
     ]
 
 
+def _metadata_plan_index_key(plan_path: Path) -> tuple[str, float, int]:
+    path, mtime, size, _lightweight = _path_signature(plan_path)
+    return (path, mtime, size)
+
+
+def _metadata_plan_index(plan_path: Path) -> sqlite3.Connection | None:
+    """Return an in-memory SQLite index for a metadata tag plan."""
+    if not plan_path.exists():
+        return None
+    key = _metadata_plan_index_key(plan_path)
+    cached = _METADATA_PLAN_INDEX_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    stale = [cached_key for cached_key in _METADATA_PLAN_INDEX_CACHE if cached_key[0] == key[0] and cached_key != key]
+    for cached_key in stale:
+        try:
+            _METADATA_PLAN_INDEX_CACHE[cached_key].close()
+        except sqlite3.Error:
+            pass
+        _METADATA_PLAN_INDEX_CACHE.pop(cached_key, None)
+
+    from sfxworkbench.utils import load_plan_json_cached
+
+    payload = load_plan_json_cached(plan_path) or {}
+    entries = payload.get("entries", [])
+    if not isinstance(entries, list):
+        return None
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE plan_entries (
+            entry_id INTEGER,
+            path TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            field TEXT NOT NULL,
+            proposed_value TEXT NOT NULL,
+            source TEXT NOT NULL,
+            status TEXT NOT NULL,
+            action TEXT NOT NULL,
+            confidence REAL,
+            existing_value TEXT
+        )
+        """
+    )
+    rows: list[tuple[int, str, str, str, str, str, str, str, float | None, str]] = []
+    for ordinal, raw in enumerate(entries):
+        if not isinstance(raw, dict):
+            continue
+        path = str(raw.get("path", "")).strip()
+        if not path:
+            continue
+        existing_values = raw.get("existing_values") or []
+        existing_value = str(existing_values[0]) if isinstance(existing_values, list) and existing_values else ""
+        confidence = raw.get("confidence")
+        rows.append(
+            (
+                int(raw.get("entry_id")) if isinstance(raw.get("entry_id"), int) else ordinal,
+                path,
+                str(raw.get("filename", "") or Path(path).name),
+                str(raw.get("field", "")).strip(),
+                _clean_tag_value(raw.get("proposed_value", "")),
+                str(raw.get("source", "")).strip(),
+                str(raw.get("review_status", "pending")).strip() or "pending",
+                str(raw.get("action", "add")).strip() or "add",
+                float(confidence) if isinstance(confidence, int | float) else None,
+                _clean_tag_value(existing_value),
+            )
+        )
+    conn.executemany(
+        """
+        INSERT INTO plan_entries (
+            entry_id, path, filename, field, proposed_value, source, status,
+            action, confidence, existing_value
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+    conn.execute("CREATE INDEX idx_plan_entries_path ON plan_entries(path)")
+    conn.execute("CREATE INDEX idx_plan_entries_action_status ON plan_entries(action, status)")
+    conn.commit()
+    _METADATA_PLAN_INDEX_CACHE[key] = conn
+    return conn
+
+
+def _metadata_plan_state_from_rows(
+    rows: list[sqlite3.Row],
+) -> dict[str, dict[str, int | set[str] | list[str] | list[TagDisplayItem]]]:
+    pending_by_path: dict[str, dict[str, int | set[str] | list[str] | list[TagDisplayItem]]] = {}
+    for entry in rows:
+        path = str(entry["path"])
+        state = pending_by_path.setdefault(
+            path,
+            {"pending": 0, "approved": 0, "rejected": 0, "sources": set(), "values": [], "items": []},
+        )
+        status = str(entry["status"] or "pending")
+        if status in {"pending", "approved", "rejected"}:
+            state[status] = int(state[status]) + 1
+        field = str(entry["field"] or "").strip()
+        proposed = _clean_tag_value(entry["proposed_value"])
+        if field and proposed:
+            source = str(entry["source"] or "").strip()
+            source_suffix = f" [{source}]" if source else ""
+            values = state["values"]
+            assert isinstance(values, list)
+            values.append(f"{status.upper()} {_tag_label(field)}: {proposed}{source_suffix}")
+            items = state["items"]
+            assert isinstance(items, list)
+            items.append(
+                TagDisplayItem(
+                    source="plan",
+                    field=field,
+                    value=proposed,
+                    status=status,
+                    evidence_source=source,
+                )
+            )
+        source = str(entry["source"] or "").strip()
+        if source:
+            cast_sources = state["sources"]
+            assert isinstance(cast_sources, set)
+            cast_sources.add(source)
+    return pending_by_path
+
+
+def _metadata_plan_state(plan_path: Path) -> dict[str, dict[str, int | set[str] | list[str] | list[TagDisplayItem]]]:
+    index = _metadata_plan_index(plan_path)
+    if index is None:
+        return {}
+    rows = index.execute("SELECT * FROM plan_entries WHERE action = 'add' ORDER BY path, entry_id").fetchall()
+    return _metadata_plan_state_from_rows(rows)
+
+
+def _metadata_pending_plan_page(
+    plan_path: Path,
+    *,
+    query: str = "",
+    limit: int = 100,
+    offset: int = 0,
+    random_pending: bool = False,
+) -> tuple[list[str], dict[str, dict[str, int | set[str] | list[str] | list[TagDisplayItem]]]]:
+    index = _metadata_plan_index(plan_path)
+    if index is None:
+        return [], {}
+    like_sql, params = _like_filter_clause(("filename", "path"), query)
+    order_sql = "RANDOM()" if random_pending else "path"
+    page_rows = index.execute(
+        f"""
+        SELECT path
+        FROM plan_entries
+        WHERE action = 'add' {like_sql}
+        GROUP BY path
+        HAVING SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) > 0
+        ORDER BY {order_sql}
+        LIMIT ? OFFSET ?
+        """,
+        params + (limit, max(0, offset)),
+    ).fetchall()
+    paths = [str(row["path"]) for row in page_rows]
+    if not paths:
+        return [], {}
+    placeholders = ",".join("?" for _ in paths)
+    rows = index.execute(
+        f"""
+        SELECT *
+        FROM plan_entries
+        WHERE action = 'add'
+          AND path IN ({placeholders})
+        ORDER BY path, entry_id
+        """,
+        tuple(paths),
+    ).fetchall()
+    return paths, _metadata_plan_state_from_rows(rows)
+
+
 def metadata_workbench_rows(
     db_path: Path = DEFAULT_DB_PATH,
     *,
     plan_path: Path | None = None,
     query: str = "",
     limit: int = 100,
+    offset: int = 0,
+    random_pending: bool = False,
+    pending_only: bool = False,
 ) -> list[MetadataWorkbenchRow]:
     """Return current/pending metadata state for the metadata workbench."""
+    cache_key: tuple[Any, ...] | None = None
+    if not random_pending:
+        cache_key = (
+            "metadata_workbench_rows",
+            _file_signature(db_path),
+            _file_signature(plan_path) if plan_path is not None else ("", 0.0, 0),
+            query,
+            int(limit),
+            int(offset),
+            bool(pending_only),
+        )
+        cached = _ADAPTER_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
     pending_by_path: dict[str, dict[str, int | set[str] | list[str] | list[TagDisplayItem]]] = {}
+    page_paths: list[str] = []
     if plan_path is not None and plan_path.exists():
-        from sfxworkbench.utils import load_plan_json_cached
-
-        payload = load_plan_json_cached(plan_path) or {}
-        for entry in payload.get("entries", []):
-            path = str(entry.get("path", ""))
-            if not path:
-                continue
-            if str(entry.get("action", "add")).strip() != "add":
-                continue
-            state = pending_by_path.setdefault(
-                path,
-                {"pending": 0, "approved": 0, "rejected": 0, "sources": set(), "values": [], "items": []},
+        if pending_only:
+            page_paths, pending_by_path = _metadata_pending_plan_page(
+                plan_path,
+                query=query,
+                limit=limit,
+                offset=offset,
+                random_pending=random_pending,
             )
-            status = str(entry.get("review_status", "pending"))
-            if status in {"pending", "approved", "rejected"}:
-                state[status] = int(state[status]) + 1
-            field = str(entry.get("field", "")).strip()
-            proposed = _clean_tag_value(entry.get("proposed_value", ""))
-            if field and proposed:
-                values = state["values"]
-                assert isinstance(values, list)
-                source = str(entry.get("source", "")).strip()
-                source_suffix = f" [{source}]" if source else ""
-                values.append(f"{status.upper()} {_tag_label(field)}: {proposed}{source_suffix}")
-                items = state["items"]
-                assert isinstance(items, list)
-                items.append(
-                    TagDisplayItem(
-                        source="plan",
-                        field=field,
-                        value=proposed,
-                        status=status,
-                        evidence_source=source,
-                    )
-                )
-            source = str(entry.get("source", "")).strip()
-            if source:
-                cast_sources = state["sources"]
-                assert isinstance(cast_sources, set)
-                cast_sources.add(source)
+            if not page_paths:
+                return []
+        else:
+            pending_by_path = _metadata_plan_state(plan_path)
 
     like_sql, params = _like_filter_clause(("f.filename", "f.path"), query)
     conn = get_connection(db_path)
     try:
+        conn.execute("CREATE TEMP TABLE IF NOT EXISTS _metadata_page_paths (path TEXT PRIMARY KEY, sort_order INTEGER)")
+        conn.execute("DELETE FROM _metadata_page_paths")
+        if page_paths:
+            conn.executemany(
+                "INSERT OR REPLACE INTO _metadata_page_paths (path, sort_order) VALUES (?, ?)",
+                ((path, index) for index, path in enumerate(page_paths)),
+            )
         # Inlining one ``?`` per pending path overflowed SQLite's variable
         # limit (~32k) on real libraries — the user hit 107k pending entries.
         # Bulk-load the pending set into a temp table so the ORDER BY clause
@@ -866,8 +1223,10 @@ def metadata_workbench_rows(
             FROM files f
             LEFT JOIN embedded e ON e.file_id = f.id
             LEFT JOIN accepted a ON a.file_id = f.id
-            WHERE 1 = 1 {like_sql}
+            LEFT JOIN _metadata_page_paths p ON p.path = f.path
+            WHERE {"p.path IS NOT NULL" if pending_only else f"1 = 1 {like_sql}"}
             ORDER BY
+                CASE WHEN p.path IS NOT NULL THEN p.sort_order ELSE 999999999 END,
                 CASE
                     WHEN f.path IN (SELECT path FROM _pending_paths) THEN 0
                     WHEN COALESCE(a.accepted_tags, 0) > 0 THEN 1
@@ -877,7 +1236,7 @@ def metadata_workbench_rows(
                 f.path
             LIMIT ?
             """,
-            params + (limit,),
+            (() if pending_only else params) + (limit,),
         ).fetchall()
         file_ids = tuple(int(row["id"]) for row in rows)
         embedded_items_by_id: dict[int, list[TagDisplayItem]] = {file_id: [] for file_id in file_ids}
@@ -1006,21 +1365,315 @@ def metadata_workbench_rows(
                 status=status,
             )
         )
+    if cache_key is not None:
+        _ADAPTER_CACHE[cache_key] = results
+        while len(_ADAPTER_CACHE) > _ADAPTER_CACHE_MAX:
+            oldest = next(iter(_ADAPTER_CACHE))
+            _ADAPTER_CACHE.pop(oldest, None)
     return results
 
 
+def _summary_int(summary: dict[str, Any], key: str) -> int:
+    value = summary.get(key)
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return 0
+
+
+def _json_summary_from_tail(path: Path, *, tail_bytes: int = 256 * 1024) -> dict[str, Any] | None:
+    """Read a top-level ``summary`` object from the end of a large JSON file."""
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as f:
+            f.seek(max(0, size - tail_bytes))
+            text = f.read().decode("utf-8", errors="ignore")
+    except OSError:
+        return None
+    marker = '"summary"'
+    marker_index = text.rfind(marker)
+    if marker_index < 0:
+        return None
+    colon_index = text.find(":", marker_index + len(marker))
+    if colon_index < 0:
+        return None
+    start = colon_index + 1
+    while start < len(text) and text[start].isspace():
+        start += 1
+    if start >= len(text) or text[start] != "{":
+        return None
+    try:
+        parsed, _ = json.JSONDecoder().raw_decode(text[start:])
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _metadata_plan_counts_from_summary(summary: dict[str, Any] | None) -> MetadataPlanCounts | None:
+    if not summary:
+        return None
+    candidate_entries = _summary_int(summary, "candidate_entries")
+    add_entries = _summary_int(summary, "add_entries")
+    skip_existing_entries = _summary_int(summary, "skip_existing_entries")
+    approved_add_entries = _summary_int(summary, "approved_entries")
+    rejected_add_entries = _summary_int(summary, "rejected_entries")
+    if not any((candidate_entries, add_entries, skip_existing_entries, approved_add_entries, rejected_add_entries)):
+        return None
+    total_entries = candidate_entries or add_entries + skip_existing_entries
+    pending_add_entries = max(0, add_entries - approved_add_entries - rejected_add_entries)
+    return MetadataPlanCounts(
+        total_entries=total_entries,
+        files_considered=_summary_int(summary, "files_considered"),
+        candidate_entries=candidate_entries,
+        add_entries=add_entries,
+        pending_add_entries=pending_add_entries,
+        approved_add_entries=approved_add_entries,
+        rejected_add_entries=rejected_add_entries,
+        skip_existing_entries=skip_existing_entries,
+    )
+
+
+def metadata_plan_counts(plan_path: Path | None) -> MetadataPlanCounts:
+    """Return whole-plan tag counts without depending on visible table rows."""
+    if plan_path is None or not plan_path.exists():
+        return MetadataPlanCounts()
+
+    summary_counts = _metadata_plan_counts_from_summary(_json_summary_from_tail(plan_path))
+    if summary_counts is not None:
+        return summary_counts
+
+    from sfxworkbench.utils import load_plan_json_cached
+
+    payload = load_plan_json_cached(plan_path)
+    if payload is None:
+        return MetadataPlanCounts()
+
+    summary_counts = _metadata_plan_counts_from_summary(
+        payload.get("summary") if isinstance(payload.get("summary"), dict) else None
+    )
+    if summary_counts is not None:
+        return summary_counts
+
+    entries = payload.get("entries", [])
+    if not isinstance(entries, list):
+        return MetadataPlanCounts()
+
+    summary = payload.get("summary")
+    candidate_entries = 0
+    if isinstance(summary, dict):
+        raw_candidate_entries = summary.get("candidate_entries")
+        if isinstance(raw_candidate_entries, int):
+            candidate_entries = raw_candidate_entries
+    if not candidate_entries:
+        candidate_entries = len(entries)
+
+    add_entries = 0
+    pending_add_entries = 0
+    approved_add_entries = 0
+    rejected_add_entries = 0
+    skipped_add_entries = 0
+    skip_existing_entries = 0
+    add_paths: set[str] = set()
+
+    for raw in entries:
+        if not isinstance(raw, dict):
+            continue
+        action = str(raw.get("action", "add")).strip() or "add"
+        if action != "add":
+            if action == "skip_existing":
+                skip_existing_entries += 1
+            continue
+        add_entries += 1
+        path = str(raw.get("path", "")).strip()
+        if path:
+            add_paths.add(path)
+        status = str(raw.get("review_status", "pending")).strip() or "pending"
+        if status == "approved":
+            approved_add_entries += 1
+        elif status == "rejected":
+            rejected_add_entries += 1
+        elif status == "skipped":
+            skipped_add_entries += 1
+        else:
+            pending_add_entries += 1
+
+    return MetadataPlanCounts(
+        total_entries=len(entries),
+        files_considered=len(add_paths),
+        candidate_entries=candidate_entries,
+        add_entries=add_entries,
+        pending_add_entries=pending_add_entries,
+        approved_add_entries=approved_add_entries,
+        rejected_add_entries=rejected_add_entries,
+        skipped_add_entries=skipped_add_entries,
+        skip_existing_entries=skip_existing_entries,
+        files_with_add_entries=len(add_paths),
+    )
+
+
+def metadata_plan_duplicate_aware_counts(
+    plan_path: Path | None,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> MetadataPlanDuplicateAwareCounts:
+    """Return whole-plan add counts minus values already on disk.
+
+    Joins the cached plan-entries SQLite index against ``accepted_tags`` and
+    ``metadata_fields`` so a planned ``description = "Rain"`` that's already
+    present in either source counts as a *duplicate*, not as pending work.
+    Cached via the session adapter cache so the join only runs once per
+    ``(plan_signature, db_signature)`` pair.
+    """
+    if plan_path is None or not plan_path.exists():
+        return MetadataPlanDuplicateAwareCounts()
+    cache_key = (
+        "metadata_plan_duplicate_aware_counts",
+        _file_signature(plan_path),
+        _file_signature(db_path),
+    )
+    cached = _ADAPTER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    index = _metadata_plan_index(plan_path)
+    if index is None:
+        return MetadataPlanDuplicateAwareCounts()
+
+    add_rows = index.execute(
+        """
+        SELECT path, field, proposed_value
+        FROM plan_entries
+        WHERE action = 'add'
+          AND COALESCE(TRIM(proposed_value), '') != ''
+        """
+    ).fetchall()
+    if not add_rows:
+        result = MetadataPlanDuplicateAwareCounts(add_entries=0)
+        _ADAPTER_CACHE[cache_key] = result
+        return result
+
+    # Build the on-disk "already present" set keyed by
+    # ``(path, canonical_field, normalized_value)``. One query per source.
+    paths = sorted({str(row["path"]) for row in add_rows})
+    existing: set[tuple[str, str, str]] = set()
+    conn = get_connection(db_path)
+    try:
+        conn.execute("CREATE TEMP TABLE IF NOT EXISTS _dup_paths (path TEXT PRIMARY KEY)")
+        conn.execute("DELETE FROM _dup_paths")
+        conn.executemany("INSERT OR IGNORE INTO _dup_paths (path) VALUES (?)", ((path,) for path in paths))
+        for row in conn.execute(
+            """
+            SELECT f.path AS path, mf.key AS field, mf.value AS value
+            FROM metadata_fields mf
+            JOIN files f ON f.id = mf.file_id
+            JOIN _dup_paths dp ON dp.path = f.path
+            WHERE mf.value IS NOT NULL AND TRIM(mf.value) != ''
+            """
+        ):
+            field = _canonical_tag_field(str(row["field"]))
+            existing.add((str(row["path"]), field, normalize_value_for_dedup(str(row["value"]))))
+        for row in conn.execute(
+            """
+            SELECT f.path AS path, t.field AS field, t.value AS value
+            FROM accepted_tags t
+            JOIN files f ON f.id = t.file_id
+            JOIN _dup_paths dp ON dp.path = f.path
+            WHERE t.value IS NOT NULL AND TRIM(t.value) != ''
+            """
+        ):
+            field = _canonical_tag_field(str(row["field"]))
+            existing.add((str(row["path"]), field, normalize_value_for_dedup(str(row["value"]))))
+    finally:
+        conn.close()
+
+    truly_pending = 0
+    duplicate = 0
+    files_with_pending: set[str] = set()
+    for row in add_rows:
+        canonical = _canonical_tag_field(str(row["field"]))
+        key = (str(row["path"]), canonical, normalize_value_for_dedup(str(row["proposed_value"])))
+        if key in existing:
+            duplicate += 1
+        else:
+            truly_pending += 1
+            files_with_pending.add(str(row["path"]))
+
+    result = MetadataPlanDuplicateAwareCounts(
+        add_entries=len(add_rows),
+        truly_pending_add_entries=truly_pending,
+        duplicate_add_entries=duplicate,
+        files_with_truly_pending=len(files_with_pending),
+    )
+    _ADAPTER_CACHE[cache_key] = result
+    while len(_ADAPTER_CACHE) > _ADAPTER_CACHE_MAX:
+        oldest = next(iter(_ADAPTER_CACHE))
+        _ADAPTER_CACHE.pop(oldest, None)
+    return result
+
+
 def metadata_findings(db_path: Path = DEFAULT_DB_PATH, *, plan_path: Path | None = None) -> list[FeatureFinding]:
-    queues = {queue.key: queue for queue in review_queues(db_path=db_path)}
-    rows = metadata_workbench_rows(db_path, plan_path=plan_path, limit=500)
-    pending = sum(row.pending_changes for row in rows)
-    approved = sum(row.approved_changes for row in rows)
-    return [
-        FeatureFinding("metadata", queues["missing_metadata"].label, queues["missing_metadata"].count, "review"),
-        FeatureFinding("metadata", queues["missing_bext"].label, queues["missing_bext"].count, "review"),
-        FeatureFinding("metadata", "Pending tag changes", pending, "pending" if pending else "clear"),
-        FeatureFinding("metadata", "Approved tag changes", approved, "accepted" if approved else "clear"),
-        FeatureFinding("metadata", queues["db_only_tags"].label, queues["db_only_tags"].count, "accepted"),
-    ]
+    cache_key = ("metadata_findings", _file_signature(db_path), _file_signature(plan_path))
+
+    def _build() -> list[FeatureFinding]:
+        queues = {queue.key: queue for queue in review_queues(db_path=db_path)}
+        plan_counts = metadata_plan_counts(plan_path)
+        dup_counts = metadata_plan_duplicate_aware_counts(plan_path, db_path=db_path)
+        pending = plan_counts.pending_add_entries
+        approved = plan_counts.approved_add_entries
+        if plan_counts.files_with_add_entries:
+            pending_detail = (
+                f"{plan_counts.add_entries:,} add entrie(s) across {plan_counts.files_with_add_entries:,} file(s)"
+            )
+        elif plan_counts.files_considered:
+            pending_detail = (
+                f"{plan_counts.add_entries:,} add entrie(s) from {plan_counts.files_considered:,} file(s) considered"
+            )
+        elif plan_counts.add_entries:
+            pending_detail = f"{plan_counts.add_entries:,} add entrie(s)"
+        else:
+            pending_detail = ""
+        dup_detail = (
+            f"{dup_counts.duplicate_add_entries:,} already on disk; "
+            f"{dup_counts.files_with_truly_pending:,} file(s) still need work"
+            if dup_counts.add_entries
+            else ""
+        )
+        return [
+            FeatureFinding("metadata", queues["missing_metadata"].label, queues["missing_metadata"].count, "review"),
+            FeatureFinding("metadata", queues["missing_bext"].label, queues["missing_bext"].count, "review"),
+            FeatureFinding(
+                "metadata",
+                "Pending tag changes",
+                pending,
+                "pending" if pending else "clear",
+                pending_detail,
+            ),
+            FeatureFinding(
+                "metadata",
+                "Truly pending (after dedup)",
+                dup_counts.truly_pending_add_entries,
+                "pending" if dup_counts.truly_pending_add_entries else "clear",
+                dup_detail,
+            ),
+            FeatureFinding(
+                "metadata",
+                "Approved tag changes",
+                approved,
+                "accepted" if approved else "clear",
+                (
+                    f"{plan_counts.rejected_add_entries:,} rejected, "
+                    f"{plan_counts.skipped_add_entries:,} skipped, "
+                    f"{plan_counts.skip_existing_entries:,} skipped existing"
+                    if plan_counts.total_entries
+                    else ""
+                ),
+            ),
+            FeatureFinding("metadata", queues["db_only_tags"].label, queues["db_only_tags"].count, "accepted"),
+        ]
+
+    return _adapter_cached(cache_key, _build)
 
 
 def metadata_tag_change_rows(
@@ -2296,16 +2949,11 @@ def _report_category(path: Path, kind: str, *, command: str | None = None, patte
     return "Report"
 
 
-def summarize_plan_file(path: Path) -> PlanSummary:
-    """Summarize a JSON report/plan/log for the first before/after viewer."""
+def _summarize_plan_payload(path: Path, payload: dict[str, Any]) -> PlanSummary:
     try:
-        payload = json.loads(path.read_text())
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{path}: invalid JSON: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise ValueError(f"{path}: expected JSON object")
-
-    body = payload.get("plan") or payload.get("report") or payload
+        body = payload.get("plan") or payload.get("report") or payload
+    except AttributeError as exc:
+        raise ValueError(f"{path}: expected JSON object") from exc
     if not isinstance(body, dict):
         body = payload
     command = payload.get("command") if isinstance(payload.get("command"), str) else None
@@ -2404,6 +3052,59 @@ def summarize_plan_file(path: Path) -> PlanSummary:
     )
 
 
+def _summarize_tag_plan_from_summary(path: Path) -> PlanSummary | None:
+    stem = path.stem.casefold()
+    if "tag_plan" not in stem and "metadata_tag_plan" not in stem:
+        return None
+    counts = _metadata_plan_counts_from_summary(_json_summary_from_tail(path))
+    if counts is None:
+        return None
+    entries = counts.total_entries or counts.candidate_entries or counts.add_entries
+    description = f"{counts.add_entries:,} add, {counts.skip_existing_entries:,} skipped existing"
+    if counts.approved_add_entries or counts.rejected_add_entries:
+        description += f", {counts.approved_add_entries:,} approved, {counts.rejected_add_entries:,} rejected"
+    return PlanSummary(
+        path=str(path),
+        category="Plan",
+        kind="tag_plan",
+        title="Metadata tag plan",
+        entries=entries,
+        errors=0,
+        protected=0,
+        conflicts=0,
+        undoable=False,
+        description=description,
+    )
+
+
+def _cache_plan_summary(key: tuple[str, float, int, bool], summary: PlanSummary) -> PlanSummary:
+    stale = [cached_key for cached_key in _PLAN_SUMMARY_CACHE if cached_key[0] == key[0] and cached_key != key]
+    for cached_key in stale:
+        _PLAN_SUMMARY_CACHE.pop(cached_key, None)
+    _PLAN_SUMMARY_CACHE[key] = summary
+    return summary
+
+
+def summarize_plan_file(path: Path, *, lightweight: bool = False) -> PlanSummary:
+    """Summarize a JSON report/plan/log for the first before/after viewer."""
+    key = _path_signature(path, lightweight=lightweight)
+    cached = _PLAN_SUMMARY_CACHE.get(key)
+    if cached is not None:
+        return cached
+    if lightweight:
+        summary = _summarize_tag_plan_from_summary(path)
+        if summary is not None:
+            return _cache_plan_summary(key, summary)
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path}: invalid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path}: expected JSON object")
+    summary = _summarize_plan_payload(path, payload)
+    return _cache_plan_summary(key, summary)
+
+
 def _display_value(value: Any) -> str:
     if value is None:
         return ""
@@ -2458,6 +3159,10 @@ def _append_output_report_rows(rows: list[PlanDetailRow], body: dict[str, Any], 
 
 def plan_detail_rows(path: Path, *, limit: int = 100) -> list[PlanDetailRow]:
     """Return representative rows from a JSON report, plan, or apply log."""
+    cache_key = ("plan_detail_rows", _file_signature(path), int(limit))
+    cached = _ADAPTER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     try:
         payload = json.loads(path.read_text())
     except json.JSONDecodeError as exc:
@@ -2585,20 +3290,43 @@ def plan_detail_rows(path: Path, *, limit: int = 100) -> list[PlanDetailRow]:
         else:
             rows.append(PlanDetailRow("candidate", "", _display_value(candidate)))
 
-    return rows[:limit]
+    result = rows[:limit]
+    _ADAPTER_CACHE[cache_key] = result
+    while len(_ADAPTER_CACHE) > _ADAPTER_CACHE_MAX:
+        oldest = next(iter(_ADAPTER_CACHE))
+        _ADAPTER_CACHE.pop(oldest, None)
+    return result
 
 
-def _plan_matches_query(path: Path, query: str) -> bool:
+def _plan_matches_query(
+    path: Path,
+    query: str,
+    *,
+    summary: PlanSummary | None = None,
+    include_content: bool = True,
+) -> bool:
     terms = tuple(term.casefold() for term in query.split() if term.strip())
     if not terms:
         return True
     haystacks = [path.name.casefold(), str(path).casefold()]
+    if summary is not None:
+        haystacks.extend(
+            [
+                summary.category.casefold(),
+                summary.kind.casefold(),
+                summary.title.casefold(),
+                summary.description.casefold(),
+            ]
+        )
+    if any(any(term in haystack for haystack in haystacks) for term in terms):
+        return True
+    if not include_content:
+        return False
     try:
         text = path.read_text(errors="ignore").casefold()
     except OSError:
         text = ""
-    haystacks.append(text)
-    return any(any(term in haystack for haystack in haystacks) for term in terms)
+    return any(term in text for term in terms)
 
 
 def discover_plan_files(
@@ -2608,6 +3336,7 @@ def discover_plan_files(
     category: str = "",
     limit: int = 100,
     modified_since: float | None = None,
+    content_query: bool = True,
 ) -> list[PlanSummary]:
     """Discover JSON plans/reports/logs from files or directories."""
 
@@ -2644,11 +3373,11 @@ def discover_plan_files(
                     continue
             except OSError:
                 continue
-        if query and not _plan_matches_query(candidate, query):
-            continue
         try:
-            summary = summarize_plan_file(candidate)
+            summary = summarize_plan_file(candidate, lightweight=not content_query)
         except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if query and not _plan_matches_query(candidate, query, summary=summary, include_content=content_query):
             continue
         if category_filter and summary.category.casefold() != category_filter:
             continue

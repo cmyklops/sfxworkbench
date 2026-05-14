@@ -12,8 +12,7 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
-from sfxworkbench.cli._shared import print_json_result, require_file
-from sfxworkbench.db import DEFAULT_DB_PATH
+from sfxworkbench.cli._shared import print_json_result, require_file, resolve_db_path
 
 console = Console()
 
@@ -27,8 +26,9 @@ packs_app = typer.Typer(
 
 @packs_app.command("audit")
 def cmd_packs_audit(
+    ctx: typer.Context,
     path: Annotated[Path, typer.Argument(help="Root path of the library to analyze.")],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     output: Annotated[Path | None, typer.Option("--output", help="Write pack audit report JSON to this path.")] = None,
     min_files: Annotated[int, typer.Option("--min-files", help="Minimum indexed files in a folder candidate.")] = 2,
     overlap_threshold: Annotated[
@@ -50,9 +50,10 @@ def cmd_packs_audit(
         console.print("[red]Error: --overlap-threshold must be > 0 and <= 1.[/red]")
         raise typer.Exit(1)
 
+    effective_db = resolve_db_path(ctx, db)
     report = audit_packs(
         path,
-        db_path=db,
+        db_path=effective_db,
         min_files=min_files,
         overlap_threshold=overlap_threshold,
         max_overlap_candidates=max_overlap_candidates,
@@ -62,7 +63,7 @@ def cmd_packs_audit(
     elif not json_output:
         show_pack_audit_report(report)
     if json_output:
-        print_json_result("packs_audit", db_path=db, root=path, report_path=output, report=report)
+        print_json_result("packs_audit", db_path=effective_db, root=path, report_path=output, report=report)
 
 
 @packs_app.command("plan")

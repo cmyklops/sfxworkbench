@@ -12,8 +12,7 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
-from sfxworkbench.cli._shared import print_json_result, require_file
-from sfxworkbench.db import DEFAULT_DB_PATH
+from sfxworkbench.cli._shared import print_json_result, require_file, resolve_db_path
 
 console = Console()
 
@@ -127,8 +126,9 @@ def cmd_organize_nesting_plan(
 
 @organize_app.command("nesting-apply")
 def cmd_organize_nesting_apply(
+    ctx: typer.Context,
     plan: Annotated[Path, typer.Argument(help="Reviewed nesting flatten plan JSON.")],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     config: Annotated[
         Path | None,
         typer.Option("--config", help="sfxworkbench config JSON with shared preservation rules."),
@@ -144,10 +144,11 @@ def cmd_organize_nesting_apply(
     from sfxworkbench.organize import apply_nesting_plan
 
     require_file(plan, kind="plan file")
+    effective_db = resolve_db_path(ctx, db)
 
     result = apply_nesting_plan(
         plan,
-        db_path=db,
+        db_path=effective_db,
         log_path=log,
         require_reviewed=require_reviewed,
         dry_run=not apply,
@@ -160,8 +161,9 @@ def cmd_organize_nesting_apply(
 
 @organize_app.command("nesting-undo")
 def cmd_organize_nesting_undo(
+    ctx: typer.Context,
     log: Annotated[Path, typer.Argument(help="Nesting undo log to restore.")],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     apply: Annotated[bool, typer.Option("--apply", help="Actually undo nesting flatten operations.")] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
@@ -169,16 +171,18 @@ def cmd_organize_nesting_undo(
     from sfxworkbench.organize import undo_nesting_log
 
     require_file(log, kind="log file")
+    effective_db = resolve_db_path(ctx, db)
 
-    result = undo_nesting_log(log, db_path=db, dry_run=not apply, quiet=json_output)
+    result = undo_nesting_log(log, db_path=effective_db, dry_run=not apply, quiet=json_output)
     if json_output:
         print_json_result("organize_nesting_undo", result=result)
 
 
 @organize_app.command("apply")
 def cmd_organize_apply(
+    ctx: typer.Context,
     report: Annotated[Path, typer.Argument(help="Reviewed organization report JSON to apply.")],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     config: Annotated[
         Path | None,
         typer.Option("--config", help="sfxworkbench config JSON with shared preservation rules."),
@@ -193,9 +197,15 @@ def cmd_organize_apply(
     from sfxworkbench.organize import apply_organize_report
 
     require_file(report, kind="report file")
+    effective_db = resolve_db_path(ctx, db)
 
     result = apply_organize_report(
-        report, db_path=db, log_path=log, require_reviewed=require_reviewed, quiet=json_output, config_path=config
+        report,
+        db_path=effective_db,
+        log_path=log,
+        require_reviewed=require_reviewed,
+        quiet=json_output,
+        config_path=config,
     )
     if json_output:
         print_json_result("organize_apply", result=result)
@@ -203,8 +213,9 @@ def cmd_organize_apply(
 
 @organize_app.command("undo")
 def cmd_organize_undo(
+    ctx: typer.Context,
     log: Annotated[Path, typer.Argument(help="Organization undo log to restore.")],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     apply: Annotated[bool, typer.Option("--apply", help="Actually undo renames (default is dry-run).")] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
@@ -212,7 +223,8 @@ def cmd_organize_undo(
     from sfxworkbench.organize import undo_organize_log
 
     require_file(log, kind="log file")
+    effective_db = resolve_db_path(ctx, db)
 
-    result = undo_organize_log(log, db_path=db, dry_run=not apply, quiet=json_output)
+    result = undo_organize_log(log, db_path=effective_db, dry_run=not apply, quiet=json_output)
     if json_output:
         print_json_result("organize_undo", result=result)

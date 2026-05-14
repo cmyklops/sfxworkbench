@@ -11,6 +11,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from sfxworkbench import junk
+from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params
 from sfxworkbench.models import CleanResult
 from sfxworkbench.utils import fmt_bytes
 
@@ -135,6 +136,30 @@ def _dir_size(path: Path) -> int:
     return total
 
 
+def _drop_indexed_rows_under(db_path: Path, deleted_paths: list[Path]) -> int:
+    """Remove rows from ``files`` matching any path in *deleted_paths* or below.
+
+    Junk cleanup unlinks files on disk. Most junk (``.DS_Store``, ``__MACOSX``)
+    isn't indexed, but if anything tracked by the index gets removed the row
+    must go too — otherwise the status strip keeps counting its bytes.
+    """
+    if not deleted_paths:
+        return 0
+    conn = get_connection(db_path)
+    try:
+        removed = 0
+        for path in deleted_paths:
+            cursor = conn.execute(
+                f"DELETE FROM files WHERE {path_scope_filter()}",
+                path_scope_params(path),
+            )
+            removed += cursor.rowcount or 0
+        conn.commit()
+    finally:
+        conn.close()
+    return removed
+
+
 def clean_library(
     root: Path,
     dry_run: bool = True,
@@ -142,6 +167,7 @@ def clean_library(
     quiet: bool = False,
     progress_callback: ProgressCallback | None = None,
     cancel_requested: Callable[[], bool] | None = None,
+    db_path: Path | None = None,
 ) -> CleanResult:
     """Find and optionally delete junk. Always dry_run unless dry_run=False.
     Writes JSON log of everything removed to log_path if provided.
@@ -153,11 +179,14 @@ def clean_library(
     root = root.resolve()
     junk_files, junk_dirs = find_junk(root, quiet=quiet, progress_callback=progress_callback)
 
-    bytes_freed = sum(sz for _, sz in junk_files) + sum(sz for _, sz in junk_dirs)
+    planned_bytes = sum(sz for _, sz in junk_files) + sum(sz for _, sz in junk_dirs)
+    removed_files = [str(f) for f, _ in junk_files] if dry_run else []
+    removed_dirs = [str(d) for d, _ in junk_dirs] if dry_run else []
+    bytes_freed = planned_bytes if dry_run else 0
 
     result = CleanResult(
-        removed_files=[str(f) for f, _ in junk_files],
-        removed_dirs=[str(d) for d, _ in junk_dirs],
+        removed_files=removed_files,
+        removed_dirs=removed_dirs,
         bytes_freed=bytes_freed,
         dry_run=dry_run,
     )
@@ -180,7 +209,7 @@ def clean_library(
         total = len(junk_files) + len(junk_dirs)
         console.print(
             f"\n{total} item(s) ({len(junk_files)} files, {len(junk_dirs)} dirs), "
-            f"{action} [yellow]{fmt_bytes(bytes_freed)}[/yellow]"
+            f"{action} [yellow]{fmt_bytes(planned_bytes)}[/yellow]"
         )
 
     cancelled = False
@@ -190,9 +219,11 @@ def clean_library(
         total = len(junk_files) + len(junk_dirs)
         report_every = progress_interval(total)
         completed = 0
-        for f, _ in junk_files:
+        for f, size in junk_files:
             try:
                 f.unlink()
+                result.removed_files.append(str(f))
+                result.bytes_freed += size
             except OSError as e:
                 if not quiet:
                     console.print(f"[red]Error removing {f}: {e}[/red]")
@@ -205,9 +236,11 @@ def clean_library(
                 cancelled = True
                 break
         if not cancelled:
-            for d, _ in junk_dirs:
+            for d, size in junk_dirs:
                 try:
                     shutil.rmtree(d)
+                    result.removed_dirs.append(str(d))
+                    result.bytes_freed += size
                 except OSError as e:
                     if not quiet:
                         console.print(f"[red]Error removing {d}: {e}[/red]")
@@ -217,6 +250,11 @@ def clean_library(
                 if completed % 50 == 0 and cancel_requested is not None and cancel_requested():
                     cancelled = True
                     break
+        if db_path is not None and (result.removed_files or result.removed_dirs):
+            _drop_indexed_rows_under(
+                db_path,
+                [Path(p) for p in result.removed_files] + [Path(p) for p in result.removed_dirs],
+            )
     elif progress_callback is not None:
         total = len(junk_files) + len(junk_dirs)
         progress_callback("preview", total, total, f"Previewed {total:,} junk item(s)")
@@ -232,7 +270,8 @@ def clean_library(
             "dry_run": dry_run,
             "removed_files": result.removed_files,
             "removed_dirs": result.removed_dirs,
-            "bytes_freed": bytes_freed,
+            "bytes_freed": result.bytes_freed,
+            "cancelled": result.cancelled,
         }
         log_path.write_text(json.dumps(log_data, indent=2))
         if not quiet:

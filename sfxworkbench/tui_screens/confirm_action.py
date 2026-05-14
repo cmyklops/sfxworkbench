@@ -27,6 +27,8 @@ def build_confirm_action_screen(title: str, message: str) -> ModalScreen[bool]:
     from textual.widgets import Button, Static
 
     class ConfirmActionScreen(ModalScreen[bool]):
+        POPUP_KEY = "confirm-action"
+
         CSS = """
         ConfirmActionScreen {
             align: center middle;

@@ -15,10 +15,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from sfxworkbench.scan import scan_library
 from sfxworkbench.tui_screens.metadata_review import (
     FileReviewItem,
     TagCandidate,
+    build_metadata_context,
     build_review_queue,
+    skip_status_transition,
 )
 
 # -- TagCandidate.diff_marker ----------------------------------------------
@@ -143,6 +146,36 @@ def test_build_review_queue_carries_entry_ids_for_persistence(tmp_path: Path, tm
     assert all(eid > 0 for eid in entry_ids)
 
 
+def test_build_review_queue_handles_old_plans_without_entry_ids(tmp_path: Path, tmp_db: Path) -> None:
+    plan_path = tmp_path / "plan.json"
+    entry = _entry(path="/lib/a.wav", filename="a.wav", field="keyword", proposed_value="rain")
+    entry.pop("entry_id")
+    _write_plan(plan_path, [entry])
+
+    items = build_review_queue(plan_path, db_path=tmp_db)
+
+    assert len(items) == 1
+    assert items[0].candidates[0].entry_id == 0
+
+
+def test_build_review_queue_can_page_pending_files(tmp_path: Path, tmp_db: Path) -> None:
+    plan_path = tmp_path / "plan.json"
+    _write_plan(
+        plan_path,
+        [
+            _entry(path="/lib/a.wav", filename="a.wav", proposed_value="A"),
+            _entry(path="/lib/b.wav", filename="b.wav", proposed_value="B"),
+            _entry(path="/lib/c.wav", filename="c.wav", proposed_value="C"),
+        ],
+    )
+
+    page_one = build_review_queue(plan_path, db_path=tmp_db, limit=1, pending_only=True)
+    page_two = build_review_queue(plan_path, db_path=tmp_db, limit=1, offset=1, pending_only=True)
+
+    assert [item.filename for item in page_one] == ["a.wav"]
+    assert [item.filename for item in page_two] == ["b.wav"]
+
+
 def test_build_review_queue_empty_for_missing_plan(tmp_path: Path, tmp_db: Path) -> None:
     """The TUI never errors when there's no active plan — it just shows an empty queue."""
     items = build_review_queue(tmp_path / "does_not_exist.json", db_path=tmp_db)
@@ -164,6 +197,63 @@ def test_build_review_queue_preserves_status_from_plan(tmp_path: Path, tmp_db: P
     items = build_review_queue(plan_path, db_path=tmp_db)
     statuses = {c.field: c.status for c in items[0].candidates}
     assert statuses == {"description": "approved", "keyword": "rejected"}
+
+
+def test_build_metadata_context_shows_embedded_accepted_and_technical_rows(tmp_library: Path, tmp_db: Path) -> None:
+    import sqlite3
+
+    scan_library(tmp_library, tmp_db, skip_hash=False, quiet=True)
+    target = tmp_library / "sounds" / "AMB_RAIN_01.wav"
+
+    conn = sqlite3.connect(tmp_db)
+    try:
+        file_id = conn.execute("SELECT id FROM files WHERE path = ?", (str(target),)).fetchone()[0]
+        conn.execute(
+            """
+            INSERT INTO metadata_fields (
+                file_id, namespace, key, value, source, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (file_id, "bext", "description", "Steady\nrain", "test", "2026-05-13T00:00:00"),
+        )
+        conn.execute(
+            """
+            INSERT INTO accepted_tags (
+                file_id, field, value, source, confidence, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                file_id,
+                "keywords",
+                "rain; exterior",
+                "review",
+                0.8,
+                "2026-05-13T00:00:00",
+                "2026-05-13T00:00:00",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rows = build_metadata_context(str(target), db_path=tmp_db)
+    keys = {(row.origin, row.field): row for row in rows}
+
+    assert keys[("embedded", "bext:description")].value == "Steady rain"
+    assert keys[("embedded", "bext:description")].status == "current"
+    assert keys[("accepted", "keywords")].value == "rain; exterior"
+    assert keys[("accepted", "keywords")].confidence == 0.8
+    assert keys[("technical", "sample_rate")].source == "index"
+    assert keys[("technical", "md5")].value
+
+
+def test_skip_status_transition_only_skips_pending_candidates() -> None:
+    assert skip_status_transition("pending") == ("pending", "skipped")
+    assert skip_status_transition("approved") is None
+    assert skip_status_transition("rejected") is None
+    assert skip_status_transition("skipped") is None
 
 
 # -- Build the actual Textual Screen (smoke test — requires the `tui` extra) -

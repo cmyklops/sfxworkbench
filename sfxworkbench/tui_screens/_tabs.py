@@ -45,10 +45,10 @@ def _import_registry() -> tuple[TabSpec, ...]:
     tab for an alternate implementation in a test is one ``monkeypatch`` away).
     """
     from sfxworkbench.tui_screens import (
-        advanced_tab,
         clean_tab,
         dedupe_tab,
         files_tab,
+        history_tab,
         metadata_tab,
         scan_tab,
     )
@@ -56,11 +56,11 @@ def _import_registry() -> tuple[TabSpec, ...]:
     # Order here matches the visible tab order in ``sfx tui``.
     return (
         TabSpec(key=scan_tab.KEY, label="Scan", module=scan_tab),
-        TabSpec(key=files_tab.KEY, label="Files", module=files_tab),
-        TabSpec(key=clean_tab.KEY, label="Declutter", module=clean_tab),
+        TabSpec(key=clean_tab.KEY, label="Cleanup", module=clean_tab),
         TabSpec(key=dedupe_tab.KEY, label="Dedupe", module=dedupe_tab),
         TabSpec(key=metadata_tab.KEY, label="Metadata", module=metadata_tab),
-        TabSpec(key=advanced_tab.KEY, label="Advanced", module=advanced_tab),
+        TabSpec(key=files_tab.KEY, label="Files", module=files_tab),
+        TabSpec(key=history_tab.KEY, label="History", module=history_tab),
     )
 
 

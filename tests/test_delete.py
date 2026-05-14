@@ -172,6 +172,55 @@ def test_apply_delete_plan_dry_run_is_idempotent(tmp_path: Path) -> None:
     assert target.exists()
 
 
+def test_apply_delete_plan_drops_index_rows_under_deleted_paths(tmp_path: Path, tmp_db: Path) -> None:
+    """Permanent delete should also evict stale index rows so the size status drops."""
+    from sfxworkbench.db import get_connection
+
+    quarantine_dir = tmp_path / "quarantine_bundle"
+    quarantine_dir.mkdir()
+    inside = quarantine_dir / "old.wav"
+    inside.write_bytes(b"audio-bytes")
+    log = _make_quarantine_log(tmp_path, [quarantine_dir])
+    plan = build_delete_plan(log)
+    plan_path = tmp_path / "delete_plan.json"
+    write_delete_plan(plan, plan_path, quiet=True)
+    review_delete_plan(plan_path, approve_all=True, quiet=True)
+
+    # Seed an index row whose path lives *inside* the quarantine bundle to
+    # mimic a pack quarantine that re-pointed the indexed file at its new
+    # location. After permanent delete, ``SUM(size_bytes)`` should drop.
+    conn = get_connection(tmp_db)
+    conn.execute(
+        """
+        INSERT INTO files (path, filename, stem, extension, size_bytes, mtime, md5, scanned_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (str(inside), inside.name, inside.stem, inside.suffix.lower(), len(b"audio-bytes"), 0.0, "deadbeef", "2026"),
+    )
+    conn.commit()
+    before_total = conn.execute("SELECT COALESCE(SUM(size_bytes), 0) AS s FROM files").fetchone()["s"]
+    conn.close()
+    assert before_total == len(b"audio-bytes")
+
+    result = apply_delete_plan(
+        plan_path,
+        db_path=tmp_db,
+        dry_run=False,
+        require_reviewed=True,
+        understand_permanent_delete=True,
+        quiet=True,
+    )
+
+    assert result.deleted == 1
+    conn = get_connection(tmp_db)
+    after_total = conn.execute("SELECT COALESCE(SUM(size_bytes), 0) AS s FROM files").fetchone()["s"]
+    remaining = conn.execute("SELECT COUNT(*) AS c FROM files").fetchone()["c"]
+    conn.close()
+    assert after_total == 0
+    assert remaining == 0
+    assert not quarantine_dir.exists()
+
+
 def test_apply_delete_plan_skips_rejected_entries(tmp_path: Path) -> None:
     a = tmp_path / "quarantine" / "a.wav"
     b = tmp_path / "quarantine" / "b.wav"

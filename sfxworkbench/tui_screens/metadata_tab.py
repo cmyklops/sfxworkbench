@@ -1,7 +1,7 @@
 """Page module for the Metadata tab.
 
-Metadata audit + tag suggestion + DB tag apply + sidecar export. The
-metadata-rows-table shows the first 100 prioritized files with their pending
+Metadata audit + tag suggestion + DB tag apply + tag-file export. The
+metadata-rows-table shows the first 500 prioritized files with their pending
 vs. existing tag state, mirroring what the standalone ``MetadataReviewScreen``
 shows but inline.
 """
@@ -16,32 +16,37 @@ if TYPE_CHECKING:
 KEY = "metadata"
 TITLE = "Metadata"
 NOTE = (
-    "Audit metadata coverage, generate UCS/keyword suggestions, and apply DB-only "
-    "tags. Press R (capital) for the dedicated two-pane review screen."
+    "Audit metadata coverage, generate UCS/keyword suggestions, and apply tags. "
+    '"Apply Tags & Plan Embedded" commits suggestions to the index and prepares '
+    'the embedded write plan in one step; "Apply Embedded Metadata" then writes '
+    "those entries into audio files."
 )
 
 
 def compose(app) -> ComposeResult:
-    from textual.widgets import DataTable, Input
+    from textual.widgets import DataTable, Static
 
     yield from app._page_header(KEY)
+    yield DataTable(id="metadata-findings-table")
     yield from app._button_row(
         ("Metadata Audit", "metadata-audit"),
         ("Generate Suggestions", "metadata-plan"),
         ("Generate Synonyms", "metadata-plan-synonyms"),
-        ("Approve DB Tags", "metadata-approve"),
-        ("Apply DB Tags", "metadata-apply", "warning"),
-        ("Export Sidecar", "metadata-sidecar"),
+        ("Apply Tags & Plan Embedded", "metadata-apply", "warning"),
+        ("Save Tags File", "metadata-sidecar"),
     )
-    yield DataTable(id="metadata-findings-table")
-    yield Input(placeholder="Filter prioritized files (by filename or path)", id="metadata-search")
-    yield from app._titled_table("Metadata Values - First 100 Prioritized Files", "metadata-rows-table")
-    yield from app._titled_table_pair(
-        "History",
-        "metadata-reports-table",
-        "History Detail",
-        "metadata-report-detail-table",
+    yield from app._button_row(
+        ("Apply Embedded Metadata", "metadata-write-apply", "warning"),
+        ("Undo Embedded Metadata", "metadata-write-undo"),
     )
+    yield from app._button_row(
+        ("Review Tags", "metadata-review-open"),
+        ("Previous 500", "metadata-page-prev"),
+        ("Next 500", "metadata-page-next"),
+        ("Random Pending", "metadata-page-random"),
+    )
+    yield Static("Source symbols: # filename  / path  ~ group  ^ UCS catalog/stem  * synonym", classes="note")
+    yield from app._titled_table("Metadata Values - First 500 Prioritized Files", "metadata-rows-table")
 
 
 def fill(app) -> None:
@@ -65,7 +70,10 @@ def fill(app) -> None:
         db_path=app.db_path,
         plan_path=plan_path,
         query=getattr(app, "_metadata_query", ""),
-        limit=100,
+        limit=getattr(app, "_metadata_page_size", 500),
+        offset=getattr(app, "_metadata_offset", 0),
+        random_pending=getattr(app, "_metadata_random_pending", False),
+        pending_only=True,
     )
     rows = app._sort_for_table(
         "metadata-rows-table",

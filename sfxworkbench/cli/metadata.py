@@ -14,8 +14,7 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
-from sfxworkbench.cli._shared import print_json_result, require_file
-from sfxworkbench.db import DEFAULT_DB_PATH
+from sfxworkbench.cli._shared import print_json_result, require_file, resolve_db_path
 
 console = Console()
 
@@ -29,7 +28,8 @@ metadata_app = typer.Typer(
 
 @metadata_app.command("audit")
 def cmd_metadata_audit(
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    ctx: typer.Context,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     output: Annotated[
         Path | None, typer.Option("--output", help="Write metadata audit report JSON to this path.")
     ] = None,
@@ -44,7 +44,8 @@ def cmd_metadata_audit(
     )
 
     try:
-        report = build_metadata_audit_report(db, limit=limit)
+        effective_db = resolve_db_path(ctx, db)
+        report = build_metadata_audit_report(effective_db, limit=limit)
     except (FileNotFoundError, ValueError) as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
@@ -54,13 +55,14 @@ def cmd_metadata_audit(
     elif not json_output:
         show_metadata_audit_report(report)
     if json_output:
-        print_json_result("metadata_audit", db_path=db, report_path=output, report=report)
+        print_json_result("metadata_audit", db_path=effective_db, report_path=output, report=report)
 
 
 @metadata_app.command("view")
 def cmd_metadata_view(
+    ctx: typer.Context,
     query: Annotated[str, typer.Argument(help="Indexed path, filename, stem, or path fragment to inspect.")],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     catalog: Annotated[Path | None, typer.Option("--catalog", help="Override the UCS catalog discovery chain.")] = None,
     limit: Annotated[int, typer.Option("--limit", help="Maximum matching files to show.")] = 5,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
@@ -69,7 +71,8 @@ def cmd_metadata_view(
     from sfxworkbench.metadata_view import build_metadata_view_report, show_metadata_view_report
 
     try:
-        report = build_metadata_view_report(query, db_path=db, catalog_path=catalog, limit=limit)
+        effective_db = resolve_db_path(ctx, db)
+        report = build_metadata_view_report(query, db_path=effective_db, catalog_path=catalog, limit=limit)
     except (FileNotFoundError, ValueError) as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
@@ -77,7 +80,7 @@ def cmd_metadata_view(
     if not json_output:
         show_metadata_view_report(report)
     if json_output:
-        print_json_result("metadata_view", db_path=db, query=query, report=report)
+        print_json_result("metadata_view", db_path=effective_db, query=query, report=report)
 
 
 @metadata_app.command("backends")
@@ -100,8 +103,9 @@ def cmd_metadata_backends(
 
 @metadata_app.command("write-plan")
 def cmd_metadata_write_plan(
+    ctx: typer.Context,
     output: Annotated[Path, typer.Argument(help="Output embedded metadata write plan JSON path.")],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     path: Annotated[Path | None, typer.Option("--path", help="Optional indexed library root to include.")] = None,
     backend: Annotated[
         str, typer.Option("--backend", help="Metadata writer backend to plan for: auto, bwfmetaedit, or mutagen.")
@@ -130,9 +134,10 @@ def cmd_metadata_write_plan(
         write_metadata_write_plan,
     )
 
+    effective_db = resolve_db_path(ctx, db)
     try:
         plan = build_metadata_write_plan(
-            db_path=db,
+            db_path=effective_db,
             root=path,
             backend=backend,
             bwfmetaedit=bwfmetaedit,
@@ -146,7 +151,7 @@ def cmd_metadata_write_plan(
     if not json_output:
         show_metadata_write_plan(plan)
     if json_output:
-        print_json_result("metadata_write_plan", db_path=db, root=path, plan_path=plan_path, plan=plan)
+        print_json_result("metadata_write_plan", db_path=effective_db, root=path, plan_path=plan_path, plan=plan)
 
 
 @metadata_app.command("write-review")

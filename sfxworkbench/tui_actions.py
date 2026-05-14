@@ -38,7 +38,7 @@ from sfxworkbench.rename import apply_rename_plan, build_rename_plan, undo_renam
 from sfxworkbench.scan import scan_library
 from sfxworkbench.tag_plan import apply_tag_plan, build_tag_plan, review_tag_plan, write_tag_plan
 from sfxworkbench.tag_sidecar import build_tag_sidecar_report, write_tag_sidecar_report
-from sfxworkbench.utils import atomic_write_json
+from sfxworkbench.utils import atomic_write_json, fmt_bytes
 
 
 @dataclass(frozen=True)
@@ -133,6 +133,47 @@ def _result_errors(result: Any) -> tuple[str, ...]:
     return tuple(str(error.get("error", error)) if isinstance(error, dict) else str(error) for error in errors)
 
 
+def _per_entry_plan_has_approvals(plan_path: Path) -> bool:
+    """Return ``True`` if a per-entry plan (tag/embedded/delete) has any approved entries."""
+    try:
+        payload = json.loads(plan_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    entries = payload.get("entries") or []
+    return any(isinstance(entry, dict) and entry.get("review_status") == "approved" for entry in entries)
+
+
+def _group_plan_has_approvals(plan_path: Path) -> bool:
+    """Return ``True`` if a group-review plan (dedupe/pack) has any approved groups."""
+    try:
+        payload = json.loads(plan_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    review = payload.get("review") or {}
+    return bool(review.get("approved_groups"))
+
+
+def _auto_approve_plan(
+    plan_path: Path,
+    review_fn: Callable[..., Any],
+    has_approvals: Callable[[Path], bool],
+) -> Exception | None:
+    """Approve every entry in *plan_path* when nothing has been approved yet.
+
+    Rolls the legacy "Approve" button into "Apply" while still respecting any
+    selective review a user already made via a per-entry review screen
+    (e.g. ``Metadata Review``). If at least one entry/group is already
+    approved, this is a no-op so existing rejections are preserved.
+    """
+    if has_approvals(plan_path):
+        return None
+    try:
+        review_fn(plan_path, approve_all=True, quiet=True)
+    except Exception as e:  # pragma: no cover - defensive UI boundary
+        return e
+    return None
+
+
 def _latest(path: Path, pattern: str) -> Path | None:
     if not path.exists():
         return None
@@ -151,13 +192,17 @@ def _has_quarantine_entries(path: Path) -> bool:
     )
 
 
-def _latest_quarantine_log(report_dir: Path) -> Path | None:
+def _all_quarantine_logs(report_dir: Path) -> list[Path]:
     candidates: list[Path] = []
     for directory in (report_dir / APPLY_LOG_DIR_NAME, report_dir):
         if directory.exists():
             candidates.extend(path for path in directory.glob("*.json") if _has_quarantine_entries(path))
-    matches = sorted(set(candidates), key=lambda item: item.stat().st_mtime, reverse=True)
-    return matches[0] if matches else None
+    return sorted(set(candidates), key=lambda item: item.stat().st_mtime)
+
+
+def _latest_quarantine_log(report_dir: Path) -> Path | None:
+    logs = _all_quarantine_logs(report_dir)
+    return logs[-1] if logs else None
 
 
 def _quarantine_dirs(report_dir: Path) -> list[Path]:
@@ -169,7 +214,68 @@ def _quarantine_dirs(report_dir: Path) -> list[Path]:
     return sorted(set(candidates), key=lambda item: item.stat().st_mtime, reverse=True)
 
 
+def _aggregate_quarantine_entries(report_dir: Path) -> tuple[list[dict], list[Path]]:
+    """Return ``(entries, source_logs)`` covering every quarantined path under *report_dir*.
+
+    Walks every quarantine log under ``apply_logs/`` and the report root, plus
+    any legacy top-level quarantine folders that no log references. Deduplicates
+    by ``quarantine_path`` so a single quarantined file recorded across multiple
+    logs is only counted once.
+    """
+    entries: list[dict] = []
+    seen_paths: set[str] = set()
+    source_logs: list[Path] = []
+    for log_path in _all_quarantine_logs(report_dir):
+        try:
+            payload = json.loads(log_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        source_logs.append(log_path)
+        for item in payload.get("entries", []) or []:
+            if not isinstance(item, dict):
+                continue
+            quarantine_path = item.get("quarantine_path")
+            if not isinstance(quarantine_path, str) or not quarantine_path:
+                continue
+            if quarantine_path in seen_paths:
+                continue
+            seen_paths.add(quarantine_path)
+            entries.append(item)
+    for legacy_dir in _quarantine_dirs(report_dir):
+        legacy_str = str(legacy_dir)
+        if legacy_str in seen_paths or any(
+            seen.startswith(legacy_str + "/") or seen == legacy_str for seen in seen_paths
+        ):
+            continue
+        seen_paths.add(legacy_str)
+        entries.append({"quarantine_path": legacy_str, "path": None, "source": "legacy_quarantine_folder"})
+    return entries, source_logs
+
+
+def _write_combined_quarantine_log(report_dir: Path, entries: list[dict]) -> Path:
+    log_dir = _ensure_report_dir(report_dir) / APPLY_LOG_DIR_NAME
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"combined_quarantine_log_{_now_stamp()}.json"
+    payload = {
+        "schema_version": 1,
+        "command": "combined_quarantine_log",
+        "generated_at": datetime.now(UTC).isoformat(),
+        "entries": entries,
+    }
+    atomic_write_json(log_path, payload)
+    return log_path
+
+
 def _write_legacy_quarantine_log(report_dir: Path, quarantine_dirs: list[Path]) -> Path:
+    """Back-compat shim used by tests that pre-date :func:`_aggregate_quarantine_entries`."""
+    entries = [
+        {
+            "quarantine_path": str(quarantine_dir),
+            "path": None,
+            "source": "legacy_quarantine_folder",
+        }
+        for quarantine_dir in quarantine_dirs
+    ]
     log_dir = _ensure_report_dir(report_dir) / APPLY_LOG_DIR_NAME
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"legacy_quarantine_log_{_now_stamp()}.json"
@@ -177,14 +283,7 @@ def _write_legacy_quarantine_log(report_dir: Path, quarantine_dirs: list[Path]) 
         "schema_version": 1,
         "command": "legacy_quarantine_log",
         "generated_at": datetime.now(UTC).isoformat(),
-        "entries": [
-            {
-                "quarantine_path": str(quarantine_dir),
-                "path": None,
-                "source": "legacy_quarantine_folder",
-            }
-            for quarantine_dir in quarantine_dirs
-        ],
+        "entries": entries,
     }
     atomic_write_json(log_path, payload)
     return log_path
@@ -259,6 +358,7 @@ def clean_action(
     report_dir: Path,
     *,
     apply: bool = False,
+    db_path: Path | None = None,
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
 ) -> ActionResult:
@@ -272,6 +372,7 @@ def clean_action(
             quiet=True,
             progress_callback=progress_callback,
             cancel_requested=cancel_requested,
+            db_path=db_path if apply else None,
         )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error(action, e)
@@ -416,6 +517,9 @@ def apply_tag_plan_action(
         return ActionResult(
             "tag_apply", "error", "No metadata tag plan found.", errors=("No metadata tag plan found.",)
         )
+    auto_approve_error = _auto_approve_plan(plan_path, review_tag_plan, _per_entry_plan_has_approvals)
+    if auto_approve_error is not None:
+        return _action_error("tag_apply", auto_approve_error)
     try:
         result = apply_tag_plan(
             plan_path,
@@ -512,6 +616,9 @@ def apply_dedupe_plan_action(
     plan_path = report_dir / "dedupe_plan.json"
     if not plan_path.exists():
         return ActionResult("dedupe_apply", "error", "No dedupe plan found.", errors=("No dedupe plan found.",))
+    auto_approve_error = _auto_approve_plan(plan_path, review_dedupe_plan, _group_plan_has_approvals)
+    if auto_approve_error is not None:
+        return _action_error("dedupe_apply", auto_approve_error)
     try:
         log_path = (report_dir / APPLY_LOG_DIR_NAME) / f"dedupe_quarantine_log_{_now_stamp()}.json"
         result = apply_dedupe_plan(
@@ -604,6 +711,9 @@ def apply_pack_plan_action(db_path: Path, report_dir: Path) -> ActionResult:
     plan_path = report_dir / "pack_consolidation_plan.json"
     if not plan_path.exists():
         return ActionResult("pack_apply", "error", "No pack plan found.", errors=("No pack plan found.",))
+    auto_approve_error = _auto_approve_plan(plan_path, review_pack_plan, _group_plan_has_approvals)
+    if auto_approve_error is not None:
+        return _action_error("pack_apply", auto_approve_error)
     try:
         result = apply_pack_plan(plan_path, db_path=db_path, dry_run=False, require_reviewed=True, quiet=True)
     except Exception as e:  # pragma: no cover - defensive UI boundary
@@ -747,6 +857,9 @@ def apply_organize_action(db_path: Path, report_dir: Path) -> ActionResult:
         return ActionResult(
             "organize_apply", "error", "No organization report found.", errors=("No organization report found.",)
         )
+    auto_approve_error = _auto_approve_plan(report_path, review_organize_report, _per_entry_plan_has_approvals)
+    if auto_approve_error is not None:
+        return _action_error("organize_apply", auto_approve_error)
     try:
         result = apply_organize_report(report_path, db_path=db_path, require_reviewed=True, quiet=True)
     except Exception as e:  # pragma: no cover - defensive UI boundary
@@ -817,6 +930,9 @@ def apply_nesting_action(db_path: Path, report_dir: Path) -> ActionResult:
         return ActionResult(
             "organize_nesting_apply", "error", "No nesting plan found.", errors=("No nesting plan found.",)
         )
+    auto_approve_error = _auto_approve_plan(plan_path, review_organize_report, _per_entry_plan_has_approvals)
+    if auto_approve_error is not None:
+        return _action_error("organize_nesting_apply", auto_approve_error)
     try:
         result = apply_nesting_plan(plan_path, db_path=db_path, require_reviewed=True, dry_run=False, quiet=True)
     except Exception as e:  # pragma: no cover - defensive UI boundary
@@ -856,6 +972,57 @@ def undo_nesting_action(db_path: Path, report_dir: Path) -> ActionResult:
     )
 
 
+def apply_tag_plan_and_build_embedded_plan_action(
+    db_path: Path,
+    report_dir: Path,
+    *,
+    root: Path | None = None,
+    target_paths: tuple[str, ...] | None = None,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
+) -> ActionResult:
+    """Apply the tag plan to ``accepted_tags`` then build the embedded-write plan.
+
+    Replaces the old two-button flow (Apply DB Tags → Plan Embedded Metadata).
+    The DB-apply step is fast and reversible; the embedded plan step is the
+    slow file-probe pass that must run before Apply Embedded Metadata. There
+    is no realistic case where the user wants the first without the second,
+    so they're chained here.
+
+    If the DB apply errors or is cancelled, the slower probe step is skipped
+    and the apply result is returned as-is. If the DB apply succeeds but the
+    probe step fails (e.g. ``bwfmetaedit`` not installed), both messages are
+    surfaced so the user knows the DB write landed.
+    """
+    apply_result = apply_tag_plan_action(
+        db_path,
+        report_dir,
+        target_paths=target_paths,
+        progress_callback=progress_callback,
+        cancel_requested=cancel_requested,
+    )
+    if not apply_result.ok or apply_result.status == "cancelled":
+        return apply_result
+    plan_result = build_embedded_metadata_plan_action(
+        root if root is not None else Path("."),
+        db_path,
+        report_dir,
+        progress_callback=progress_callback,
+        cancel_requested=cancel_requested,
+    )
+    merged_refresh = tuple(dict.fromkeys((*apply_result.refresh, *plan_result.refresh)))
+    merged_errors = tuple(dict.fromkeys((*apply_result.errors, *plan_result.errors)))
+    return ActionResult(
+        action="tag_apply_and_embedded_plan",
+        status=plan_result.status if plan_result.ok else "error",
+        message=f"{apply_result.message} {plan_result.message}".strip(),
+        output_path=plan_result.output_path or apply_result.output_path,
+        errors=merged_errors,
+        refresh=merged_refresh,
+        details={"apply": apply_result.details, "plan": plan_result.details},
+    )
+
+
 def build_embedded_metadata_plan_action(
     root: Path,
     db_path: Path,
@@ -886,7 +1053,7 @@ def build_embedded_metadata_plan_action(
         ),
         output_path=str(output),
         errors=tuple(str(error.get("error", error)) for error in plan.errors),
-        refresh=("advanced", "reports"),
+        refresh=("metadata", "reports"),
         details=plan.model_dump(),
     )
 
@@ -909,7 +1076,7 @@ def approve_embedded_metadata_action(report_dir: Path) -> ActionResult:
         status="ok",
         message=f"Approved {result.approved_entries:,} of {result.total_entries:,} embedded metadata entrie(s).",
         output_path=result.output_path,
-        refresh=("advanced", "reports"),
+        refresh=("metadata", "reports"),
         details=result.model_dump(),
     )
 
@@ -934,6 +1101,9 @@ def apply_embedded_metadata_action(
             "No embedded metadata write plan found.",
             errors=("No embedded metadata write plan found.",),
         )
+    auto_approve_error = _auto_approve_plan(plan_path, review_metadata_write_plan, _per_entry_plan_has_approvals)
+    if auto_approve_error is not None:
+        return _action_error("metadata_write_apply", auto_approve_error)
     try:
         result = apply_metadata_write_plan(
             plan_path,
@@ -957,7 +1127,7 @@ def apply_embedded_metadata_action(
         message=f"Wrote {result.applied:,} embedded metadata entrie(s) to {result.files_written:,} file(s).{scope_note}{cancel_note}",
         output_path=result.log_path,
         errors=errors,
-        refresh=("metadata", "files", "advanced", "reports"),
+        refresh=("metadata", "files", "reports"),
         details=result.model_dump(),
     )
 
@@ -985,39 +1155,41 @@ def undo_embedded_metadata_action(db_path: Path, report_dir: Path) -> ActionResu
         message=f"Restored {result.restored:,} embedded metadata backup file(s).",
         output_path=str(log_path),
         errors=errors,
-        refresh=("metadata", "files", "advanced", "reports"),
+        refresh=("metadata", "files", "reports"),
         details=result.model_dump(),
     )
 
 
 def build_delete_plan_action(report_dir: Path) -> ActionResult:
-    source_log = _latest_quarantine_log(report_dir)
-    if source_log is None:
-        quarantine_dirs = _quarantine_dirs(report_dir)
-        if not quarantine_dirs:
-            return ActionResult(
-                "delete_plan",
-                "error",
-                "No quarantine log or folder found. Apply Dedupe or Apply Pack first.",
-                errors=("No quarantine log or folder found.",),
-            )
-        try:
-            source_log = _write_legacy_quarantine_log(report_dir, quarantine_dirs)
-        except OSError as e:
-            return _action_error("delete_plan", e)
+    entries, _source_logs = _aggregate_quarantine_entries(report_dir)
+    if not entries:
+        return ActionResult(
+            "delete_plan",
+            "error",
+            "No quarantine log or folder found. Apply Dedupe or Apply Pack first.",
+            errors=("No quarantine log or folder found.",),
+        )
+    try:
+        source_log = _write_combined_quarantine_log(report_dir, entries)
+    except OSError as e:
+        return _action_error("delete_plan", e)
     try:
         output = _ensure_report_dir(report_dir) / "delete_plan.json"
         plan = build_delete_plan(source_log)
         write_delete_plan(plan, output, quiet=True)
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("delete_plan", e)
+    size_note = f", {fmt_bytes(plan.summary.bytes_planned)}" if plan.summary.bytes_planned else ""
+    folder_note = (
+        f" across {plan.summary.directory_entries:,} quarantine folder(s)" if plan.summary.directory_entries else ""
+    )
     return ActionResult(
         action="delete_plan",
         status="ok",
-        message=f"Built permanent-delete plan with {plan.summary.candidate_entries:,} candidate entrie(s).",
+        message=(f"Built permanent-delete plan with {plan.summary.files_planned:,} file(s){folder_note}{size_note}."),
         output_path=str(output),
         errors=tuple(str(error.get("error", error)) for error in plan.errors),
-        refresh=("advanced", "reports"),
+        refresh=("files", "reports"),
         details=plan.model_dump(),
     )
 
@@ -1037,20 +1209,24 @@ def approve_delete_plan_action(report_dir: Path) -> ActionResult:
         status="ok",
         message=f"Approved {result.approved_entries:,} of {result.total_entries:,} permanent-delete entrie(s).",
         output_path=result.output_path,
-        refresh=("advanced", "reports"),
+        refresh=("files", "reports"),
         details=result.model_dump(),
     )
 
 
-def apply_delete_plan_action(report_dir: Path) -> ActionResult:
+def apply_delete_plan_action(report_dir: Path, db_path: Path | None = None) -> ActionResult:
     plan_path = report_dir / "delete_plan.json"
     if not plan_path.exists():
         return ActionResult(
             "delete_apply", "error", "No permanent-delete plan found.", errors=("No delete plan found.",)
         )
+    auto_approve_error = _auto_approve_plan(plan_path, review_delete_plan, _per_entry_plan_has_approvals)
+    if auto_approve_error is not None:
+        return _action_error("delete_apply", auto_approve_error)
     try:
         result = apply_delete_plan(
             plan_path,
+            db_path=db_path,
             dry_run=False,
             require_reviewed=True,
             understand_permanent_delete=True,
@@ -1065,6 +1241,6 @@ def apply_delete_plan_action(report_dir: Path) -> ActionResult:
         message=f"Permanently deleted {result.deleted:,} quarantine path(s), skipped {result.skipped:,}.",
         output_path=result.log_path,
         errors=errors,
-        refresh=("advanced", "reports"),
+        refresh=("files", "reports"),
         details=result.model_dump(),
     )

@@ -9,7 +9,7 @@ from pathlib import Path
 from sfxworkbench.cli import app
 from sfxworkbench.scan import scan_library
 from sfxworkbench.tui_data import (
-    advanced_findings,
+    PlanSummary,
     clean_findings,
     dashboard_metrics,
     dedupe_findings,
@@ -17,10 +17,14 @@ from sfxworkbench.tui_data import (
     discover_plan_files,
     feature_pages,
     file_detail,
+    history_feature_labels,
+    history_features_for_summary,
+    history_matches_feature,
     indexed_library_size_gb,
     list_files,
     list_queue_items,
     metadata_findings,
+    metadata_plan_counts,
     metadata_tag_change_rows,
     metadata_workbench_rows,
     plan_detail_rows,
@@ -302,10 +306,10 @@ def test_tui_feature_pages_cover_full_operations_workbench(tmp_library: Path, tm
     pages = feature_pages(tmp_db)
     by_key = {page.key: page for page in pages}
 
-    assert list(by_key) == ["scan", "files", "clean", "dedupe", "metadata", "advanced"]
+    assert list(by_key) == ["scan", "clean", "dedupe", "metadata", "files"]
     assert by_key["scan"].label == "Scan"
     assert by_key["files"].label == "Files"
-    assert by_key["clean"].label == "Declutter"
+    assert by_key["clean"].label == "Cleanup"
     assert by_key["clean"].description.startswith("Remove junk")
     assert by_key["dedupe"].description.startswith("Review exact")
     assert by_key["metadata"].status == "review"
@@ -319,7 +323,74 @@ def test_tui_feature_findings_cover_each_page(tmp_library: Path, tmp_db: Path) -
     assert any(row.label == "Long paths" for row in clean_findings(tmp_library, tmp_db))
     assert any(row.label == "Duplicate groups" for row in dedupe_findings(tmp_db))
     assert any(row.label == "Missing BEXT/iXML" for row in metadata_findings(tmp_db))
-    assert any(row.label == "Index file" and str(tmp_db) in str(row.count) for row in advanced_findings(tmp_db))
+
+
+def test_tui_metadata_findings_use_whole_plan_counts(tmp_db: Path, tmp_path: Path) -> None:
+    plan_path = tmp_path / "metadata_tag_plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "files_considered": 3,
+                    "candidate_entries": 5,
+                    "add_entries": 4,
+                    "skip_existing_entries": 1,
+                    "approved_entries": 1,
+                    "rejected_entries": 1,
+                },
+                "entries": [
+                    {
+                        "path": "/lib/a.wav",
+                        "filename": "a.wav",
+                        "field": "description",
+                        "proposed_value": "Rain",
+                        "review_status": "pending",
+                    },
+                    {
+                        "path": "/lib/b.wav",
+                        "filename": "b.wav",
+                        "field": "keywords",
+                        "proposed_value": "storm",
+                        "review_status": "pending",
+                    },
+                    {
+                        "path": "/lib/c.wav",
+                        "filename": "c.wav",
+                        "field": "description",
+                        "proposed_value": "Thunder",
+                        "review_status": "approved",
+                    },
+                    {
+                        "path": "/lib/c.wav",
+                        "filename": "c.wav",
+                        "field": "category",
+                        "proposed_value": "Weather",
+                        "review_status": "rejected",
+                    },
+                    {
+                        "path": "/lib/c.wav",
+                        "filename": "c.wav",
+                        "field": "keywords",
+                        "proposed_value": "weather",
+                        "review_status": "pending",
+                        "action": "skip_existing",
+                    },
+                ],
+            }
+        )
+    )
+
+    counts = metadata_plan_counts(plan_path)
+    findings = {row.label: row for row in metadata_findings(tmp_db, plan_path=plan_path)}
+
+    assert counts.total_entries == 5
+    assert counts.pending_add_entries == 2
+    assert counts.approved_add_entries == 1
+    assert counts.rejected_add_entries == 1
+    assert counts.skip_existing_entries == 1
+    assert findings["Pending tag changes"].count == 2
+    assert "4 add entrie(s) from 3 file(s) considered" in findings["Pending tag changes"].detail
+    assert findings["Approved tag changes"].count == 1
 
 
 def test_tui_dedupe_rows_and_metadata_rows_surface_review_state(
@@ -384,6 +455,59 @@ def test_tui_dedupe_rows_and_metadata_rows_surface_review_state(
     assert changes[1].value == "rain, exterior"
     assert [change.value for change in changes].count("rain, exterior") == 1
     assert isinstance(dedupe_group_rows(tmp_db), list)
+
+
+def test_tui_metadata_rows_can_page_and_randomize_pending_plan_files(
+    tmp_library: Path, tmp_db: Path, tmp_path: Path, monkeypatch
+) -> None:
+    scan_library(tmp_library, tmp_db, skip_hash=True, quiet=True)
+    first = tmp_library / "sounds" / "AMB_RAIN_01.wav"
+    second = tmp_library / "sounds" / "SFX_GUNSHOT_01.wav"
+    plan_path = tmp_path / "metadata_tag_plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "entry_id": 1,
+                        "path": str(first),
+                        "filename": first.name,
+                        "field": "description",
+                        "proposed_value": "Steady rain",
+                        "source": "filename",
+                        "review_status": "pending",
+                    },
+                    {
+                        "entry_id": 2,
+                        "path": str(second),
+                        "filename": second.name,
+                        "field": "description",
+                        "proposed_value": "Pistol shot",
+                        "source": "filename",
+                        "review_status": "pending",
+                    },
+                ]
+            }
+        )
+    )
+
+    page_one = metadata_workbench_rows(tmp_db, plan_path=plan_path, limit=1, pending_only=True)
+    page_two = metadata_workbench_rows(tmp_db, plan_path=plan_path, limit=1, offset=1, pending_only=True)
+    random_page = metadata_workbench_rows(tmp_db, plan_path=plan_path, limit=1, random_pending=True, pending_only=True)
+
+    assert [row.filename for row in page_one] == [first.name]
+    assert [row.filename for row in page_two] == [second.name]
+    assert len(random_page) == 1
+    assert random_page[0].filename in {first.name, second.name}
+
+    def fail_read_text(*args, **kwargs):
+        raise AssertionError("metadata plan index should be cached after first load")
+
+    monkeypatch.setattr(Path, "read_text", fail_read_text)
+
+    cached_page = metadata_workbench_rows(tmp_db, plan_path=plan_path, limit=1, offset=1, pending_only=True)
+
+    assert [row.filename for row in cached_page] == [second.name]
 
 
 def test_tui_plan_discovery_summarizes_json_plans(tmp_path: Path) -> None:
@@ -489,6 +613,7 @@ def test_tui_plan_discovery_summarizes_json_plans(tmp_path: Path) -> None:
     assert report_rows[0].source == "2"
 
     assert discover_plan_files([tmp_path], query="old.wav")[0].path == str(plan_path)
+    assert discover_plan_files([tmp_path], query="old.wav", content_query=False) == []
     assert {Path(summary.path).name for summary in discover_plan_files([tmp_path], query="rename clean")} == {
         "rename_plan.json",
         "clean_preview_20260512_120000.json",
@@ -500,9 +625,85 @@ def test_tui_plan_discovery_summarizes_json_plans(tmp_path: Path) -> None:
         "organize_apply_log.json",
         "tag_apply_log.json",
     }
+    assert [Path(summary.path).name for summary in discover_plan_files([tmp_path], category="Preview")] == [
+        "clean_preview_20260512_120000.json"
+    ]
+    assert [Path(summary.path).name for summary in discover_plan_files([tmp_path], category="History")] == [
+        "tui_action_20260512_120001_scan.json"
+    ]
     future_mtime = max(path.stat().st_mtime for path in tmp_path.rglob("*.json")) + 1
     assert discover_plan_files([tmp_path], modified_since=future_mtime) == []
     assert discover_plan_files([tmp_path], query="not-here") == []
+
+
+def test_tui_history_feature_filtering_uses_report_vocabulary() -> None:
+    metadata = PlanSummary(
+        path="/reports/metadata_tag_plan.json",
+        category="Plan",
+        kind="tag_plan",
+        title="Metadata tag plan",
+        description="139,448 add entries",
+    )
+    dedupe = PlanSummary(
+        path="/reports/dedupe_plan.json",
+        category="Plan",
+        kind="dedupe_plan",
+        title="Exact duplicate quarantine plan",
+    )
+    clean = PlanSummary(
+        path="/reports/clean_preview_20260512_120000.json",
+        category="Preview",
+        kind="clean_preview",
+        title="Preview junk cleanup",
+    )
+    unknown = PlanSummary(
+        path="/reports/custom_output.json",
+        category="Report",
+        kind="custom",
+        title="Custom output",
+    )
+
+    assert "metadata" in history_features_for_summary(metadata)
+    assert "dedupe" in history_features_for_summary(dedupe)
+    assert "clean" in history_features_for_summary(clean)
+    assert history_matches_feature(metadata, "Metadata")
+    assert history_matches_feature(clean, "Cleanup")
+    assert history_matches_feature(dedupe, "All Recent")
+    assert not history_matches_feature(metadata, "dedupe")
+    assert history_feature_labels(unknown) == "All"
+
+
+def test_tui_lightweight_tag_plan_summary_uses_summary_without_full_parse(tmp_path: Path, monkeypatch) -> None:
+    plan_path = tmp_path / "metadata_tag_plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "entries": [{"path": f"/lib/{index}.wav", "action": "add"} for index in range(20)],
+                "summary": {
+                    "files_considered": 120,
+                    "candidate_entries": 324078,
+                    "add_entries": 139448,
+                    "skip_existing_entries": 184630,
+                    "approved_entries": 12,
+                    "rejected_entries": 3,
+                },
+                "target": "db",
+            }
+        )
+    )
+
+    def fail_read_text(*args, **kwargs):
+        raise AssertionError("lightweight tag-plan summary should not call read_text")
+
+    monkeypatch.setattr(Path, "read_text", fail_read_text)
+
+    summary = summarize_plan_file(plan_path, lightweight=True)
+
+    assert summary.kind == "tag_plan"
+    assert summary.category == "Plan"
+    assert summary.title == "Metadata tag plan"
+    assert summary.entries == 324078
+    assert "139,448 add" in summary.description
 
 
 def test_tui_plan_detail_rows_expand_nesting_reports_and_action_outputs(tmp_path: Path) -> None:

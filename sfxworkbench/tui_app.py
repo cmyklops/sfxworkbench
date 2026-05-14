@@ -21,16 +21,9 @@ from sfxworkbench.tui_actions import (
     apply_organize_action,
     apply_pack_plan_action,
     apply_rename_action,
-    apply_tag_plan_action,
-    approve_dedupe_plan_action,
-    approve_delete_plan_action,
-    approve_embedded_metadata_action,
-    approve_organize_action,
-    approve_pack_plan_action,
-    approve_tag_plan_action,
+    apply_tag_plan_and_build_embedded_plan_action,
     build_dedupe_plan_action,
     build_delete_plan_action,
-    build_embedded_metadata_plan_action,
     build_nesting_plan_action,
     clean_action,
     export_sidecar_action,
@@ -50,9 +43,15 @@ from sfxworkbench.tui_actions import (
     write_action_history,
 )
 from sfxworkbench.tui_data import (
+    adapter_cache_get as _data_cache_get,
+)
+from sfxworkbench.tui_data import (
+    clear_adapter_cache,
     discover_plan_files,
     feature_pages,
     file_detail,
+    history_feature_labels,
+    history_matches_feature,
     indexed_library_size_gb,
     library_root,
     list_files,
@@ -61,24 +60,18 @@ from sfxworkbench.tui_data import (
     report_search_paths,
     save_library_path,
 )
+from sfxworkbench.tui_data import (
+    file_signature as _data_file_signature,
+)
 
 _FEATURES: tuple[tuple[str, str], ...] = (
     ("scan", "Scan"),
-    ("files", "Files"),
-    ("clean", "Declutter"),
+    ("clean", "Cleanup"),
     ("dedupe", "Dedupe"),
     ("metadata", "Metadata"),
-    ("advanced", "Advanced"),
+    ("files", "Files"),
+    ("history", "History"),
 )
-
-_REPORT_QUERIES = {
-    "scan": "audit scan metadata format groups ucs pack",
-    "files": "scan metadata",
-    "clean": "clean scan_error rename organize nesting",
-    "dedupe": "dedupe pack quarantine",
-    "metadata": "metadata tag sidecar",
-    "advanced": "delete dual_mono metadata_write compare processed",
-}
 
 _PAGE_HEADERS = {
     "scan": (
@@ -90,7 +83,7 @@ _PAGE_HEADERS = {
         "Browse indexed files, search filenames, audition audio, and inspect per-file facts.",
     ),
     "clean": (
-        "Declutter",
+        "Cleanup",
         "Find removable junk, risky names, long paths, and folder-structure cleanup plans before applying changes.",
     ),
     "dedupe": (
@@ -101,9 +94,9 @@ _PAGE_HEADERS = {
         "Metadata",
         "Compare embedded search fields, proposed DB tags, accepted tags, and file-level evidence in one place.",
     ),
-    "advanced": (
-        "Advanced",
-        "Use guarded workflows that require reviewed plans, logs, safe folders, or external tools.",
+    "history": (
+        "History",
+        "Browse generated reports, plans, logs, previews, and action history in one timeline.",
     ),
 }
 
@@ -114,37 +107,29 @@ _ACTION_BUTTON_IDS = {
     "clean-preview",
     "clean-apply",
     "dedupe-build",
-    "dedupe-approve",
     "dedupe-apply",
     "pack-audit",
     "pack-plan",
-    "pack-approve",
     "pack-apply",
     "organize-rename-preview",
     "organize-rename-apply",
     "organize-rename-undo",
     "organize-audit",
-    "organize-approve",
     "organize-apply",
     "organize-undo",
     "organize-nesting-audit",
     "organize-nesting-plan",
-    "organize-nesting-approve",
     "organize-nesting-apply",
     "organize-nesting-undo",
     "metadata-audit",
     "metadata-plan",
     "metadata-plan-synonyms",
-    "metadata-approve",
     "metadata-apply",
     "metadata-sidecar",
-    "metadata-write-plan",
-    "metadata-write-approve",
     "metadata-write-apply",
     "metadata-write-undo",
     "quarantine-reveal",
     "delete-plan",
-    "delete-approve",
     "delete-apply",
 }
 
@@ -274,15 +259,36 @@ _TAG_FIELD_STYLES = {
     "isbj": "blue",
 }
 
+_TAG_STATUS_SYMBOLS = {
+    "pending": ("!", "bold yellow"),
+    "approved": ("+", "green"),
+    "rejected": ("x", "red"),
+}
+
+_TAG_SOURCE_SYMBOLS = {
+    "filename": ("#", "dim cyan"),
+    "group": ("~", "dim magenta"),
+    "path": ("/", "dim blue"),
+    "ucs_catalog": ("^", "dim yellow"),
+    "ucs_stem": ("^", "dim yellow"),
+    "synonym": ("*", "dim green"),
+}
+
 
 def _tag_text(value: str, field: str, *, status: str = "", source: str = "") -> Text:
     style = _TAG_FIELD_STYLES.get(field.lower(), "white")
     if status == "pending":
         style = f"bold {style}"
-    text = Text(value, style=style)
-    suffix_parts = [part for part in (status if status not in {"", "approved"} else "", source) if part]
-    if suffix_parts:
-        text.append(f" [{' / '.join(suffix_parts)}]", style="dim")
+    text = Text()
+    status_symbol = _TAG_STATUS_SYMBOLS.get(status)
+    source_symbol = _TAG_SOURCE_SYMBOLS.get(source)
+    if status_symbol is not None:
+        text.append(status_symbol[0], style=status_symbol[1])
+    if source_symbol is not None:
+        text.append(source_symbol[0], style=source_symbol[1])
+    if status_symbol is not None or source_symbol is not None:
+        text.append(" ")
+    text.append(value, style=style)
     return text
 
 
@@ -304,8 +310,17 @@ def _tags_cell(row) -> Text:
     return text
 
 
-def _feature_query(feature: str) -> str:
-    return _REPORT_QUERIES.get(feature, feature)
+def _latest_metadata_tag_plan(report_dir: Path) -> Path | None:
+    """Return the active metadata tag plan used by the Metadata tab."""
+    canonical = report_dir / "metadata_tag_plan.json"
+    if canonical.is_file():
+        return canonical
+    tag_plans = sorted(
+        (candidate for candidate in report_dir.rglob("*tag_plan*.json") if candidate.is_file()),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    return tag_plans[0] if tag_plans else None
 
 
 def _latest_quarantine_dir_from_reports(report_paths: list[Path]) -> Path | None:
@@ -356,6 +371,7 @@ def run_tui(
     try:
         from textual import events
         from textual.app import App, ComposeResult
+        from textual.binding import Binding
         from textual.containers import Horizontal, Vertical, VerticalScroll
         from textual.css.query import NoMatches
         from textual.widgets import Button, ContentSwitcher, DataTable, Footer, Input, Static, Tab, Tabs
@@ -393,14 +409,28 @@ def run_tui(
         Tabs {
             background: #111a23;
             color: #e6edf3;
+            height: 3;
+        }
+        Tab {
+            padding: 0 3;
+            text-style: bold;
         }
         Footer {
             background: #111a23;
             color: #f8fafc;
         }
+        #meta-status-group {
+            height: auto;
+            border-bottom: solid #263647;
+            background: #111a23;
+        }
         #library-controls {
             height: 3;
             padding: 0 1;
+            background: #111a23;
+        }
+        #library-status-buffer {
+            height: 1;
             background: #111a23;
         }
         #library-path-input {
@@ -411,12 +441,10 @@ def run_tui(
             height: 3;
             padding: 0 1;
             background: #0f1720;
-            border-bottom: solid #263647;
         }
         #operation-row {
             height: 3;
             background: #101923;
-            border-bottom: solid #263647;
         }
         #operation-strip {
             height: 3;
@@ -461,6 +489,9 @@ def run_tui(
         }
         Button {
             margin-right: 1;
+            min-width: 9;
+        }
+        #library-controls Button {
             min-width: 13;
         }
         DataTable {
@@ -471,7 +502,11 @@ def run_tui(
         #files-table, #dedupe-groups-table {
             height: 16;
         }
-        #metadata-findings-table {
+        #scan-findings-table,
+        #clean-findings-table,
+        #dedupe-findings-table,
+        #metadata-findings-table,
+        #files-findings-table {
             height: 6;
         }
         #metadata-rows-table {
@@ -513,12 +548,12 @@ def run_tui(
         BINDINGS = [
             ("q", "quit", "Quit"),
             ("r", "refresh", "Refresh"),
-            ("1", "focus_scan", "Scan"),
-            ("2", "focus_files", "Files"),
-            ("3", "focus_clean", "Declutter"),
-            ("4", "focus_dedupe", "Dedupe"),
-            ("5", "focus_metadata", "Metadata"),
-            ("6", "focus_advanced", "Advanced"),
+            Binding("1", "focus_scan", "Scan", show=False),
+            Binding("2", "focus_clean", "Cleanup", show=False),
+            Binding("3", "focus_dedupe", "Dedupe", show=False),
+            Binding("4", "focus_metadata", "Metadata", show=False),
+            Binding("5", "focus_files", "Files", show=False),
+            Binding("6", "focus_history", "History", show=False),
             ("s", "focus_file_search", "Search"),
             # PR #14: push the two-pane review screen for the most recent tag plan.
             ("R", "open_metadata_review", "Review tags"),
@@ -559,7 +594,12 @@ def run_tui(
             self._progress_total: int | None = None
             self._progress_message = ""
             self._file_rows = []
-            self._report_rows: dict[str, list] = {}
+            self._history_rows = []
+            self._history_query = ""
+            self._history_feature_filter = ""
+            self._history_category_filter = ""
+            self._history_selected_path: str | None = None
+            self._history_search_debounce = None
             self._sort_state: dict[str, tuple[str, bool]] = {}
             self._last_compact = False
             self._session_started_at = time.time()
@@ -570,6 +610,9 @@ def run_tui(
             # ``query`` parameter. Mirrors ``_file_query`` + debounce on Files.
             self._metadata_query = ""
             self._metadata_search_debounce = None
+            self._metadata_offset = 0
+            self._metadata_random_pending = False
+            self._metadata_page_size = 500
             self._dedupe_query = ""
             self._dedupe_search_debounce = None
             # Tier 5.14: tabs whose data is stale and need a fill before the user
@@ -589,29 +632,45 @@ def run_tui(
             # (root path, report dir) at click time, not at __init__ time.
             self._button_handlers: dict[str, Callable[[], None]] = self._build_button_handlers()
 
+        def _screen_open(self, popup_key: str) -> bool:
+            """Return whether a keyed popup/screen is already on the stack."""
+            screens = list(getattr(self, "screen_stack", ()))
+            current_screen = getattr(self, "screen", None)
+            if current_screen is not None:
+                screens.append(current_screen)
+            return any(getattr(screen, "POPUP_KEY", None) == popup_key for screen in screens)
+
+        def _push_unique_screen(self, popup_key: str, screen: object, **kwargs: object) -> bool:
+            if self._screen_open(popup_key):
+                return False
+            self.push_screen(screen, **kwargs)
+            return True
+
         def compose(self) -> ComposeResult:
+            with Vertical(id="meta-status-group"):
+                with Horizontal(id="library-controls"):
+                    yield Input(
+                        value="" if self._library_path == "PATH" else self._library_path,
+                        placeholder="Library path",
+                        id="library-path-input",
+                    )
+                    yield Button("Set Library", id="set-library-path")
+                    yield Button("Use Indexed Root", id="use-indexed-root")
+                    yield Button("Refresh", id="refresh-all")
+                yield Static("", id="library-status-buffer")
+                yield Static("", id="status-strip")
             yield Tabs(*(Tab(label, id=key) for key, label in _FEATURES), active="scan", id="feature-tabs")
-            with Horizontal(id="library-controls"):
-                yield Input(
-                    value="" if self._library_path == "PATH" else self._library_path,
-                    placeholder="Library path",
-                    id="library-path-input",
-                )
-                yield Button("Set Library", id="set-library-path")
-                yield Button("Use Indexed Root", id="use-indexed-root")
-                yield Button("Refresh", id="refresh-all")
-            yield Static("", id="status-strip")
             with Horizontal(id="operation-row"):
                 yield Static("", id="operation-strip")
                 yield Button("Request Cancel", id="cancel-action", disabled=True)
             with ContentSwitcher(initial="loading-page", id="feature-pages"):
                 yield from self._loading_page()
                 yield from self._page("scan", self._scan_page)
-                yield from self._page("files", self._files_page)
                 yield from self._page("clean", self._clean_page)
                 yield from self._page("dedupe", self._dedupe_page)
                 yield from self._page("metadata", self._metadata_page)
-                yield from self._page("advanced", self._advanced_page)
+                yield from self._page("files", self._files_page)
+                yield from self._page("history", self._history_page)
             # Textual ``Footer`` renders all visible BINDINGS, replacing the
             # legacy static "q Quit" hint with full keybinding discoverability.
             yield Footer()
@@ -626,9 +685,8 @@ def run_tui(
                 yield Static("Opening the index and preparing review tables...", id="loading-note")
 
         def _page_header(self, key: str) -> ComposeResult:
-            title, note = _PAGE_HEADERS[key]
+            _title, note = _PAGE_HEADERS[key]
             with Vertical(classes="page-header"):
-                yield Static(title, classes="page-title")
                 yield Static(note, classes="workflow-note")
 
         # ---- Page composition helpers (Tier 2.4) -----------------------
@@ -658,28 +716,6 @@ def run_tui(
             yield Static(title, classes="pane-title")
             yield DataTable(id=table_id)
 
-        def _titled_table_pair(
-            self,
-            left_title: str,
-            left_id: str,
-            right_title: str,
-            right_id: str,
-        ) -> ComposeResult:
-            """Yield two titled tables side-by-side in a horizontal split.
-
-            Used by every tab module for the History / History Detail pair so
-            the user sees the list and detail simultaneously rather than
-            scrolling between vertically-stacked panes. CSS sizes both panes
-            at ``1fr`` width so they share the row evenly.
-            """
-            with Horizontal(classes="history-pair"):
-                with Vertical(classes="history-pane"):
-                    yield Static(left_title, classes="pane-title")
-                    yield DataTable(id=left_id)
-                with Vertical(classes="history-pane"):
-                    yield Static(right_title, classes="pane-title")
-                    yield DataTable(id=right_id)
-
         def _scan_page(self) -> ComposeResult:
             from sfxworkbench.tui_screens import scan_tab
 
@@ -705,10 +741,10 @@ def run_tui(
 
             yield from metadata_tab.compose(self)
 
-        def _advanced_page(self) -> ComposeResult:
-            from sfxworkbench.tui_screens import advanced_tab
+        def _history_page(self) -> ComposeResult:
+            from sfxworkbench.tui_screens import history_tab
 
-            yield from advanced_tab.compose(self)
+            yield from history_tab.compose(self)
 
         def on_mount(self) -> None:
             self._last_compact = self._compact
@@ -753,8 +789,8 @@ def run_tui(
         def action_focus_metadata(self) -> None:
             self._open_feature("metadata")
 
-        def action_focus_advanced(self) -> None:
-            self._open_feature("advanced")
+        def action_focus_history(self) -> None:
+            self._open_feature("history")
 
         def action_focus_file_search(self) -> None:
             self._open_feature("files")
@@ -876,33 +912,47 @@ def run_tui(
                 from sfxworkbench.tui_screens.command_palette import build_command_palette
             except ImportError:
                 return
-            self.push_screen(build_command_palette(self._button_handlers))
+            self._push_unique_screen("command-palette", build_command_palette(self._button_handlers))
 
         def action_open_metadata_review(self) -> None:
-            """Push the two-pane metadata-review screen (PR #14).
+            """Push the two-pane metadata-review screen.
 
-            Picks the most-recent ``tag_plan*.json`` under the active report
-            directory; if none exists, surfaces a warning in the action result
-            instead of opening an empty screen.
+            Uses the same active ``metadata_tag_plan.json`` as the inline
+            Metadata values pane, falling back to imported ``*tag_plan*.json``
+            files only when the canonical TUI plan is missing.
             """
+            if self._screen_open("metadata-review"):
+                return
+
             from sfxworkbench.tui_screens.metadata_review import build_metadata_review_screen
 
-            tag_plans = sorted(
-                (candidate for candidate in self._report_dir.rglob("tag_plan*.json") if candidate.is_file()),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-            if not tag_plans:
+            plan_path = _latest_metadata_tag_plan(self._report_dir)
+            if plan_path is None:
                 self._last_action = ActionResult(
                     action="open_metadata_review",
                     status="warning",
-                    message=(f"No tag_plan*.json files found under {self._report_dir}. Run `sfx tag plan` first."),
+                    message=(f"No metadata tag plan found under {self._report_dir}. Run Generate Suggestions first."),
                 )
                 self._fill_status_strip()
                 self._fill_operation_strip()
                 self._fill_action_result()
                 return
-            self.push_screen(build_metadata_review_screen(tag_plans[0], db_path=db_path))
+            self._push_unique_screen("metadata-review", build_metadata_review_screen(plan_path, db_path=db_path))
+
+        def _metadata_previous_page(self) -> None:
+            self._metadata_random_pending = False
+            self._metadata_offset = max(0, self._metadata_offset - self._metadata_page_size)
+            self._fill_metadata()
+
+        def _metadata_next_page(self) -> None:
+            self._metadata_random_pending = False
+            self._metadata_offset += self._metadata_page_size
+            self._fill_metadata()
+
+        def _metadata_random_page(self) -> None:
+            self._metadata_random_pending = True
+            self._metadata_offset = 0
+            self._fill_metadata()
 
         def _open_feature(self, key: str) -> None:
             if key == "organize":
@@ -914,7 +964,6 @@ def run_tui(
         def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
             tab_id = event.tab.id or "scan"
             self.query_one("#feature-pages", ContentSwitcher).current = f"{tab_id}-page"
-            self._refresh_reports(tab_id)
             self._ensure_tab_filled(tab_id)
 
         def on_input_changed(self, event: Input.Changed) -> None:
@@ -929,17 +978,6 @@ def run_tui(
                     except Exception:  # pragma: no cover - timer already finished
                         pass
                 self._file_search_debounce = self.set_timer(0.25, self._fill_files)
-            elif event.input.id == "metadata-search":
-                self._metadata_query = event.value
-                # Same debounce shape as ``file-search``: metadata fill rebuilds
-                # the prioritized-files table from a SQL query, so per-keystroke
-                # refill is wasteful.
-                if self._metadata_search_debounce is not None:
-                    try:
-                        self._metadata_search_debounce.stop()
-                    except Exception:  # pragma: no cover - timer already finished
-                        pass
-                self._metadata_search_debounce = self.set_timer(0.25, self._fill_metadata)
             elif event.input.id == "dedupe-search":
                 self._dedupe_query = event.value
                 if self._dedupe_search_debounce is not None:
@@ -948,6 +986,24 @@ def run_tui(
                     except Exception:  # pragma: no cover - timer already finished
                         pass
                 self._dedupe_search_debounce = self.set_timer(0.25, self._fill_dedupe)
+            elif event.input.id == "history-search":
+                self._history_query = event.value
+                if self._history_search_debounce is not None:
+                    try:
+                        self._history_search_debounce.stop()
+                    except Exception:  # pragma: no cover - timer already finished
+                        pass
+                self._history_search_debounce = self.set_timer(0.25, self._fill_history)
+
+        def on_select_changed(self, event) -> None:
+            select_id = getattr(event.select, "id", None) or ""
+            if select_id == "history-feature-filter":
+                self._history_feature_filter = "" if event.value == "all" else str(event.value)
+            elif select_id == "history-category-filter":
+                self._history_category_filter = "" if event.value == "all" else str(event.value)
+            else:
+                return
+            self._fill_history()
 
         def on_input_submitted(self, event: Input.Submitted) -> None:
             if event.input.id == "library-path-input":
@@ -984,6 +1040,10 @@ def run_tui(
             handlers["files-open-file"] = lambda: self._open_selected_file(reveal=False)
             handlers["files-reveal-file"] = lambda: self._open_selected_file(reveal=True)
             handlers["quarantine-reveal"] = self._reveal_latest_quarantine
+            handlers["metadata-review-open"] = self.action_open_metadata_review
+            handlers["metadata-page-prev"] = self._metadata_previous_page
+            handlers["metadata-page-next"] = self._metadata_next_page
+            handlers["metadata-page-random"] = self._metadata_random_page
 
             # -- Worker actions: build factories closing over current state -
             pcb = self._threadsafe_progress_callback
@@ -1044,6 +1104,7 @@ def run_tui(
                         root,
                         self._report_dir,
                         apply=True,
+                        db_path=db_path,
                         progress_callback=pcb,
                         cancel_requested=cancel,
                     ),
@@ -1055,13 +1116,10 @@ def run_tui(
             handlers["dedupe-build"] = lambda: _start(
                 "dedupe_build", "Build Dedupe Plan", lambda: build_dedupe_plan_action(db_path, self._report_dir)
             )
-            handlers["dedupe-approve"] = lambda: _start(
-                "dedupe_approve", "Approve Dedupe", lambda: approve_dedupe_plan_action(self._report_dir)
-            )
             handlers["dedupe-apply"] = lambda: _confirm(
                 "dedupe_apply",
                 "Apply Dedupe",
-                "This quarantines approved duplicate files from the current dedupe plan. Required first: Build Dedupe Plan, then Approve Dedupe.",
+                "This quarantines duplicate files from the current dedupe plan. Required first: Build Dedupe Plan. Any pending groups are auto-approved at apply time.",
                 lambda: apply_dedupe_plan_action(
                     db_path,
                     self._report_dir,
@@ -1080,13 +1138,10 @@ def run_tui(
             handlers["pack-plan"] = lambda: _start(
                 "pack_plan", "Build Pack Plan", lambda: pack_plan_action(self._report_dir)
             )
-            handlers["pack-approve"] = lambda: _start(
-                "pack_approve", "Approve Pack", lambda: approve_pack_plan_action(self._report_dir)
-            )
             handlers["pack-apply"] = lambda: _confirm(
                 "pack_apply",
                 "Apply Pack",
-                "This quarantines approved pack/folder overlaps from the current pack plan. Required first: Pack Audit, Build Pack Plan, then Approve Pack.",
+                "This quarantines pack/folder overlaps from the current pack plan. Required first: Pack Audit, Build Pack Plan. Any pending groups are auto-approved at apply time.",
                 lambda: apply_pack_plan_action(db_path, self._report_dir),
             )
 
@@ -1129,13 +1184,8 @@ def run_tui(
             handlers["organize-apply"] = lambda: _confirm(
                 "organize_apply",
                 "Apply Folder Cleanup",
-                "This applies approved folder cleanup entries, renames folders on disk, and updates indexed paths. Required first: Preview Folder Cleanup, then Approve Folder Cleanup.",
+                "This applies folder cleanup entries, renames folders on disk, and updates indexed paths. Required first: Preview Folder Cleanup. Any pending entries are auto-approved at apply time.",
                 lambda: apply_organize_action(db_path, self._report_dir),
-            )
-            handlers["organize-approve"] = lambda: _start(
-                "organize_approve",
-                "Approve Folder Cleanup",
-                lambda: approve_organize_action(self._report_dir),
             )
             handlers["organize-undo"] = lambda: _start(
                 "organize_undo",
@@ -1161,13 +1211,8 @@ def run_tui(
             handlers["organize-nesting-apply"] = lambda: _confirm(
                 "organize_nesting_apply",
                 "Apply Nesting",
-                "This applies approved nesting entries, flattens nested folders on disk, and updates indexed paths. Required first: Find Nested Folders, Build Nesting Plan, then Approve Nesting.",
+                "This flattens nested folders on disk and updates indexed paths. Required first: Find Nested Folders, Build Nesting Plan. Any pending entries are auto-approved at apply time.",
                 lambda: apply_nesting_action(db_path, self._report_dir),
-            )
-            handlers["organize-nesting-approve"] = lambda: _start(
-                "organize_nesting_approve",
-                "Approve Nesting",
-                lambda: approve_organize_action(self._report_dir, plan_name="nesting_plan.json"),
             )
             handlers["organize-nesting-undo"] = lambda: _start(
                 "organize_nesting_undo",
@@ -1201,52 +1246,42 @@ def run_tui(
                 )
 
             handlers["metadata-plan-synonyms"] = _h_metadata_plan_synonyms
-            handlers["metadata-apply"] = lambda: _confirm(
-                "metadata_apply",
-                "Apply DB Tags",
-                "This writes approved tag decisions into the SQLite index. Required first: Generate Suggestions, then Approve DB Tags.",
-                lambda: apply_tag_plan_action(
-                    db_path,
-                    self._report_dir,
-                    target_paths=self._selection_tuple(),
-                    progress_callback=pcb,
-                    cancel_requested=cancel,
-                ),
-            )
-            handlers["metadata-approve"] = lambda: _start(
-                "metadata_approve",
-                "Approve DB Tags",
-                lambda: approve_tag_plan_action(self._report_dir),
-            )
 
-            def _h_metadata_sidecar() -> None:
+            def _h_metadata_apply() -> None:
                 root = self._root_path()
-                _start(
-                    "metadata_sidecar", "Export Sidecar", lambda: export_sidecar_action(root, db_path, self._report_dir)
-                )
-
-            handlers["metadata-sidecar"] = _h_metadata_sidecar
-
-            # Metadata: embedded write pipeline
-            def _h_metadata_write_plan() -> None:
-                root = self._root_path()
-                _start(
-                    "metadata_write_plan",
-                    "Plan Embedded Metadata",
-                    lambda: build_embedded_metadata_plan_action(
-                        root,
+                _confirm(
+                    "metadata_apply",
+                    "Apply Tags & Plan Embedded",
+                    "This writes tag decisions into the SQLite index and then builds the embedded-metadata write plan (probes every accepted-tag file). Required first: Generate Suggestions. Any pending entries are auto-approved at apply time; rejections from the Review screen are preserved.",
+                    lambda: apply_tag_plan_and_build_embedded_plan_action(
                         db_path,
                         self._report_dir,
+                        root=root,
+                        target_paths=self._selection_tuple(),
                         progress_callback=pcb,
                         cancel_requested=cancel,
                     ),
                 )
 
-            handlers["metadata-write-plan"] = _h_metadata_write_plan
+            handlers["metadata-apply"] = _h_metadata_apply
+
+            def _h_metadata_sidecar() -> None:
+                root = self._root_path()
+                _start(
+                    "metadata_sidecar",
+                    "Save Tags File",
+                    lambda: export_sidecar_action(root, db_path, self._report_dir),
+                )
+
+            handlers["metadata-sidecar"] = _h_metadata_sidecar
+
+            # Metadata: embedded write step. The plan-building step is now
+            # rolled into ``metadata-apply``; this button only writes the
+            # already-built plan into audio files.
             handlers["metadata-write-apply"] = lambda: _confirm(
                 "metadata_write_apply",
                 "Apply Embedded Metadata",
-                "This writes approved embedded metadata entries into audio files, backs up originals, and verifies readback. Required first: Plan Embedded Metadata, then Approve Embedded Metadata.",
+                "This writes embedded metadata entries into audio files, backs up originals, and verifies readback. Required first: Plan Embedded Metadata. Any pending entries are auto-approved at apply time.",
                 lambda: apply_embedded_metadata_action(
                     db_path,
                     self._report_dir,
@@ -1254,11 +1289,6 @@ def run_tui(
                     progress_callback=pcb,
                     cancel_requested=cancel,
                 ),
-            )
-            handlers["metadata-write-approve"] = lambda: _start(
-                "metadata_write_approve",
-                "Approve Embedded Metadata",
-                lambda: approve_embedded_metadata_action(self._report_dir),
             )
             handlers["metadata-write-undo"] = lambda: _start(
                 "metadata_write_undo",
@@ -1275,13 +1305,8 @@ def run_tui(
             handlers["delete-apply"] = lambda: _confirm(
                 "delete_apply",
                 "Apply Permanent Delete",
-                "This permanently deletes approved paths from the current delete plan. This cannot be undone. Required first: Reveal Quarantine, Plan Permanent Delete, inspect History Detail, then Approve Permanent Delete.",
-                lambda: apply_delete_plan_action(self._report_dir),
-            )
-            handlers["delete-approve"] = lambda: _start(
-                "delete_approve",
-                "Approve Permanent Delete",
-                lambda: approve_delete_plan_action(self._report_dir),
+                "This permanently deletes paths from the current delete plan. This cannot be undone. Required first: Reveal Quarantine, Plan Permanent Delete, inspect History Detail. Any pending entries are auto-approved at apply time.",
+                lambda: apply_delete_plan_action(self._report_dir, db_path=db_path),
             )
 
             # Tier post-feedback: expose Textual built-in themes via the
@@ -1311,20 +1336,20 @@ def run_tui(
         def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
             if event.data_table.id == "files-table":
                 self._show_file_detail(event.cursor_row)
-            elif str(event.data_table.id or "").endswith("-reports-table"):
-                self._show_report_detail(str(event.data_table.id), event.cursor_row, event.row_key)
+            elif event.data_table.id == "history-table":
+                self._show_history_detail(event.cursor_row, event.row_key)
 
         def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
             if event.data_table.id == "files-table":
                 self._show_file_detail(event.coordinate.row)
-            elif str(event.data_table.id or "").endswith("-reports-table"):
-                self._show_report_detail(str(event.data_table.id), event.coordinate.row, event.cell_key.row_key)
+            elif event.data_table.id == "history-table":
+                self._show_history_detail(event.coordinate.row, event.cell_key.row_key)
 
         def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
             if event.data_table.id == "files-table":
                 self._show_file_detail(event.cursor_row)
-            elif str(event.data_table.id or "").endswith("-reports-table"):
-                self._show_report_detail(str(event.data_table.id), event.cursor_row, event.row_key)
+            elif event.data_table.id == "history-table":
+                self._show_history_detail(event.cursor_row, event.row_key)
 
         def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
             table_id = event.data_table.id or ""
@@ -1335,6 +1360,8 @@ def run_tui(
                 self._fill_files()
             elif table_id == "metadata-rows-table":
                 self._fill_metadata()
+            elif table_id == "history-table":
+                self._fill_history()
             else:
                 event.data_table.sort(event.column_key, key=_sort_text, reverse=self._sort_state[table_id][1])
 
@@ -1406,7 +1433,11 @@ def run_tui(
                 if confirmed:
                     self._start_action(action, label, run)
 
-            self.push_screen(build_confirm_action_screen(label, message), callback=after_confirm)
+            self._push_unique_screen(
+                "confirm-action",
+                build_confirm_action_screen(label, message),
+                callback=after_confirm,
+            )
 
         def _cancel_running_action(self) -> None:
             if self._running_worker is None or self._running_worker.is_finished:
@@ -1647,6 +1678,11 @@ def run_tui(
             # tab dirty. ``None`` preserves the conservative "everything dirty"
             # behavior used by startup, resize, library-path change, and the
             # manual refresh binding.
+            #
+            # Adapter caches survive tab switches but not actions: any apply,
+            # scan, or clean run can mutate the DB or active plan, so we drop
+            # the cache here before the strips and active tab re-read.
+            clear_adapter_cache()
             self._fill_status_strip()
             self._fill_operation_strip()
             self._fill_action_result()
@@ -1655,7 +1691,6 @@ def run_tui(
             else:
                 self._invalidate_tabs(dirty)
             active = self._active_feature()
-            self._refresh_reports(active)
             self._ensure_tab_filled(active)
 
         def _active_feature(self) -> str:
@@ -1672,7 +1707,7 @@ def run_tui(
             """Mark only the tabs named in ``hints`` dirty.
 
             ``hints`` is an ``ActionResult.refresh`` tuple — it can include
-            non-tab keys (``status``, ``reports``) which we ignore. Unknown
+            non-tab keys (``status``, ``reports``) which we map or ignore. Unknown
             keys are silently dropped so a typo in a refresh declaration
             doesn't crash the App, just under-invalidates (caught by the
             ``test_action_refresh_hints_are_known`` invariant test).
@@ -1685,6 +1720,8 @@ def run_tui(
             from sfxworkbench.tui_screens._tabs import TAB_BY_KEY
 
             keys = {hint for hint in hints if hint in TAB_BY_KEY}
+            if "reports" in hints:
+                keys.add("history")
             if keys:
                 keys.add("scan")
             self._dirty_tabs.update(keys)
@@ -1712,7 +1749,7 @@ def run_tui(
                 "clean": "_fill_clean",
                 "dedupe": "_fill_dedupe",
                 "metadata": "_fill_metadata",
-                "advanced": "_fill_advanced",
+                "history": "_fill_history",
             }.get(key)
             if method_name is None:
                 return
@@ -1744,15 +1781,7 @@ def run_tui(
         def _fill_status_strip(self) -> None:
             pages = feature_pages(db_path=db_path, config_path=config_path)
             indexed_gb = indexed_library_size_gb(db_path)
-            status = Text.assemble(
-                ("library: ", "bold"),
-                (_short_path(self._library_path, width=58 if not self._compact else 30), "cyan"),
-                ("  reports: ", "bold"),
-                (_short_path(self._report_dir, width=52 if not self._compact else 26), "cyan"),
-                ("  size: ", "bold"),
-                (f"{indexed_gb:,.1f} GB", "yellow"),
-                "\n",
-            )
+            status = Text()
             for index, page in enumerate(pages):
                 if index:
                     status.append("  ")
@@ -1761,6 +1790,10 @@ def run_tui(
                 status.append(
                     str(page.primary_count), style="yellow" if page.status in {"review", "warning"} else "green"
                 )
+            status.append("  reports: ", style="bold")
+            status.append(_short_path(self._report_dir, width=52 if not self._compact else 26), style="cyan")
+            status.append("  size: ", style="bold")
+            status.append(f"{indexed_gb:,.1f} GB", style="yellow")
             if self._last_action is not None:
                 status.append("  last: ", style="bold")
                 status.append(self._last_action.message, style="green" if self._last_action.ok else "red")
@@ -1891,16 +1924,86 @@ def run_tui(
             self._dirty_tabs.discard("dedupe")
 
         def _fill_metadata(self) -> None:
+            """Fill the Metadata tab, off-loading the slow plan walk to a thread.
+
+            On cache miss, the adapters (``metadata_findings`` /
+            ``metadata_workbench_rows``) can spend multiple seconds parsing the
+            tag plan on a real library. Painting "Loading…" immediately and
+            warming the cache in a background thread keeps the keyboard
+            responsive; once the thread returns, the cached values are served
+            instantly from the main-thread render path.
+            """
+            import threading
+
+            from sfxworkbench.tui_screens import metadata_tab
+
+            plan_path = self._report_dir / "metadata_tag_plan.json"
+            findings_key = (
+                "metadata_findings",
+                _data_file_signature(self.db_path),
+                _data_file_signature(plan_path),
+            )
+            rows_key = (
+                "metadata_workbench_rows",
+                _data_file_signature(self.db_path),
+                _data_file_signature(plan_path) if plan_path is not None else ("", 0.0, 0),
+                getattr(self, "_metadata_query", ""),
+                int(getattr(self, "_metadata_page_size", 500)),
+                int(getattr(self, "_metadata_offset", 0)),
+                True,
+            )
+            if getattr(self, "_metadata_random_pending", False) or (
+                _data_cache_get(findings_key) is not None and _data_cache_get(rows_key) is not None
+            ):
+                metadata_tab.fill(self)
+                self._dirty_tabs.discard("metadata")
+                return
+
+            try:
+                table = self.query_one("#metadata-rows-table", DataTable)
+                table.clear(columns=True)
+                table.add_columns("Status")
+                table.add_row("Loading prioritized metadata rows…")
+            except NoMatches:
+                pass
+
+            db_path_local = self.db_path
+            query = getattr(self, "_metadata_query", "")
+            page_size = int(getattr(self, "_metadata_page_size", 500))
+            offset = int(getattr(self, "_metadata_offset", 0))
+
+            def _warm() -> None:
+                from sfxworkbench.tui_data import metadata_findings as _mf
+                from sfxworkbench.tui_data import metadata_workbench_rows as _mw
+
+                try:
+                    _mf(db_path=db_path_local, plan_path=plan_path)
+                    _mw(
+                        db_path=db_path_local,
+                        plan_path=plan_path,
+                        query=query,
+                        limit=page_size,
+                        offset=offset,
+                        random_pending=False,
+                        pending_only=True,
+                    )
+                except Exception:  # pragma: no cover - defensive thread boundary
+                    pass
+                self.call_from_thread(self._fill_metadata_after_warm)
+
+            threading.Thread(target=_warm, daemon=True).start()
+
+        def _fill_metadata_after_warm(self) -> None:
             from sfxworkbench.tui_screens import metadata_tab
 
             metadata_tab.fill(self)
             self._dirty_tabs.discard("metadata")
 
-        def _fill_advanced(self) -> None:
-            from sfxworkbench.tui_screens import advanced_tab
+        def _fill_history(self) -> None:
+            from sfxworkbench.tui_screens import history_tab
 
-            advanced_tab.fill(self)
-            self._dirty_tabs.discard("advanced")
+            history_tab.fill(self)
+            self._dirty_tabs.discard("history")
 
         def _fill_files(self) -> None:
             """Delegate hook for the Files tab fill. See ``_fill_files_impl`` for the body."""
@@ -1937,7 +2040,7 @@ def run_tui(
                 )
             )
             table = self._reset_table("files-table", columns)
-            self._file_rows = list_files(db_path=db_path, query=self._file_query, limit=100)
+            self._file_rows = list_files(db_path=db_path, query=self._file_query, limit=500)
             self._file_rows = self._sort_for_table(
                 "files-table",
                 self._file_rows,
@@ -2033,116 +2136,148 @@ def run_tui(
                 lines.extend(data.tags[:8])
             detail.update("\n".join(lines))
 
-        def _report_feature_from_table(self, table_id: str) -> str | None:
-            suffix = "-reports-table"
-            if not table_id.endswith(suffix):
-                return None
-            return table_id[: -len(suffix)]
+        def _show_history_detail(self, row_index: int | None, row_key=None) -> None:
+            selected_path = getattr(row_key, "value", row_key)
+            self._fill_history_detail(row_index, selected_path=selected_path)
 
-        def _show_report_detail(self, table_id: str, row_index: int | None, row_key=None) -> None:
-            feature = self._report_feature_from_table(table_id)
-            if feature is None:
-                return
-            selected_path = getattr(row_key, "value", None)
-            self._fill_report_detail(feature, row_index, selected_path=selected_path)
-
-        def _fill_report_detail(
-            self, feature: str, row_index: int | None = None, *, selected_path: str | None = None
-        ) -> None:
-            table_id = f"{feature}-report-detail-table"
+        def _fill_history_detail(self, row_index: int | None = None, *, selected_path: str | None = None) -> None:
             try:
-                table = self.query_one(f"#{table_id}", DataTable)
+                table = self.query_one("#history-detail-table", DataTable)
             except NoMatches:
                 return
             table.clear(columns=True)
-            table.add_columns("Kind", "Action", "Source", "Target", "State", "Detail")
-            summaries = self._report_rows.get(feature, [])
+            table.add_columns("Type", "Status", "Item", "Change", "Notes")
             if selected_path:
-                selected = next((summary for summary in summaries if summary.path == selected_path), None)
+                selected = next((summary for summary in self._history_rows if summary.path == selected_path), None)
                 if selected is not None:
-                    row_index = summaries.index(selected)
-            if row_index is None or row_index < 0 or row_index >= len(summaries):
-                table.add_row("none", "", "", "", "", "Select a history row to inspect its report detail.")
+                    row_index = self._history_rows.index(selected)
+            if row_index is None or row_index < 0 or row_index >= len(self._history_rows):
+                table.add_row("None", "", "Select a history row to inspect its report detail.", "", "")
                 return
-            summary = summaries[row_index]
-            try:
-                rows = plan_detail_rows(Path(summary.path), limit=80)
-            except (OSError, ValueError):
-                rows = []
+            summary = self._history_rows[row_index]
+            self._history_selected_path = summary.path
+            table.add_row("Summary", summary.category, summary.title, _fmt(summary.entries), summary.description)
+            table.add_row("File", summary.kind, _clip_middle(summary.path, width=104), "", "")
+
+            # A 224 MB tag plan takes >1s to parse. Serve from cache when
+            # available; otherwise paint a placeholder and warm in a thread.
+            detail_key = ("plan_detail_rows", _data_file_signature(Path(summary.path)), 80)
+            cached_rows = _data_cache_get(detail_key)
+            if cached_rows is not None:
+                self._history_detail_apply_rows(table, cached_rows)
+                return
+            table.add_row("Loading", "", "Reading report detail in the background…", "", "")
+
+            import threading
+
+            summary_path = summary.path
+
+            def _warm_history_detail() -> None:
+                try:
+                    plan_detail_rows(Path(summary_path), limit=80)
+                except (OSError, ValueError):
+                    pass
+                self.call_from_thread(self._fill_history_detail_after_warm, summary_path)
+
+            threading.Thread(target=_warm_history_detail, daemon=True).start()
+
+        def _history_detail_apply_rows(self, table: DataTable, rows: list) -> None:
             if not rows:
-                table.add_row("empty", "", summary.title, "", "", "No detail rows available in this JSON file.")
+                table.add_row("Empty", "", "No detail rows available in this JSON file.", "", "")
                 return
             for row in rows:
+                change = row.target
+                if row.source and row.target:
+                    change = f"{_clip_middle(row.source, width=46)} -> {_clip_middle(row.target, width=46)}"
+                elif row.source:
+                    change = _clip_middle(row.source, width=96)
                 table.add_row(
-                    row.kind,
-                    _clip_middle(row.action, width=28),
-                    _clip_middle(row.source, width=76),
-                    _clip_middle(row.target, width=76),
+                    row.kind.title(),
                     row.status,
-                    _clip_middle(row.detail, width=96),
+                    _clip_middle(row.action or row.kind, width=38),
+                    change,
+                    _clip_middle(row.detail, width=104),
                 )
 
-        def _refresh_reports(self, feature: str) -> None:
-            table_id = f"{feature}-reports-table"
-            try:
-                table = self.query_one(f"#{table_id}", DataTable)
-            except NoMatches:
+        def _fill_history_detail_after_warm(self, summary_path: str) -> None:
+            # If the user moved on to a different history row, don't clobber it.
+            if self._history_selected_path != summary_path:
                 return
-            columns = (
-                ("Kind", "Type", "Rows", "Err", "Title", "Path")
-                if self._compact
-                else (
-                    "Kind",
-                    "Report Type",
-                    "Rows",
-                    "Errors",
-                    "Protected",
-                    "Conflicts",
-                    "Undo",
-                    "Title",
-                    "Path",
-                )
+            if not any(entry.path == summary_path for entry in self._history_rows):
+                return
+            row_index = next(
+                (index for index, entry in enumerate(self._history_rows) if entry.path == summary_path),
+                None,
             )
-            table.clear(columns=True)
-            table.add_columns(*columns)
-            query = _feature_query(feature)
+            self._fill_history_detail(row_index)
+
+        def _history_report_paths(self) -> list[Path]:
             report_paths = list(self._resolved_report_paths)
             if self._report_dir.exists() and self._report_dir not in report_paths:
                 report_paths.insert(0, self._report_dir)
-            summaries = discover_plan_files(report_paths, query=query, limit=40)
-            self._report_rows[feature] = summaries
-            if not summaries:
-                if self._compact:
-                    table.add_row("none", "none", "0", "0", "No generated reports found", "")
-                else:
-                    table.add_row("none", "none", "0", "0", "0", "0", "no", "No generated reports found", "")
-                self._fill_report_detail(feature, None)
+            return report_paths
+
+        def _history_category(self) -> str:
+            text = self._history_category_filter.strip()
+            return "" if text.casefold() in {"", "all", "all recent"} else text
+
+        def _fill_history_impl(self) -> None:
+            table = self._reset_table(
+                "history-table",
+                (
+                    ("Category", "category", 12),
+                    ("Feature", "feature", 30),
+                    ("Kind", "kind", 24),
+                    ("Rows", "rows", 10),
+                    ("Errors", "errors", 10),
+                    ("Title", "title", 42),
+                    ("Path", "path", 88),
+                ),
+            )
+            summaries = discover_plan_files(
+                self._history_report_paths(),
+                query=self._history_query,
+                category=self._history_category(),
+                limit=500,
+                content_query=False,
+            )
+            rows = [summary for summary in summaries if history_matches_feature(summary, self._history_feature_filter)][
+                :200
+            ]
+            rows = self._sort_for_table(
+                "history-table",
+                rows,
+                {
+                    "category": lambda row: _sort_text(row.category),
+                    "feature": lambda row: _sort_text(history_feature_labels(row)),
+                    "kind": lambda row: _sort_text(row.kind),
+                    "rows": lambda row: _sort_number(row.entries),
+                    "errors": lambda row: _sort_number(row.errors),
+                    "title": lambda row: _sort_text(row.title),
+                    "path": lambda row: _sort_text(row.path),
+                },
+            )
+            self._history_rows = rows
+            if not rows:
+                table.add_row("none", "All", "none", "0", "0", "No generated history found", "")
+                self._history_selected_path = None
+                self._fill_history_detail(None)
                 return
-            for summary in summaries:
-                if self._compact:
-                    table.add_row(
-                        summary.category,
-                        summary.kind,
-                        _fmt(summary.entries),
-                        _fmt(summary.errors),
-                        summary.title,
-                        _clip_middle(summary.path),
-                        key=summary.path,
-                    )
-                else:
-                    table.add_row(
-                        summary.category,
-                        summary.kind,
-                        _fmt(summary.entries),
-                        _fmt(summary.errors),
-                        _fmt(summary.protected),
-                        _fmt(summary.conflicts),
-                        "yes" if summary.undoable else "no",
-                        summary.title,
-                        _clip_middle(summary.path),
-                        key=summary.path,
-                    )
-            self._fill_report_detail(feature, 0)
+            for summary in rows:
+                table.add_row(
+                    summary.category,
+                    history_feature_labels(summary),
+                    summary.kind,
+                    _fmt(summary.entries),
+                    _fmt(summary.errors),
+                    summary.title,
+                    _clip_middle(summary.path),
+                    key=summary.path,
+                )
+            if self._history_selected_path and any(row.path == self._history_selected_path for row in rows):
+                self._fill_history_detail(None, selected_path=self._history_selected_path)
+            else:
+                self._fill_history_detail(0)
 
         def _fill_action_result(self) -> None:
             try:

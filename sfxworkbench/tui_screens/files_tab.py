@@ -18,20 +18,25 @@ if TYPE_CHECKING:
 
 KEY = "files"
 TITLE = "Files"
-NOTE = "Search and inspect indexed files. Type to filter; selection populates the detail panel below."
+NOTE = "Browse and inspect indexed files. The search field above the list filters as you type; selection populates the detail panel below."
 
 
 def compose(app) -> ComposeResult:
     from textual.widgets import DataTable, Input, Static
 
     yield from app._page_header(KEY)
-    yield Input(placeholder="Search indexed files", id="file-search")
     yield from app._button_row(
         ("Clear Search", "files-clear-search"),
         ("Scan Library", "files-scan-library"),
         ("Audition", "files-open-file"),
         ("Reveal in Files", "files-reveal-file"),
     )
+    yield from app._button_row(
+        ("Reveal Quarantine", "quarantine-reveal"),
+        ("Plan Permanent Delete", "delete-plan"),
+        ("Apply Permanent Delete", "delete-apply", "error"),
+    )
+    yield Input(placeholder="Search indexed files", id="file-search")
     yield DataTable(id="files-table")
     yield Static("", id="file-detail", classes="detail")
 

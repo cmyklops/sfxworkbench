@@ -26,7 +26,6 @@ from sfxworkbench.cli.similarity import similarity_app
 from sfxworkbench.cli.tag import tag_app
 from sfxworkbench.cli.ucs import ucs_app
 from sfxworkbench.config import ConfigError, load_config
-from sfxworkbench.db import DEFAULT_DB_PATH
 from sfxworkbench.utils import json_dumps
 
 app = typer.Typer(
@@ -97,8 +96,9 @@ def _main(
 
 @app.command("processed")
 def cmd_processed(
+    ctx: typer.Context,
     path: Annotated[Path, typer.Argument(help="Root path of the indexed library to inspect.")],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     output: Annotated[
         Path | None, typer.Option("--output", help="Write processed-file report JSON to this path.")
     ] = None,
@@ -116,7 +116,8 @@ def cmd_processed(
         console.print(f"[red]Error: path not found: {path}[/red]")
         raise typer.Exit(1)
     try:
-        report = build_processed_file_report(path, db_path=db, limit=limit)
+        effective_db = resolve_db_path(ctx, db)
+        report = build_processed_file_report(path, db_path=effective_db, limit=limit)
     except ValueError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
@@ -131,7 +132,7 @@ def cmd_processed(
                     "schema_version": 1,
                     "command": "processed",
                     "root": path,
-                    "db_path": db,
+                    "db_path": effective_db,
                     "report_path": output,
                     "report": report,
                 }
@@ -251,7 +252,8 @@ def cmd_scan(
 
 @app.command("dedupe")
 def cmd_dedupe(
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    ctx: typer.Context,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     apply: Annotated[Path | None, typer.Option("--apply", help="Execute a reviewed dedupe plan JSON file.")] = None,
     review: Annotated[Path | None, typer.Option("--review", help="Mark a dedupe plan as reviewed/approved.")] = None,
     output: Annotated[Path | None, typer.Option("--output", help="Write dedupe plan to this path.")] = None,
@@ -308,6 +310,7 @@ def cmd_dedupe(
         write_dedupe_plan,
     )
 
+    effective_db = resolve_db_path(ctx, db)
     if review is not None:
         if not review.exists():
             console.print(f"[red]Error: plan file not found: {review}[/red]")
@@ -328,7 +331,7 @@ def cmd_dedupe(
             raise typer.Exit(1)
         result = apply_dedupe_plan(
             apply,
-            db_path=db,
+            db_path=effective_db,
             dry_run=False,
             quarantine_dir=quarantine_dir,
             permanent_delete=permanent_delete,
@@ -342,7 +345,7 @@ def cmd_dedupe(
             print(json_dumps({"schema_version": 1, "command": "dedupe_apply", "result": result}))
         return
 
-    groups = find_duplicates(db)
+    groups = find_duplicates(effective_db)
     summary = summarize_duplicates(groups)
     show_duplicates(groups, quiet=json_output or summary_only)
 
@@ -359,7 +362,7 @@ def cmd_dedupe(
         write_dedupe_plan(
             groups,
             plan_path,
-            db_path=db,
+            db_path=effective_db,
             quiet=json_output,
             config_path=config,
             safe_folders=safe_folder,
@@ -380,7 +383,7 @@ def cmd_dedupe(
                 {
                     "schema_version": 1,
                     "command": "dedupe",
-                    "db_path": db,
+                    "db_path": effective_db,
                     "plan_path": plan_path,
                     "summary": summary,
                     "groups": groups,
@@ -396,21 +399,24 @@ def cmd_dedupe(
 
 @app.command("audit")
 def cmd_audit(
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    ctx: typer.Context,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
     """Query the index for problems: missing metadata, scan errors, unusual sample rates."""
     from sfxworkbench.audit_cmd import run_audit
 
-    result = run_audit(db, quiet=json_output)
+    effective_db = resolve_db_path(ctx, db)
+    result = run_audit(effective_db, quiet=json_output)
     if json_output:
-        print(json_dumps({"schema_version": 1, "command": "audit", "db_path": db, "result": result}))
+        print(json_dumps({"schema_version": 1, "command": "audit", "db_path": effective_db, "result": result}))
 
 
 @app.command("audit-bundle")
 def cmd_audit_bundle(
+    ctx: typer.Context,
     path: Annotated[Path, typer.Argument(help="Root path of the library to scan and audit.")],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     output_dir: Annotated[
         Path | None,
         typer.Option("--output-dir", help="Directory for generated audit bundle JSON reports."),
@@ -435,10 +441,11 @@ def cmd_audit_bundle(
     if not path.exists():
         console.print(f"[red]Error: path not found: {path}[/red]")
         raise typer.Exit(1)
+    effective_db = resolve_db_path(ctx, db)
     try:
         bundle = build_audit_bundle(
             path,
-            db_path=db,
+            db_path=effective_db,
             output_dir=output_dir,
             skip_hash=skip_hash,
             force_rescan=force,
@@ -470,7 +477,7 @@ def cmd_audit_bundle(
                     "schema_version": 1,
                     "command": "audit_bundle",
                     "root": path,
-                    "db_path": db,
+                    "db_path": effective_db,
                     "output_dir": bundle.output_dir,
                     "bundle": bundle,
                 }
@@ -485,7 +492,8 @@ def cmd_audit_bundle(
 
 @app.command("scan-errors")
 def cmd_scan_errors(
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    ctx: typer.Context,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     output: Annotated[Path | None, typer.Option("--output", help="Write scan-error plan to this path.")] = None,
     apply: Annotated[Path | None, typer.Option("--apply", help="Apply a reviewed scan-error plan JSON file.")] = None,
     quarantine_dir: Annotated[
@@ -501,18 +509,19 @@ def cmd_scan_errors(
         write_scan_error_plan,
     )
 
+    effective_db = resolve_db_path(ctx, db)
     if apply is not None:
         if not apply.exists():
             console.print(f"[red]Error: plan file not found: {apply}[/red]")
             raise typer.Exit(1)
         result = apply_scan_error_plan(
-            apply, db_path=db, quarantine_dir=quarantine_dir, dry_run=False, quiet=json_output
+            apply, db_path=effective_db, quarantine_dir=quarantine_dir, dry_run=False, quiet=json_output
         )
         if json_output:
             print(json_dumps({"schema_version": 1, "command": "scan_errors_apply", "result": result}))
         return
 
-    plan = build_scan_error_plan(db)
+    plan = build_scan_error_plan(effective_db)
     plan_path = output
     if plan_path is not None:
         write_scan_error_plan(plan, plan_path, quiet=json_output)
@@ -521,7 +530,13 @@ def cmd_scan_errors(
     if json_output:
         print(
             json_dumps(
-                {"schema_version": 1, "command": "scan_errors", "db_path": db, "plan_path": plan_path, "plan": plan}
+                {
+                    "schema_version": 1,
+                    "command": "scan_errors",
+                    "db_path": effective_db,
+                    "plan_path": plan_path,
+                    "plan": plan,
+                }
             )
         )
 
@@ -533,8 +548,9 @@ def cmd_scan_errors(
 
 @app.command("search")
 def cmd_search(
+    ctx: typer.Context,
     query: Annotated[str, typer.Argument(help="Full-text search query.")],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     limit: Annotated[int, typer.Option("--limit", help="Maximum results to return.")] = 50,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
@@ -543,9 +559,14 @@ def cmd_search(
 
     from sfxworkbench.search import search
 
-    results = search(db, query, limit=limit)
+    effective_db = resolve_db_path(ctx, db)
+    results = search(effective_db, query, limit=limit)
     if json_output:
-        print(json_dumps({"schema_version": 1, "command": "search", "db_path": db, "query": query, "results": results}))
+        print(
+            json_dumps(
+                {"schema_version": 1, "command": "search", "db_path": effective_db, "query": query, "results": results}
+            )
+        )
         return
     if not results:
         console.print("[yellow]No results found.[/yellow]")
@@ -581,16 +602,22 @@ def cmd_search(
 
 @app.command("export")
 def cmd_export(
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    ctx: typer.Context,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     output: Annotated[Path, typer.Option("--output", help="Output CSV file path.")] = Path("library.csv"),
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
     """Export the files index to CSV."""
     from sfxworkbench.export import export_csv
 
-    count = export_csv(db, output)
+    effective_db = resolve_db_path(ctx, db)
+    count = export_csv(effective_db, output)
     if json_output:
-        print(json_dumps({"schema_version": 1, "command": "export", "db_path": db, "output": output, "count": count}))
+        print(
+            json_dumps(
+                {"schema_version": 1, "command": "export", "db_path": effective_db, "output": output, "count": count}
+            )
+        )
     else:
         console.print(f"Exported [yellow]{count:,}[/yellow] rows to [cyan]{output}[/cyan]")
 
@@ -602,7 +629,8 @@ def cmd_export(
 
 @app.command("tui")
 def cmd_tui(
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    ctx: typer.Context,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     config: Annotated[
         Path | None,
         typer.Option("--config", help="sfxworkbench config JSON with shared preservation rules."),
@@ -616,8 +644,9 @@ def cmd_tui(
     console.print("[dim]Starting SFX Workbench... opening the index.[/dim]")
     from sfxworkbench.tui_app import run_tui
 
+    effective_db = resolve_db_path(ctx, db)
     try:
-        run_tui(db_path=db, config_path=config, report_paths=report or [])
+        run_tui(db_path=effective_db, config_path=config, report_paths=report or [])
     except RuntimeError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
@@ -630,11 +659,12 @@ def cmd_tui(
 
 @app.command("rename")
 def cmd_rename(
+    ctx: typer.Context,
     path: Annotated[Path | None, typer.Argument(help="Root path of the library to rename.")] = None,
     pattern: Annotated[
         str, typer.Option("--pattern", help="Rename pattern. Supported: 'ucs', 'safe', 'portable'.")
     ] = "ucs",
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     apply: Annotated[bool, typer.Option("--apply", help="Actually rename files (default is dry-run).")] = False,
     allow_partial: Annotated[
         bool,
@@ -651,8 +681,9 @@ def cmd_rename(
     """Bulk UCS rename with preview, apply, collision detection, and undo."""
     from sfxworkbench.rename import apply_rename_plan, build_rename_plan, show_rename_plan, undo_rename_log
 
+    effective_db = resolve_db_path(ctx, db)
     if undo is not None:
-        result = undo_rename_log(undo, db_path=db, dry_run=not apply, quiet=json_output)
+        result = undo_rename_log(undo, db_path=effective_db, dry_run=not apply, quiet=json_output)
         if json_output:
             print(json_dumps({"schema_version": 1, "command": "rename_undo", "result": result}))
         return
@@ -675,7 +706,7 @@ def cmd_rename(
 
     result = apply_rename_plan(
         plan,
-        db_path=db,
+        db_path=effective_db,
         log_path=log,
         dry_run=False,
         quiet=json_output,

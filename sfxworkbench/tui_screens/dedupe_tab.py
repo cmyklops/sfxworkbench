@@ -19,24 +19,16 @@ def compose(app) -> ComposeResult:
     from textual.widgets import DataTable, Input
 
     yield from app._page_header(KEY)
+    yield DataTable(id="dedupe-findings-table")
     yield from app._button_row(
         ("Build Dedupe Plan", "dedupe-build"),
-        ("Approve Dedupe", "dedupe-approve"),
         ("Apply Quarantine", "dedupe-apply", "warning"),
         ("Pack Audit", "pack-audit"),
         ("Build Pack Plan", "pack-plan"),
-        ("Approve Pack", "pack-approve"),
         ("Apply Pack", "pack-apply", "warning"),
     )
-    yield DataTable(id="dedupe-findings-table")
     yield Input(placeholder="Filter duplicate groups (by hash or file path)", id="dedupe-search")
     yield from app._titled_table("Exact Duplicate Groups", "dedupe-groups-table")
-    yield from app._titled_table_pair(
-        "History",
-        "dedupe-reports-table",
-        "History Detail",
-        "dedupe-report-detail-table",
-    )
 
 
 def fill(app) -> None:

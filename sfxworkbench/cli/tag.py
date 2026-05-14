@@ -19,7 +19,6 @@ from sfxworkbench.cli._shared import (
     resolve_library_root,
     resolve_ucs_catalog_path,
 )
-from sfxworkbench.db import DEFAULT_DB_PATH
 from sfxworkbench.utils import atomic_write_json, json_dumps
 
 console = Console()
@@ -170,8 +169,9 @@ def cmd_tag_suggest(
 
 @tag_app.command("propose")
 def cmd_tag_propose(
+    ctx: typer.Context,
     path: Annotated[Path, typer.Argument(help="Root path of the indexed library to inspect.")],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     catalog: Annotated[Path | None, typer.Option("--catalog", help="Override the UCS catalog discovery chain.")] = None,
     output: Annotated[
         Path | None, typer.Option("--output", help="Write evidence-fusion tag proposal report JSON.")
@@ -186,10 +186,11 @@ def cmd_tag_propose(
     from sfxworkbench.tag_propose import build_tag_proposal_report, show_tag_proposal_report
 
     require_file(path, kind="path")
+    effective_db = resolve_db_path(ctx, db)
     try:
         report = build_tag_proposal_report(
             path,
-            db_path=db,
+            db_path=effective_db,
             catalog_path=catalog,
             min_confidence=min_confidence,
             limit=limit,
@@ -211,7 +212,7 @@ def cmd_tag_propose(
                     "schema_version": 1,
                     "command": "tag_propose",
                     "root": path,
-                    "db_path": db,
+                    "db_path": effective_db,
                     "catalog_path": report.catalog_path,
                     "report_path": output,
                     "report": report,
@@ -222,8 +223,9 @@ def cmd_tag_propose(
 
 @tag_app.command("plan")
 def cmd_tag_plan(
+    ctx: typer.Context,
     path: Annotated[Path, typer.Argument(help="Root path of the indexed library to inspect.")],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     output: Annotated[Path | None, typer.Option("--output", help="Write reviewed tag plan JSON to this path.")] = None,
     source_report: Annotated[
         Path | None, typer.Option("--from-suggestions", help="Build a plan from an existing tag suggestion report.")
@@ -290,10 +292,11 @@ def cmd_tag_plan(
     if csv_path is not None and not csv_path.exists():
         console.print(f"[red]Error: CSV file not found: {csv_path}[/red]")
         raise typer.Exit(1)
+    effective_db = resolve_db_path(ctx, db)
     try:
         plan = build_tag_plan(
             path,
-            db_path=db,
+            db_path=effective_db,
             min_confidence=min_confidence,
             limit=limit,
             ucs_catalog_path=ucs_catalog,
@@ -320,7 +323,7 @@ def cmd_tag_plan(
                     "schema_version": 1,
                     "command": "tag_plan",
                     "root": path,
-                    "db_path": db,
+                    "db_path": effective_db,
                     "plan_path": plan_path,
                     "plan": plan,
                 }
@@ -501,8 +504,9 @@ def cmd_tag_apply(
 
 @tag_app.command("sidecar-export")
 def cmd_tag_sidecar_export(
+    ctx: typer.Context,
     output: Annotated[Path, typer.Argument(help="Output JSON sidecar path.")],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     path: Annotated[Path | None, typer.Option("--path", help="Optional indexed library root to export.")] = None,
     limit: Annotated[int, typer.Option("--limit", help="Maximum tagged files to include; 0 writes all.")] = 0,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
@@ -510,8 +514,9 @@ def cmd_tag_sidecar_export(
     """Export DB-only accepted tags as a portable JSON sidecar."""
     from sfxworkbench.tag_sidecar import build_tag_sidecar_report, show_tag_sidecar_report, write_tag_sidecar_report
 
+    effective_db = resolve_db_path(ctx, db)
     try:
-        report = build_tag_sidecar_report(db_path=db, root=path, limit=limit)
+        report = build_tag_sidecar_report(db_path=effective_db, root=path, limit=limit)
     except ValueError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
@@ -524,7 +529,7 @@ def cmd_tag_sidecar_export(
                 {
                     "schema_version": 1,
                     "command": "tag_sidecar_export",
-                    "db_path": db,
+                    "db_path": effective_db,
                     "root": path,
                     "sidecar_path": output,
                     "report": report,
@@ -535,8 +540,9 @@ def cmd_tag_sidecar_export(
 
 @tag_app.command("sidecar-import")
 def cmd_tag_sidecar_import(
+    ctx: typer.Context,
     sidecar: Annotated[Path, typer.Argument(help="JSON sidecar path to import.")],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     apply: Annotated[bool, typer.Option("--apply", help="Import sidecar tags into SQLite accepted_tags.")] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
@@ -544,8 +550,9 @@ def cmd_tag_sidecar_import(
     from sfxworkbench.tag_sidecar import import_tag_sidecar
 
     require_file(sidecar, kind="sidecar file")
+    effective_db = resolve_db_path(ctx, db)
     try:
-        result = import_tag_sidecar(sidecar, db_path=db, dry_run=not apply, quiet=json_output)
+        result = import_tag_sidecar(sidecar, db_path=effective_db, dry_run=not apply, quiet=json_output)
     except ValueError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
@@ -555,7 +562,7 @@ def cmd_tag_sidecar_import(
                 {
                     "schema_version": 1,
                     "command": "tag_sidecar_import",
-                    "db_path": db,
+                    "db_path": effective_db,
                     "sidecar_path": sidecar,
                     "result": result,
                 }

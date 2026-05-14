@@ -29,6 +29,7 @@ from sfxworkbench import __version__
 from sfxworkbench.config import ConfidenceProfile
 from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params
 from sfxworkbench.groups import audit_related_groups
+from sfxworkbench.metadata_fields import canonicalize, is_multivalue, normalize_value_for_dedup
 from sfxworkbench.models import (
     RelatedSoundFile,
     RelatedSoundGroup,
@@ -37,6 +38,7 @@ from sfxworkbench.models import (
     TagSuggestionReport,
     TagSuggestionSummary,
     UcsCatalog,
+    UcsEntry,
 )
 from sfxworkbench.ucs import normalize_stem, parse_ucs_stem
 from sfxworkbench.ucs_catalog import load_catalog, lookup_entry, resolve_catalog_path
@@ -117,18 +119,40 @@ _LOW_VALUE_FOLDER_NAMES: frozenset[str] = frozenset(
     }
 )
 
-_SEPARATOR_RE = re.compile(r"[\s._\-]+")
+_SEPARATOR_RE = re.compile(r"[\s._\-()\[\]{}<>;,!?\"'`/\\|&+%@#~]+")
 # Tier post-feedback: SFX libraries often ship lowercase concatenated
 # compounds with a trailing catalog number (e.g. ``Afghanmeninteriorbusyc3401``).
 # Splitting on the digit boundary first surfaces the catalog number as its own
 # token, and ``wordninja`` (Viterbi dynamic-programming splitter over a built-in
 # word-frequency list) recovers ``afghan men interior busy`` from the compound.
 _DIGIT_BOUNDARY_RE = re.compile(r"(\d+)")
-_TRAILING_NUMBER_RE = re.compile(
-    r"^(?P<base>.+?)(?:[\s._\-]*(?:take|tk)?[\s._\-]*)?(?P<number>\d{1,4})$",
-    re.IGNORECASE,
-)
 _LEADING_SORT_PREFIX_RE = re.compile(r"^\s*\d{1,3}\s*[-_.\s]+(.+?)\s*$")
+_TIMESTAMP_TOKEN_RE = re.compile(r"^\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?$")
+_MONTH_NAME_RE = r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t)?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+_DATE_SEQUENCE_RES: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?<!\d)(?:19|20)\d{2}[-_./ ](?:0?[1-9]|1[0-2])[-_./ ](?:0?[1-9]|[12]\d|3[01])(?!\d)"),
+    re.compile(r"(?<!\d)(?:0?[1-9]|1[0-2])[-_./](?:0?[1-9]|[12]\d|3[01])[-_./](?:(?:19|20)?\d{2})(?!\d)"),
+    re.compile(r"(?<!\d)(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])(?!\d)"),
+    re.compile(rf"\b{_MONTH_NAME_RE}\.?\s+\d{{1,2}}(?:st|nd|rd|th)?[,]?\s+(?:19|20)\d{{2}}\b", re.IGNORECASE),
+    re.compile(rf"\b\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTH_NAME_RE}\.?\s+(?:19|20)\d{{2}}\b", re.IGNORECASE),
+)
+_AUDIO_FORMAT_SEQUENCE_RES: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(?:8|12|16|20|24|32|64)[-_ ]?(?:bit|bits)\b", re.IGNORECASE),
+    re.compile(r"\b\d{2,6}(?:[.,]\d+)?[-_ ]?(?:hz|khz|k)\b", re.IGNORECASE),
+    re.compile(r"\b(?:44k1|88k2|176k4)\b", re.IGNORECASE),
+)
+_TECHNICAL_METADATA_KEYS: frozenset[str] = frozenset(
+    {
+        "stake",
+        "sswver",
+        "sproject",
+        "sscene",
+        "sfilename",
+        "stape",
+        "snote",
+    }
+)
+_TECHNICAL_METADATA_KEY_RE = re.compile(r"^s(?:TRK\d+)$", re.IGNORECASE)
 
 # Conservative reviewer-facing search-language enrichment. These become
 # `keyword` suggestions, not descriptions, so approved terms can travel through
@@ -208,8 +232,11 @@ def _split_compound(token: str) -> list[str]:
     - Tokens shorter than 8 chars stay intact (``rain`` is one word, not
       ``r ain``; ``AMB`` is an abbreviation handled downstream).
     - Tokens in the abbreviation dictionary are left alone.
+    - Preserve uppercase alphanumeric codes such as ``MKH8040``, ``D100``,
+      and ``WW2`` as meaningful model/acronym tokens.
     - Digit-boundary split first so ``busyc3401`` → ``busyc`` + ``3401``;
-      the number flows through the existing ``_TRAILING_NUMBER_RE`` logic.
+      later formatting drops the catalog number unless it was an explicit or
+      short take suffix.
     - Lowercase + wordninja for the alphabetic part. ``Afghanmen`` and
       ``afghanmen`` get the same treatment — the leading capital is just
       title case, not a structure signal.
@@ -218,6 +245,8 @@ def _split_compound(token: str) -> list[str]:
     """
     if token.upper() in _ABBREVIATIONS:
         return [token]
+    if _is_meaningful_alphanumeric_code(token):
+        return [token.upper()]
     digit_parts = [part for part in _DIGIT_BOUNDARY_RE.split(token) if part]
     if len(digit_parts) > 1:
         out: list[str] = []
@@ -235,6 +264,79 @@ def _split_compound(token: str) -> list[str]:
     return pieces or [token]
 
 
+def _is_meaningful_alphanumeric_code(token: str) -> bool:
+    """Return whether a token looks like a model number or acronym code.
+
+    This intentionally preserves uppercase letter+digit tokens (``MKH8040``,
+    ``D100``, ``WW2``) while allowing lowercase catalog suffixes like
+    ``sh2301`` or ``busyc3401`` to split so their random numeric tail can be
+    dropped from tag suggestions.
+    """
+    if len(token) < 2 or not token.isalnum():
+        return False
+    if not any(char.isalpha() for char in token) or not any(char.isdigit() for char in token):
+        return False
+    letters = "".join(char for char in token if char.isalpha())
+    return bool(letters) and letters.upper() == letters
+
+
+def _is_technical_metadata_key(key: str) -> bool:
+    normalized = key.strip().lower()
+    return normalized in _TECHNICAL_METADATA_KEYS or bool(_TECHNICAL_METADATA_KEY_RE.fullmatch(key.strip()))
+
+
+def _is_technical_metadata_assignment(token: str) -> bool:
+    if "=" not in token:
+        return False
+    key, _value = token.split("=", 1)
+    return _is_technical_metadata_key(key)
+
+
+def _strip_technical_metadata_assignments(text: str) -> str:
+    """Remove recorder/iXML key-value fields before human tag tokenization.
+
+    Some libraries expose raw iXML-like chunks in filename/group evidence, e.g.
+    ``sTAKE=48 sSWVER=2.63 sFILENAME=SFX_T48.WAV sTRK1=Track A``. Those are
+    technical provenance fields, not useful search tags. Multi-word values are
+    skipped until the next key-value assignment so ``sTRK1=Track A`` does not
+    leave ``A`` behind as a tag.
+    """
+    parts = text.split()
+    kept: list[str] = []
+    skipping_value = False
+    for part in parts:
+        if "=" in part:
+            skipping_value = False
+            if _is_technical_metadata_assignment(part):
+                skipping_value = True
+                continue
+        elif skipping_value:
+            continue
+        kept.append(part)
+    return " ".join(kept)
+
+
+def _has_technical_metadata_assignment(text: str) -> bool:
+    return any(_is_technical_metadata_assignment(part) for part in text.split())
+
+
+def _is_timestamp_token(token: str) -> bool:
+    cleaned = token.strip().strip("()[]{}<>;,")
+    return bool(_TIMESTAMP_TOKEN_RE.fullmatch(cleaned))
+
+
+def _strip_date_sequences(text: str) -> str:
+    for pattern in _DATE_SEQUENCE_RES:
+        text = pattern.sub(" ", text)
+    return text
+
+
+def _strip_audio_format_sequences(text: str) -> str:
+    for pattern in _AUDIO_FORMAT_SEQUENCE_RES:
+        text = pattern.sub(" ", text)
+    return text
+
+
 def _tokenize(text: str) -> list[str]:
     """Split a stem on common separators, then word-split each remaining token.
 
@@ -243,10 +345,23 @@ def _tokenize(text: str) -> list[str]:
     ``[AMB, RAIN, 01]`` while concatenated compounds get recovered.
     """
     out: list[str] = []
-    for token in _SEPARATOR_RE.split(text):
+    cleaned_text = _strip_audio_format_sequences(_strip_date_sequences(_strip_technical_metadata_assignments(text)))
+    for token in _SEPARATOR_RE.split(cleaned_text):
         if not token:
             continue
-        out.extend(_split_compound(token))
+        if _is_technical_metadata_assignment(token):
+            continue
+        if _is_timestamp_token(token):
+            continue
+        for piece in _split_compound(token):
+            if not piece:
+                continue
+            # Drop single-character residue from compound splits or punctuation
+            # boundaries (e.g. wordninja can leave a stray "c" from a catalog
+            # code). Two-letter acronyms in ``_ABBREVIATIONS`` are preserved.
+            if len(piece) == 1 and piece.upper() not in _ABBREVIATIONS:
+                continue
+            out.append(piece)
     return out
 
 
@@ -258,8 +373,7 @@ def _title_case_token(token: str) -> str:
     """Title-case a token while expanding known SFX abbreviations.
 
     Returns the abbreviation expansion when present, otherwise a normal
-    Title-Case form. Pure-numeric tokens are returned unchanged so a take
-    number like ``"01"`` survives the description.
+    Title-Case form. Uppercase model/acronym tokens with digits are preserved.
     """
     if not token:
         return token
@@ -268,7 +382,17 @@ def _title_case_token(token: str) -> str:
     upper = token.upper()
     if upper in _ABBREVIATIONS:
         return _ABBREVIATIONS[upper]
+    if _is_meaningful_alphanumeric_code(token):
+        return upper
     return token[:1].upper() + token[1:].lower()
+
+
+def _is_bare_take_number(token: str) -> bool:
+    if not token.isdigit():
+        return False
+    if len(token) <= 2:
+        return True
+    return len(token) == 3 and token.startswith("0")
 
 
 def _strip_take_suffix(tokens: list[str]) -> tuple[list[str], str | None]:
@@ -279,7 +403,7 @@ def _strip_take_suffix(tokens: list[str]) -> tuple[list[str], str | None]:
     if not tokens:
         return tokens, None
     last = tokens[-1]
-    if last.isdigit() and len(last) <= 4:
+    if _is_bare_take_number(last):
         return tokens[:-1], last
     take_match = re.fullmatch(r"(?:take|tk)[-_]?(\d{1,4})", last, re.IGNORECASE)
     if take_match:
@@ -288,7 +412,7 @@ def _strip_take_suffix(tokens: list[str]) -> tuple[list[str], str | None]:
 
 
 def _format_description(tokens: list[str]) -> str:
-    return " ".join(_title_case_token(token) for token in tokens if token)
+    return " ".join(_title_case_token(token) for token in tokens if token and not token.isdigit())
 
 
 def _is_meaningful_folder(name: str) -> bool:
@@ -509,7 +633,10 @@ def suggest_from_group(
         f"inferred_stem:{group.inferred_stem}",
     ]
 
-    description_value = _format_description(_tokenize(group.inferred_stem))
+    description_tokens = _tokenize(group.inferred_stem)
+    description_value = _format_description(description_tokens)
+    if _has_technical_metadata_assignment(group.inferred_stem) and not description_value:
+        return suggestions
     if description_value:
         suggestions.append(
             TagSuggestion(
@@ -606,6 +733,109 @@ def suggest_synonym_keywords(
             if synonym_limit and len(synonym_suggestions) >= synonym_limit:
                 return synonym_suggestions
     return synonym_suggestions
+
+
+def _prior_catalog_trigger(entry: UcsEntry, token_set: set[str]) -> tuple[int, str] | None:
+    """Score how confidently a catalog entry matches a token set.
+
+    Tier 2: every subcategory token is present (strongest match).
+    Tier 1: every token of one synonym is present (full-synonym match).
+    Tier 0: a single synonym token of length >= 3 is present (fallback hint).
+    """
+    subcategory_tokens = _normalized_keyword_tokens(entry.subcategory)
+    if subcategory_tokens and subcategory_tokens.issubset(token_set):
+        return 2, f"subcategory:{entry.subcategory}"
+    for synonym in entry.synonyms:
+        synonym_tokens = _normalized_keyword_tokens(synonym)
+        if synonym_tokens and synonym_tokens.issubset(token_set):
+            return 1, f"synonym:{synonym}"
+    for synonym in entry.synonyms:
+        synonym_tokens = _normalized_keyword_tokens(synonym)
+        meaningful_overlap = {token for token in synonym_tokens & token_set if len(token) >= 3}
+        if meaningful_overlap:
+            hit = sorted(meaningful_overlap)[0]
+            return 0, f"synonym_token:{hit}"
+    return None
+
+
+def _has_prior_ucs_fields(suggestions: list[TagSuggestion]) -> bool:
+    return any(suggestion.field in {"ucs_category", "ucs_subcategory"} for suggestion in suggestions)
+
+
+def suggest_ucs_from_prior_tags(
+    suggestions: list[TagSuggestion],
+    catalog: UcsCatalog | None,
+    *,
+    profile: ConfidenceProfile | None = None,
+) -> list[TagSuggestion]:
+    """Suggest UCS fields from earlier proposed semantic tags.
+
+    This bridges filename/path/group tag suggestions into catalog-backed UCS
+    suggestions. It is intentionally conservative: if multiple catalog entries
+    tie for the same best match, it emits nothing rather than guessing.
+    """
+    if catalog is None or _has_prior_ucs_fields(suggestions):
+        return []
+    semantic_suggestions = [
+        suggestion
+        for suggestion in suggestions
+        if suggestion.field in {"description", "keyword", "keywords", "category", "subcategory"}
+        and suggestion.value.strip()
+    ]
+    if not semantic_suggestions:
+        return []
+
+    token_set: set[str] = set()
+    evidence = []
+    for suggestion in semantic_suggestions:
+        token_set.update(_normalized_keyword_tokens(suggestion.value))
+        evidence.append(f"{suggestion.source}:{suggestion.field}:{suggestion.value}")
+
+    candidates: list[tuple[int, int, bool, str, UcsEntry]] = []
+    for entry in catalog.entries:
+        trigger = _prior_catalog_trigger(entry, token_set)
+        if trigger is None:
+            continue
+        trigger_score, trigger_label = trigger
+        category_tokens = _normalized_keyword_tokens(entry.cat_short) | _normalized_keyword_tokens(entry.category)
+        has_category_context = bool(token_set & category_tokens)
+        score = trigger_score + (1 if has_category_context else 0)
+        candidates.append((score, trigger_score, has_category_context, trigger_label, entry))
+    if not candidates:
+        return []
+
+    best_score = max(candidate[0] for candidate in candidates)
+    best = [candidate for candidate in candidates if candidate[0] == best_score]
+    if len(best) > 1:
+        return []
+
+    _score, trigger_score, has_category_context, trigger_label, entry = best[0]
+    p = profile or _DEFAULT_CONFIDENCE
+    if trigger_score == 0:
+        # Tier-0 single-token synonym hit: useful as a starting point for
+        # review but not strong enough to flow through unattended apply.
+        confidence = min(p.ucs_catalog, 0.55)
+    else:
+        confidence = min(p.ucs_catalog, 0.86 if has_category_context else 0.82)
+    catalog_evidence = [f"matched:{trigger_label}", f"cat_short:{entry.cat_short}", f"cat_id:{entry.cat_id}", *evidence]
+    return [
+        TagSuggestion(
+            field="ucs_category",
+            value=entry.category,
+            source="ucs_catalog",
+            method="prior_tag_catalog_match",
+            confidence=confidence,
+            evidence=catalog_evidence,
+        ),
+        TagSuggestion(
+            field="ucs_subcategory",
+            value=entry.subcategory,
+            source="ucs_catalog",
+            method="prior_tag_catalog_match",
+            confidence=confidence,
+            evidence=catalog_evidence,
+        ),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -709,6 +939,16 @@ class PathSuggestor:
 
 
 @dataclass(frozen=True)
+class UcsPriorTagSuggestor:
+    """Meta-suggestor: maps accumulated semantic tag proposals back to UCS."""
+
+    name: str = "ucs_prior_tags"
+
+    def propose(self, ctx: SuggestContext, prior: list[TagSuggestion]) -> Iterable[TagSuggestion]:
+        return suggest_ucs_from_prior_tags(prior, ctx.catalog, profile=ctx.profile)
+
+
+@dataclass(frozen=True)
 class SynonymSuggestor:
     """Meta-suggestor: expands existing high-confidence evidence into review-only synonyms.
 
@@ -728,6 +968,159 @@ class SynonymSuggestor:
         )
 
 
+# ---------------------------------------------------------------------------
+# Normalization / cross-source dedup
+# ---------------------------------------------------------------------------
+
+
+# Recognized sources emitted by the built-in suggestors. Kept as a tuple so it
+# documents the expected set without breaking forward-compatibility for plans
+# that carry extra sources (e.g. ``csv``); ``TagSuggestion.source`` stays a
+# plain ``str`` so older plans still load.
+SUGGESTOR_SOURCES: tuple[str, ...] = (
+    "filename",
+    "path",
+    "group",
+    "ucs_stem",
+    "ucs_catalog",
+    "synonym",
+    "csv",
+)
+
+# Internal punctuation that should be split out of a value rather than left
+# embedded inside a token. Mirrors ``_SEPARATOR_RE`` for value-level cleanup.
+_VALUE_INTERNAL_PUNCT_RE = re.compile(r"[()\[\]{}<>;,!?\"'`/\\|]")
+_VALUE_WHITESPACE_RE = re.compile(r"\s+")
+
+# Per-canonical-field case rule. Free-form description-style fields title-case
+# each token; UCS fields stay UPPERCASE to match the catalog spec; keywords
+# lowercase for search-language style; structural fields pass through.
+_FIELD_PASSTHROUGH = frozenset({"take_number", "channel_position"})
+_FIELD_UPPERCASE = frozenset({"ucs_category", "ucs_subcategory"})
+_FIELD_LOWERCASE = frozenset({"keyword"})
+
+
+def _clean_suggestion_value(field: str, value: str) -> str:
+    """Return a normalized value for *field*, or empty string to drop the suggestion.
+
+    Rules:
+    - UCS fields → uppercase, punctuation flattened, single-space collapsed.
+    - ``take_number`` / ``channel_position`` → whitespace-collapsed passthrough.
+    - ``keyword`` → token-level lowercase.
+    - Everything else (description/title/comment/category/subcategory) →
+      title-case each token via :func:`_title_case_token`.
+    - Drops pure-digit tokens, single-character tokens (except known
+      abbreviations), and tokens that become empty after stripping punctuation.
+    """
+    canonical = canonicalize(field)
+    stripped = value.strip()
+    if not stripped:
+        return ""
+    if canonical in _FIELD_UPPERCASE:
+        flattened = _VALUE_INTERNAL_PUNCT_RE.sub(" ", stripped)
+        return _VALUE_WHITESPACE_RE.sub(" ", flattened).strip().upper()
+    if canonical in _FIELD_PASSTHROUGH:
+        return _VALUE_WHITESPACE_RE.sub(" ", stripped)
+
+    flattened = _VALUE_INTERNAL_PUNCT_RE.sub(" ", stripped)
+    out: list[str] = []
+    for raw in flattened.split():
+        if not raw:
+            continue
+        if raw.isdigit():
+            continue
+        if len(raw) == 1 and raw.upper() not in _ABBREVIATIONS:
+            continue
+        if canonical in _FIELD_LOWERCASE:
+            out.append(raw.lower())
+        else:
+            out.append(_title_case_token(raw))
+    return " ".join(out)
+
+
+def _merge_evidence(winner_evidence: list[str], extras: list[str]) -> list[str]:
+    """Append evidence lines that aren't already in *winner_evidence*."""
+    merged = list(winner_evidence)
+    for line in extras:
+        if line not in merged:
+            merged.append(line)
+    return merged
+
+
+def normalize_and_dedupe(suggestions: list[TagSuggestion]) -> list[TagSuggestion]:
+    """Clean, dedupe, and resolve single-value contention across suggestors.
+
+    This is the final stage of :func:`run_suggestors`. It guarantees:
+    1. Each suggestion's value is junk-stripped and case-normalized per field.
+    2. The same ``(canonical_field, casefolded_value)`` only appears once;
+       the highest-confidence representative wins and folds loser sources
+       into ``evidence`` as ``also_from:<source>:<method>`` entries.
+    3. For single-value fields with distinct values across sources, only the
+       highest-confidence value survives; alternates are recorded as
+       ``alternative:<value>:<source>:<confidence>`` evidence on the winner.
+    """
+    # Step 1: clean each value; drop suggestions that no longer carry content.
+    cleaned: list[TagSuggestion] = []
+    for suggestion in suggestions:
+        new_value = _clean_suggestion_value(suggestion.field, suggestion.value)
+        if not new_value:
+            continue
+        if new_value == suggestion.value:
+            cleaned.append(suggestion)
+        else:
+            cleaned.append(suggestion.model_copy(update={"value": new_value}))
+
+    # Step 2: merge identical (canonical_field, value) suggestions across sources.
+    by_value: dict[tuple[str, str], TagSuggestion] = {}
+    insertion_order: list[tuple[str, str]] = []
+    for suggestion in cleaned:
+        canonical = canonicalize(suggestion.field)
+        key = (canonical, normalize_value_for_dedup(suggestion.value))
+        existing = by_value.get(key)
+        if existing is None:
+            by_value[key] = suggestion
+            insertion_order.append(key)
+            continue
+        if suggestion.confidence > existing.confidence:
+            winner, loser = suggestion, existing
+        else:
+            winner, loser = existing, suggestion
+        merged = _merge_evidence(
+            list(winner.evidence),
+            [f"also_from:{loser.source}:{loser.method}", *loser.evidence],
+        )
+        by_value[key] = winner.model_copy(update={"evidence": merged})
+
+    # Step 3: resolve single-value contention; multivalue fields keep everything.
+    by_field: dict[str, list[tuple[str, str]]] = {}
+    for key in insertion_order:
+        canonical = key[0]
+        by_field.setdefault(canonical, []).append(key)
+
+    keep: set[tuple[str, str]] = set()
+    for canonical, keys in by_field.items():
+        if len(keys) == 1 or is_multivalue(canonical):
+            keep.update(keys)
+            continue
+        # Single-value field with multiple distinct values: highest confidence
+        # wins. The other values become ``alternative:...`` evidence so the
+        # reviewer can see the runners-up without a separate plan row.
+        keys_sorted = sorted(keys, key=lambda k: by_value[k].confidence, reverse=True)
+        winner_key = keys_sorted[0]
+        loser_keys = keys_sorted[1:]
+        if loser_keys:
+            winner = by_value[winner_key]
+            extras = [
+                f"alternative:{by_value[k].value}:{by_value[k].source}:{by_value[k].confidence:.2f}" for k in loser_keys
+            ]
+            by_value[winner_key] = winner.model_copy(
+                update={"evidence": _merge_evidence(list(winner.evidence), extras)}
+            )
+        keep.add(winner_key)
+
+    return [by_value[key] for key in insertion_order if key in keep]
+
+
 # The intermediate ``list[Suggestor]`` is purely for type-checking: it forces
 # each concrete instance to be widened to the Protocol type, so the resulting
 # tuple is correctly inferred as ``tuple[Suggestor, ...]`` rather than the
@@ -737,6 +1130,7 @@ _DEFAULT_SUGGESTOR_LIST: list[Suggestor] = [
     GroupSuggestor(),
     FilenameSuggestor(),
     PathSuggestor(),
+    UcsPriorTagSuggestor(),
     SynonymSuggestor(),
 ]
 
@@ -744,22 +1138,24 @@ DEFAULT_SUGGESTORS: tuple[Suggestor, ...] = tuple(_DEFAULT_SUGGESTOR_LIST)
 """Ordered list of suggestors used by :func:`build_tag_suggestion_report`.
 
 Order matters: stages that gate on prior evidence (FilenameSuggestor's
-``skip_description``, SynonymSuggestor's meta-expansion) must come after the
-sources they consult.
+``skip_description``, UcsPriorTagSuggestor's catalog remap, and
+SynonymSuggestor's meta-expansion) must come after the sources they consult.
 """
 
 
 def run_suggestors(ctx: SuggestContext, suggestors: Iterable[Suggestor] = DEFAULT_SUGGESTORS) -> list[TagSuggestion]:
     """Run *suggestors* in order against *ctx*, feeding each the accumulated prior list.
 
-    Returns the concatenated list of all suggestions. Filtering by source,
-    field, and confidence happens in :func:`build_tag_suggestion_report` after
-    this collection step.
+    Returns the concatenated list of all suggestions after a final
+    :func:`normalize_and_dedupe` pass that cleans values, enforces per-field
+    case, and resolves cross-source duplicates. Confidence- and
+    source/field-filtering still happens in :func:`build_tag_suggestion_report`
+    on the cleaned output.
     """
     accumulated: list[TagSuggestion] = []
     for suggestor in suggestors:
         accumulated.extend(suggestor.propose(ctx, accumulated))
-    return accumulated
+    return normalize_and_dedupe(accumulated)
 
 
 # ---------------------------------------------------------------------------
@@ -884,6 +1280,16 @@ def build_tag_suggestion_report(
         if min_confidence > 0:
             all_suggestions = [s for s in all_suggestions if s.confidence >= min_confidence]
         all_suggestions = filter_suggestions(all_suggestions, sources=source_filters, fields=field_filters)
+        # Report at the log-scaled interval so a 1M-file suggestion run
+        # doesn't fire 20k status updates. Always report the final row so
+        # the bar lands at 100%, even when this file yields no suggestions.
+        if progress_callback is not None and ((row_index + 1) % report_every == 0 or row_index + 1 == total_rows):
+            progress_callback(
+                "suggesting",
+                row_index + 1,
+                total_rows,
+                f"{row['filename']}",
+            )
         if not all_suggestions:
             continue
 
@@ -906,17 +1312,6 @@ def build_tag_suggestion_report(
                 suggestions=all_suggestions,
             )
         )
-        # Report at the log-scaled interval so a 1M-file suggestion run
-        # doesn't fire 20k status updates. Always report the final row so
-        # the bar lands at 100%.
-        if progress_callback is not None and ((row_index + 1) % report_every == 0 or row_index + 1 == total_rows):
-            progress_callback(
-                "suggesting",
-                row_index + 1,
-                total_rows,
-                f"{row['filename']}",
-            )
-
     selected = entries if limit == 0 else entries[:limit]
 
     summary = TagSuggestionSummary(

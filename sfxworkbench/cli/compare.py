@@ -12,7 +12,7 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
-from sfxworkbench.db import DEFAULT_DB_PATH
+from sfxworkbench.cli._shared import resolve_db_path
 from sfxworkbench.utils import json_dumps
 
 console = Console()
@@ -27,10 +27,11 @@ compare_app = typer.Typer(
 
 @compare_app.command("audit")
 def cmd_compare_audit(
+    ctx: typer.Context,
     path: Annotated[Path, typer.Argument(help="Candidate import folder to compare.")],
     against_db: Annotated[
-        Path, typer.Option("--against-db", help="Existing master SQLite index to compare against.")
-    ] = DEFAULT_DB_PATH,
+        Path | None, typer.Option("--against-db", help="Existing master SQLite index to compare against.")
+    ] = None,
     output: Annotated[Path | None, typer.Option("--output", help="Write compare report JSON to this path.")] = None,
     limit: Annotated[int, typer.Option("--limit", help="Maximum entries to include; 0 writes all.")] = 200,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
@@ -41,8 +42,9 @@ def cmd_compare_audit(
     if not path.exists():
         console.print(f"[red]Error: path not found: {path}[/red]")
         raise typer.Exit(1)
+    effective_db = resolve_db_path(ctx, against_db)
     try:
-        report = build_compare_report(path, against_db=against_db, limit=limit)
+        report = build_compare_report(path, against_db=effective_db, limit=limit)
     except ValueError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
@@ -57,7 +59,7 @@ def cmd_compare_audit(
                     "schema_version": 1,
                     "command": "compare_audit",
                     "root": path,
-                    "against_db": against_db,
+                    "against_db": effective_db,
                     "report_path": output,
                     "report": report,
                 }

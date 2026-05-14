@@ -12,7 +12,7 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
-from sfxworkbench.db import DEFAULT_DB_PATH
+from sfxworkbench.cli._shared import resolve_db_path
 from sfxworkbench.utils import json_dumps
 
 console = Console()
@@ -150,11 +150,12 @@ def cmd_ucs_categories(
 
 @ucs_app.command("validate")
 def cmd_ucs_validate(
+    ctx: typer.Context,
     path: Annotated[
         Path | None,
         typer.Argument(help="Optional indexed library root to validate. Omits unrelated rows when provided."),
     ] = None,
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     catalog: Annotated[
         Path | None, typer.Option("--catalog", help="Override the discovery chain with an explicit catalog path.")
     ] = None,
@@ -175,8 +176,9 @@ def cmd_ucs_validate(
         console.print(f"[red]Error: path not found: {path}[/red]")
         raise typer.Exit(1)
 
+    effective_db = resolve_db_path(ctx, db)
     try:
-        report = build_ucs_validation_report(db, root=path, catalog_path=catalog, limit=limit)
+        report = build_ucs_validation_report(effective_db, root=path, catalog_path=catalog, limit=limit)
     except (FileNotFoundError, ValueError) as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
@@ -192,7 +194,7 @@ def cmd_ucs_validate(
                     "schema_version": 1,
                     "command": "ucs_validate",
                     "root": path,
-                    "db_path": db,
+                    "db_path": effective_db,
                     "catalog_path": report.catalog_path,
                     "report_path": output,
                     "report": report,

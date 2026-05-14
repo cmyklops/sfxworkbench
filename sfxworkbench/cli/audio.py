@@ -12,7 +12,7 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
-from sfxworkbench.db import DEFAULT_DB_PATH
+from sfxworkbench.cli._shared import resolve_db_path
 from sfxworkbench.utils import json_dumps
 
 console = Console()
@@ -35,8 +35,9 @@ audio_app.add_typer(dual_mono_app, name="dual-mono")
 
 @dual_mono_app.command("audit")
 def cmd_dual_mono_audit(
+    ctx: typer.Context,
     path: Annotated[Path, typer.Argument(help="Root path of the indexed library to inspect.")],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     output: Annotated[Path | None, typer.Option("--output", help="Write dual-mono report JSON to this path.")] = None,
     threshold: Annotated[
         float, typer.Option("--threshold", help="Maximum channel difference for near-exact matches.")
@@ -50,8 +51,9 @@ def cmd_dual_mono_audit(
     if not path.exists():
         console.print(f"[red]Error: path not found: {path}[/red]")
         raise typer.Exit(1)
+    effective_db = resolve_db_path(ctx, db)
     try:
-        report = build_dual_mono_report(path, db_path=db, threshold=threshold, limit=limit)
+        report = build_dual_mono_report(path, db_path=effective_db, threshold=threshold, limit=limit)
     except ValueError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
@@ -66,7 +68,7 @@ def cmd_dual_mono_audit(
                     "schema_version": 1,
                     "command": "dual_mono_audit",
                     "root": path,
-                    "db_path": db,
+                    "db_path": effective_db,
                     "report_path": output,
                     "report": report,
                 }

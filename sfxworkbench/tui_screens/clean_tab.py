@@ -1,4 +1,4 @@
-"""Page module for the Declutter (clean + organize) tab.
+"""Page module for the Cleanup (clean + organize) tab.
 
 Houses the three-row button set: junk preview/apply + name cleanup + folder
 cleanup + nesting. The findings table is the cross-page summary; the
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from textual.app import ComposeResult
 
 KEY = "clean"
-TITLE = "Declutter"
+TITLE = "Cleanup"
 NOTE = (
     "Junk cleanup, name normalization, folder cleanup, and nesting flatten. "
     "Every destructive button has a confirmation gate; previews are read-only."
@@ -25,6 +25,7 @@ def compose(app) -> ComposeResult:
     from textual.widgets import DataTable
 
     yield from app._page_header(KEY)
+    yield DataTable(id="clean-findings-table")
     yield from app._button_row(
         ("Preview Junk", "clean-preview"),
         ("Apply Junk Cleanup", "clean-apply", "warning"),
@@ -35,25 +36,16 @@ def compose(app) -> ComposeResult:
     )
     yield from app._button_row(
         ("Preview Folder Cleanup", "organize-audit"),
-        ("Approve Folder Cleanup", "organize-approve"),
         ("Apply Folder Cleanup", "organize-apply", "warning"),
         ("Undo Folder Cleanup", "organize-undo"),
     )
     yield from app._button_row(
         ("Find Nested Folders", "organize-nesting-audit"),
         ("Build Nesting Plan", "organize-nesting-plan"),
-        ("Approve Nesting", "organize-nesting-approve"),
         ("Apply Nesting", "organize-nesting-apply", "warning"),
         ("Undo Nesting", "organize-nesting-undo"),
     )
-    yield DataTable(id="clean-findings-table")
     yield from app._titled_table("Previewed Junk", "clean-items-table")
-    yield from app._titled_table_pair(
-        "History",
-        "clean-reports-table",
-        "History Detail",
-        "clean-report-detail-table",
-    )
 
 
 def fill(app) -> None:

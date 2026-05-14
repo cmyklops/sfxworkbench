@@ -10,6 +10,7 @@ class DeletePlanEntry(BaseModel):
     path: str
     path_type: str = "file"
     size_bytes: int | None = None
+    file_count: int = 0
     md5: str | None = None
     source_log: str
     source_path: str | None = None
@@ -20,6 +21,7 @@ class DeletePlanSummary(BaseModel):
     candidate_entries: int = 0
     file_entries: int = 0
     directory_entries: int = 0
+    files_planned: int = 0
     approved_entries: int = 0
     rejected_entries: int = 0
     bytes_planned: int = 0

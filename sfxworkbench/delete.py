@@ -13,6 +13,7 @@ from rich.table import Table
 
 from sfxworkbench import __version__
 from sfxworkbench.apply_logs import apply_session, mark_entries_reviewed
+from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params
 from sfxworkbench.models import DeleteApplyResult, DeletePlan, DeletePlanEntry, DeletePlanSummary, DeleteReviewResult
 from sfxworkbench.preservation import build_preservation_rules, protected_by
 from sfxworkbench.utils import atomic_write_json
@@ -38,14 +39,28 @@ def _md5(path: Path, block: int = 65536) -> str | None:
         return None
 
 
-def _path_size(path: Path) -> int:
+def _path_size_and_files(path: Path) -> tuple[int, int]:
+    """Return ``(total_bytes, file_count)`` for *path*.
+
+    A file entry counts as 1 file; a directory entry recursively counts its
+    descendant files so the plan can report the real number of items the user
+    will permanently delete (not just the number of top-level quarantine
+    bundles).
+    """
     if path.is_file():
-        return path.stat().st_size
-    total = 0
+        return path.stat().st_size, 1
+    total_bytes = 0
+    file_count = 0
     for child in path.rglob("*"):
         if child.is_file():
-            total += child.stat().st_size
-    return total
+            total_bytes += child.stat().st_size
+            file_count += 1
+    return total_bytes, file_count
+
+
+def _path_size(path: Path) -> int:
+    """Back-compat wrapper around :func:`_path_size_and_files` for staleness checks."""
+    return _path_size_and_files(path)[0]
 
 
 def _extract_quarantine_paths(raw: dict, source_log: Path) -> tuple[list[DeletePlanEntry], list[dict]]:
@@ -60,12 +75,14 @@ def _extract_quarantine_paths(raw: dict, source_log: Path) -> tuple[list[DeleteP
         if not path.exists():
             errors.append({"path": str(path), "error": "quarantine path does not exist"})
             continue
+        size_bytes, file_count = _path_size_and_files(path)
         entries.append(
             DeletePlanEntry(
                 entry_id=next_id,
                 path=str(path),
                 path_type="dir" if path.is_dir() else "file",
-                size_bytes=_path_size(path),
+                size_bytes=size_bytes,
+                file_count=file_count,
                 md5=_md5(path),
                 source_log=str(source_log),
                 source_path=item.get("folder_path") or item.get("path"),
@@ -80,6 +97,7 @@ def _summarize(plan: DeletePlan) -> DeletePlanSummary:
         candidate_entries=len(plan.entries),
         file_entries=sum(1 for entry in plan.entries if entry.path_type == "file"),
         directory_entries=sum(1 for entry in plan.entries if entry.path_type == "dir"),
+        files_planned=sum(entry.file_count for entry in plan.entries),
         approved_entries=sum(1 for entry in plan.entries if entry.review_status == "approved"),
         rejected_entries=sum(1 for entry in plan.entries if entry.review_status == "rejected"),
         bytes_planned=sum(entry.size_bytes or 0 for entry in plan.entries),
@@ -169,9 +187,37 @@ def _validate_entry(entry: DeletePlanEntry) -> str | None:
     return None
 
 
+def _drop_indexed_rows_under(db_path: Path, deleted_paths: list[Path]) -> int:
+    """Remove rows from ``files`` whose ``path`` is *deleted_paths* or below.
+
+    Pack quarantines update file rows to point at their new quarantine path
+    instead of deleting them, so after a permanent delete those rows would
+    otherwise linger and inflate ``SUM(size_bytes)``. Dedupe-quarantined rows
+    are already gone; this is a no-op for those. The directory case uses
+    ``path_scope_filter`` so descendant files are dropped along with the
+    folder entry itself.
+    """
+    if not deleted_paths:
+        return 0
+    conn = get_connection(db_path)
+    try:
+        removed = 0
+        for path in deleted_paths:
+            cursor = conn.execute(
+                f"DELETE FROM files WHERE {path_scope_filter()}",
+                path_scope_params(path),
+            )
+            removed += cursor.rowcount or 0
+        conn.commit()
+    finally:
+        conn.close()
+    return removed
+
+
 def apply_delete_plan(
     plan_path: Path,
     *,
+    db_path: Path | None = None,
     dry_run: bool = True,
     require_reviewed: bool = False,
     understand_permanent_delete: bool = False,
@@ -200,6 +246,7 @@ def apply_delete_plan(
         safe_folders=[Path(folder) for folder in plan.safe_folders] + list(safe_folders or []),
     )
     deleted_entries: list[dict] = []
+    deleted_paths: list[Path] = []
     with apply_session(
         plan_path=plan_path,
         dry_run=dry_run,
@@ -243,8 +290,15 @@ def apply_delete_plan(
                     path.unlink()
                 result.deleted += 1
                 deleted_entries.append(entry.model_dump())
+                deleted_paths.append(path)
             except OSError as e:
                 result.errors.append({"path": entry.path, "error": str(e)})
+    if not dry_run and db_path is not None and deleted_paths:
+        # Drop stale index rows so ``SUM(size_bytes)`` in the status strip
+        # reflects what's actually still on disk. Pack quarantines updated
+        # rows to point at the now-deleted quarantine paths; without this,
+        # the indexed library size would never drop.
+        _drop_indexed_rows_under(db_path, deleted_paths)
     if not quiet:
         show_delete_apply_result(result)
     return result

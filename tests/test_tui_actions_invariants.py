@@ -18,6 +18,7 @@ import inspect
 from pathlib import Path
 
 import sfxworkbench.tui_actions as tui_actions
+from sfxworkbench.tui_screens._tabs import TAB_BY_KEY
 
 # Allowed hint values: every TUI tab key plus the App-level refresh targets
 # ("status" — the top status strip; "reports" — the per-tab reports view).
@@ -28,7 +29,7 @@ _KNOWN_HINTS = frozenset(
         "clean",
         "dedupe",
         "metadata",
-        "advanced",
+        "history",
         "status",
         "reports",
     }
@@ -66,7 +67,7 @@ def _collect_refresh_hints(module_path: Path) -> list[tuple[int, tuple[str, ...]
     return hits
 
 
-_TAB_KEYS = frozenset({"scan", "files", "clean", "dedupe", "metadata", "advanced"})
+_TAB_KEYS = frozenset(TAB_BY_KEY)
 
 
 def test_action_refresh_hints_are_known() -> None:

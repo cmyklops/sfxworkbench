@@ -13,8 +13,8 @@ from sfxworkbench.tui_actions import (
     apply_dedupe_plan_action,
     apply_delete_plan_action,
     apply_tag_plan_action,
+    apply_tag_plan_and_build_embedded_plan_action,
     approve_dedupe_plan_action,
-    approve_delete_plan_action,
     approve_organize_action,
     approve_tag_plan_action,
     build_dedupe_plan_action,
@@ -155,18 +155,79 @@ def test_tui_permanent_delete_plan_and_apply_from_quarantine_log(tmp_path: Path)
     )
 
     plan = build_delete_plan_action(report_dir)
-    unapproved = apply_delete_plan_action(report_dir)
-    approve = approve_delete_plan_action(report_dir)
+    # Apply auto-approves any pending entries (the legacy "Approve" button is
+    # rolled into "Apply"), so a single click is enough to remove approved
+    # quarantined paths.
     applied = apply_delete_plan_action(report_dir)
 
     assert plan.ok
     assert plan.output_path == str(report_dir / "delete_plan.json")
-    assert not unapproved.ok
-    assert approve.ok
+    assert "1 file" in plan.message  # quarantine folder contains one file
     assert applied.ok
     assert applied.details is not None
     assert applied.details["deleted"] == 1
     assert not quarantined.exists()
+
+
+def test_tui_permanent_delete_plan_counts_files_inside_quarantine_folders(tmp_path: Path) -> None:
+    """A quarantine directory containing N files reports N files, not 1 entry."""
+    report_dir = tmp_path / "reports"
+    quarantined = report_dir / "wavwarden_quarantine_20260513_010000"
+    quarantined.mkdir(parents=True)
+    (quarantined / "a.wav").write_bytes(b"aa")
+    (quarantined / "b.wav").write_bytes(b"bbb")
+    nested = quarantined / "nested"
+    nested.mkdir()
+    (nested / "c.wav").write_bytes(b"cccc")
+
+    plan = build_delete_plan_action(report_dir)
+
+    assert plan.ok
+    assert plan.details is not None
+    assert plan.details["summary"]["candidate_entries"] == 1
+    assert plan.details["summary"]["directory_entries"] == 1
+    assert plan.details["summary"]["files_planned"] == 3
+    assert plan.details["summary"]["bytes_planned"] == 2 + 3 + 4
+    assert plan.details["entries"][0]["file_count"] == 3
+    assert "3 file" in plan.message
+
+
+def test_tui_permanent_delete_plan_includes_every_quarantine_log(tmp_path: Path) -> None:
+    """The plan should surface all quarantined paths, not just those from the latest log."""
+    report_dir = tmp_path / "reports"
+    apply_log_dir = report_dir / "apply_logs"
+    apply_log_dir.mkdir(parents=True)
+    first_dir = report_dir / "sfxworkbench_dedupe_quarantine_20260510_100000"
+    second_dir = report_dir / "sfxworkbench_pack_quarantine_20260512_120000"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    (first_dir / "dupe.wav").write_bytes(b"01")
+    (second_dir / "pack.wav").write_bytes(b"0123")
+    (apply_log_dir / "dedupe_log_20260510_100000.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "entries": [{"path": "/lib/a.wav", "quarantine_path": str(first_dir / "dupe.wav")}],
+            }
+        )
+    )
+    (apply_log_dir / "pack_log_20260512_120000.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "entries": [{"folder_path": "/lib/old", "quarantine_path": str(second_dir / "pack.wav")}],
+            }
+        )
+    )
+
+    plan = build_delete_plan_action(report_dir)
+
+    assert plan.ok
+    assert plan.details is not None
+    assert plan.details["summary"]["candidate_entries"] == 2
+    assert plan.details["summary"]["bytes_planned"] == 6
+    paths = {entry["path"] for entry in plan.details["entries"]}
+    assert paths == {str(first_dir / "dupe.wav"), str(second_dir / "pack.wav")}
 
 
 def test_tui_permanent_delete_plan_from_legacy_quarantine_folder(tmp_path: Path) -> None:
@@ -186,7 +247,7 @@ def test_tui_permanent_delete_plan_from_legacy_quarantine_folder(tmp_path: Path)
     assert plan.details is not None
     assert plan.details["summary"]["candidate_entries"] == 2
     assert {entry["path"] for entry in plan.details["entries"]} == {str(quarantined), str(scan_errors)}
-    assert list((report_dir / "apply_logs").glob("legacy_quarantine_log_*.json"))
+    assert list((report_dir / "apply_logs").glob("combined_quarantine_log_*.json"))
 
 
 def test_tui_action_runner_db_only_metadata_apply(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
@@ -244,6 +305,216 @@ def test_tui_action_runner_db_only_metadata_apply(tmp_library: Path, tmp_db: Pat
     finally:
         conn.close()
     assert stored["value"] == "Steady Rain"
+
+
+def test_tui_apply_tags_and_plan_embedded_chains_both_steps(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
+    """One click should commit the tag plan and produce the embedded write plan."""
+    scan_library(tmp_library, tmp_db, skip_hash=True, quiet=True)
+    target = tmp_library / "sounds" / "AMB_RAIN_01.wav"
+    conn = get_connection(tmp_db)
+    row = conn.execute(
+        "SELECT id, size_bytes, mtime, md5 FROM files WHERE path = ?",
+        (str(target),),
+    ).fetchone()
+    conn.close()
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    plan = {
+        "schema_version": 1,
+        "generated_at": "2026-05-13T00:00:00+00:00",
+        "tool": "sfxworkbench",
+        "tool_version": "test",
+        "root": str(tmp_library),
+        "db_path": str(tmp_db),
+        "target": "db",
+        "summary": {"files_considered": 1, "candidate_entries": 1, "add_entries": 1},
+        "entries": [
+            {
+                "entry_id": 1,
+                "file_id": row["id"],
+                "path": str(target),
+                "filename": target.name,
+                "size_bytes": row["size_bytes"],
+                "mtime": row["mtime"],
+                "md5": row["md5"],
+                "field": "description",
+                "action": "add",
+                "existing_values": [],
+                "proposed_value": "Steady Rain",
+                "source": "test",
+                "method": "manual",
+                "confidence": 1.0,
+                "evidence": ["test"],
+                "review_status": "approved",
+            }
+        ],
+        "errors": [],
+    }
+    (report_dir / "metadata_tag_plan.json").write_text(json.dumps(plan))
+
+    result = apply_tag_plan_and_build_embedded_plan_action(
+        tmp_db,
+        report_dir,
+        root=tmp_library,
+    )
+
+    # DB tag landed regardless of how the embedded-plan probe went.
+    conn = get_connection(tmp_db)
+    try:
+        stored = conn.execute("SELECT value FROM accepted_tags WHERE field = 'description'").fetchone()
+    finally:
+        conn.close()
+    assert stored["value"] == "Steady Rain"
+    # Embedded plan was written next to the tag plan.
+    assert (report_dir / "metadata_write_plan.json").exists()
+    # Result carries both stages' messages and detail blocks.
+    assert "DB-only metadata tag" in result.message
+    assert "embedded metadata plan" in result.message
+    assert result.details is not None
+    assert "apply" in result.details and "plan" in result.details
+    assert result.action == "tag_apply_and_embedded_plan"
+
+
+def test_tui_apply_tags_and_plan_embedded_short_circuits_when_db_apply_fails(tmp_path: Path) -> None:
+    """If the DB apply step errors, the file-probe step must be skipped."""
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    # No metadata_tag_plan.json exists, so apply_tag_plan_action returns an error result.
+
+    result = apply_tag_plan_and_build_embedded_plan_action(Path("/nonexistent/db"), report_dir)
+
+    assert not result.ok
+    # The combined action surfaces the underlying action name so the failure
+    # is attributed to the apply step, not to the chained build step.
+    assert result.action == "tag_apply"
+    assert not (report_dir / "metadata_write_plan.json").exists()
+
+
+def test_tui_apply_tag_plan_auto_approves_pending_when_user_skips_approve(
+    tmp_library: Path, tmp_db: Path, tmp_path: Path
+) -> None:
+    """The merged Apply button auto-approves any pending entries before writing."""
+    scan_library(tmp_library, tmp_db, skip_hash=True, quiet=True)
+    target = tmp_library / "sounds" / "AMB_RAIN_01.wav"
+    conn = get_connection(tmp_db)
+    row = conn.execute(
+        "SELECT id, size_bytes, mtime, md5 FROM files WHERE path = ?",
+        (str(target),),
+    ).fetchone()
+    conn.close()
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    plan = {
+        "schema_version": 1,
+        "generated_at": "2026-05-13T00:00:00+00:00",
+        "tool": "sfxworkbench",
+        "tool_version": "test",
+        "root": str(tmp_library),
+        "db_path": str(tmp_db),
+        "target": "db",
+        "summary": {"files_considered": 1, "candidate_entries": 1, "add_entries": 1},
+        "entries": [
+            {
+                "entry_id": 1,
+                "file_id": row["id"],
+                "path": str(target),
+                "filename": target.name,
+                "size_bytes": row["size_bytes"],
+                "mtime": row["mtime"],
+                "md5": row["md5"],
+                "field": "description",
+                "action": "add",
+                "existing_values": [],
+                "proposed_value": "Steady Rain",
+                "source": "test",
+                "method": "manual",
+                "confidence": 1.0,
+                "evidence": ["test"],
+                "review_status": "pending",
+            }
+        ],
+        "errors": [],
+    }
+    plan_path = report_dir / "metadata_tag_plan.json"
+    plan_path.write_text(json.dumps(plan))
+
+    apply = apply_tag_plan_action(tmp_db, report_dir)
+
+    assert apply.ok
+    written = json.loads(plan_path.read_text())
+    assert written["entries"][0]["review_status"] == "approved"
+    conn = get_connection(tmp_db)
+    try:
+        stored = conn.execute("SELECT value FROM accepted_tags WHERE field = 'description'").fetchone()
+    finally:
+        conn.close()
+    assert stored["value"] == "Steady Rain"
+
+
+def test_tui_apply_tag_plan_preserves_user_rejections_when_some_already_approved(
+    tmp_library: Path, tmp_db: Path, tmp_path: Path
+) -> None:
+    """If at least one entry is already approved, Apply must not over-stamp existing rejections."""
+    scan_library(tmp_library, tmp_db, skip_hash=True, quiet=True)
+    target = tmp_library / "sounds" / "AMB_RAIN_01.wav"
+    conn = get_connection(tmp_db)
+    row = conn.execute(
+        "SELECT id, size_bytes, mtime, md5 FROM files WHERE path = ?",
+        (str(target),),
+    ).fetchone()
+    conn.close()
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    base_entry = {
+        "file_id": row["id"],
+        "path": str(target),
+        "filename": target.name,
+        "size_bytes": row["size_bytes"],
+        "mtime": row["mtime"],
+        "md5": row["md5"],
+        "action": "add",
+        "existing_values": [],
+        "source": "test",
+        "method": "manual",
+        "confidence": 1.0,
+        "evidence": ["test"],
+    }
+    plan = {
+        "schema_version": 1,
+        "generated_at": "2026-05-13T00:00:00+00:00",
+        "tool": "sfxworkbench",
+        "tool_version": "test",
+        "root": str(tmp_library),
+        "db_path": str(tmp_db),
+        "target": "db",
+        "summary": {"files_considered": 1, "candidate_entries": 2, "add_entries": 2},
+        "entries": [
+            {
+                **base_entry,
+                "entry_id": 1,
+                "field": "description",
+                "proposed_value": "Approved Value",
+                "review_status": "approved",
+            },
+            {
+                **base_entry,
+                "entry_id": 2,
+                "field": "title",
+                "proposed_value": "Rejected Value",
+                "review_status": "rejected",
+            },
+        ],
+        "errors": [],
+    }
+    plan_path = report_dir / "metadata_tag_plan.json"
+    plan_path.write_text(json.dumps(plan))
+
+    apply = apply_tag_plan_action(tmp_db, report_dir)
+
+    assert apply.ok
+    written = json.loads(plan_path.read_text())
+    statuses = {entry["entry_id"]: entry["review_status"] for entry in written["entries"]}
+    assert statuses == {1: "approved", 2: "rejected"}  # rejection survived
 
 
 def test_tui_tag_plan_falls_back_when_ucs_catalog_is_missing(

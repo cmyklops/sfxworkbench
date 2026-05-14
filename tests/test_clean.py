@@ -119,3 +119,60 @@ def test_clean_log_written(tmp_library: Path, tmp_path: Path) -> None:
     assert "removed_files" in data
     assert "dry_run" in data
     assert data["dry_run"] is True
+
+
+def test_clean_apply_drops_index_rows_for_removed_files(tmp_path: Path, tmp_db: Path) -> None:
+    """Junk files that happen to be indexed must have their rows removed so the size status drops."""
+    from sfxworkbench.db import get_connection
+
+    root = tmp_path / "library"
+    root.mkdir()
+    junk_path = root / "leftover.reapeaks"
+    audio_path = root / "keep.wav"
+    junk_path.write_text("junk-bytes-go-here")
+    audio_path.write_bytes(b"audio-bytes")
+    conn = get_connection(tmp_db)
+    for path, size in ((junk_path, junk_path.stat().st_size), (audio_path, audio_path.stat().st_size)):
+        conn.execute(
+            """
+            INSERT INTO files (path, filename, stem, extension, size_bytes, mtime, md5, scanned_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (str(path), path.name, path.stem, path.suffix.lower(), size, 0.0, None, "2026"),
+        )
+    conn.commit()
+    before_total = conn.execute("SELECT COALESCE(SUM(size_bytes), 0) AS s FROM files").fetchone()["s"]
+    conn.close()
+    assert before_total > 0
+
+    clean_library(root, dry_run=False, quiet=True, db_path=tmp_db)
+
+    conn = get_connection(tmp_db)
+    remaining_paths = {row["path"] for row in conn.execute("SELECT path FROM files").fetchall()}
+    after_total = conn.execute("SELECT COALESCE(SUM(size_bytes), 0) AS s FROM files").fetchone()["s"]
+    conn.close()
+    assert remaining_paths == {str(audio_path)}
+    assert after_total == audio_path.stat().st_size
+
+
+def test_cancelled_apply_reports_only_removed_junk(tmp_path: Path) -> None:
+    import json
+
+    root = tmp_path / "library"
+    root.mkdir()
+    for index in range(60):
+        (root / f"waveform_{index}.reapeaks").write_text("junk")
+    log_path = tmp_path / "clean_log.json"
+
+    result = clean_library(root, dry_run=False, log_path=log_path, quiet=True, cancel_requested=lambda: True)
+
+    assert result.cancelled is True
+    assert len(result.removed_files) == 50
+    assert result.removed_dirs == []
+    assert result.bytes_freed == 50 * len("junk")
+    assert len(list(root.glob("*.reapeaks"))) == 10
+
+    data = json.loads(log_path.read_text())
+    assert data["cancelled"] is True
+    assert len(data["removed_files"]) == 50
+    assert data["bytes_freed"] == result.bytes_freed

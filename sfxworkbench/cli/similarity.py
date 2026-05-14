@@ -13,7 +13,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from sfxworkbench.db import DEFAULT_DB_PATH
+from sfxworkbench.cli._shared import resolve_db_path
 from sfxworkbench.utils import json_dumps
 
 console = Console()
@@ -36,8 +36,9 @@ similarity_app.add_typer(similarity_feedback_app, name="feedback")
 
 @similarity_app.command("crawl")
 def cmd_similarity_crawl(
+    ctx: typer.Context,
     path: Annotated[Path, typer.Argument(help="Root path of the indexed library to analyze.")],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     cache: Annotated[
         Path | None,
         typer.Option("--cache", help="Directory for similarity crawl run reports."),
@@ -72,10 +73,11 @@ def cmd_similarity_crawl(
         raise typer.Exit(1)
     effective_cache = cache if cache is not None else DEFAULT_SIMILARITY_CACHE
     effective_max_duration = None if max_duration == 0 else max_duration
+    effective_db = resolve_db_path(ctx, db)
     try:
         report = crawl_similarity_descriptors(
             path,
-            db_path=db,
+            db_path=effective_db,
             cache_path=effective_cache,
             max_duration_s=effective_max_duration,
             force=force,
@@ -94,7 +96,7 @@ def cmd_similarity_crawl(
                     "schema_version": 1,
                     "command": "similarity_crawl",
                     "root": path,
-                    "db_path": db,
+                    "db_path": effective_db,
                     "cache_path": effective_cache,
                     "report": report,
                 }
@@ -125,8 +127,9 @@ def cmd_similarity_backends(
 
 @similarity_app.command("search")
 def cmd_similarity_search(
+    ctx: typer.Context,
     query_file: Annotated[Path, typer.Option("--file", help="Audio file to use as the similarity query.")],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     max_duration: Annotated[
         float | None,
         typer.Option("--max-duration", help="Maximum seconds to analyze from the query; 0 reads the full file."),
@@ -142,10 +145,11 @@ def cmd_similarity_search(
     from sfxworkbench.similarity import search_similarity_descriptors
 
     effective_max_duration = None if max_duration == 0 else max_duration
+    effective_db = resolve_db_path(ctx, db)
     try:
         report = search_similarity_descriptors(
             query_file,
-            db_path=db,
+            db_path=effective_db,
             max_duration_s=effective_max_duration,
             limit=limit,
             scope=scope,
@@ -161,7 +165,7 @@ def cmd_similarity_search(
                     "schema_version": 1,
                     "command": "similarity_search",
                     "query_path": query_file,
-                    "db_path": db,
+                    "db_path": effective_db,
                     "report": report,
                 }
             )
@@ -170,8 +174,9 @@ def cmd_similarity_search(
 
 @similarity_app.command("segments")
 def cmd_similarity_segments(
+    ctx: typer.Context,
     path: Annotated[Path, typer.Argument(help="Root path of the indexed library to inspect.")],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     max_duration: Annotated[
         float | None,
         typer.Option("--max-duration", help="Descriptor analysis window to inspect; 0 uses full-file segments."),
@@ -183,10 +188,11 @@ def cmd_similarity_segments(
     from sfxworkbench.similarity import list_similarity_segments
 
     effective_max_duration = None if max_duration == 0 else max_duration
+    effective_db = resolve_db_path(ctx, db)
     try:
         report = list_similarity_segments(
             path,
-            db_path=db,
+            db_path=effective_db,
             max_duration_s=effective_max_duration,
             limit=limit,
             quiet=json_output,
@@ -201,7 +207,7 @@ def cmd_similarity_segments(
                     "schema_version": 1,
                     "command": "similarity_segments",
                     "root": path,
-                    "db_path": db,
+                    "db_path": effective_db,
                     "report": report,
                 }
             )
@@ -210,8 +216,9 @@ def cmd_similarity_segments(
 
 @similarity_app.command("audit")
 def cmd_similarity_audit(
+    ctx: typer.Context,
     path: Annotated[Path, typer.Argument(help="Root path of the indexed library to audit.")],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     threshold: Annotated[
         float, typer.Option("--threshold", help="Minimum similarity score for near-duplicate candidate pairs.")
     ] = 0.92,
@@ -237,10 +244,11 @@ def cmd_similarity_audit(
     from sfxworkbench.similarity import audit_similarity_descriptors
 
     effective_max_duration = None if max_duration == 0 else max_duration
+    effective_db = resolve_db_path(ctx, db)
     try:
         report = audit_similarity_descriptors(
             path,
-            db_path=db,
+            db_path=effective_db,
             threshold=threshold,
             max_duration_s=effective_max_duration,
             exclude_exact_md5=not include_exact_md5,
@@ -259,7 +267,7 @@ def cmd_similarity_audit(
                     "schema_version": 1,
                     "command": "similarity_audit",
                     "root": path,
-                    "db_path": db,
+                    "db_path": effective_db,
                     "report_path": output,
                     "report": report,
                 }
@@ -269,13 +277,14 @@ def cmd_similarity_audit(
 
 @similarity_feedback_app.command("set")
 def cmd_similarity_feedback_set(
+    ctx: typer.Context,
     left: Annotated[Path, typer.Option("--left", help="Indexed left-side file path.")],
     right: Annotated[Path, typer.Option("--right", help="Indexed right-side file path.")],
     state: Annotated[
         str,
         typer.Option("--state", help="Review state: favorite, hidden, ignored, accepted, or rejected."),
     ],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     scope: Annotated[str, typer.Option("--scope", help="Feedback scope: 'file' or 'segment'.")] = "file",
     left_segment: Annotated[
         int | None, typer.Option("--left-segment", help="Left segment index for segment feedback.")
@@ -296,12 +305,13 @@ def cmd_similarity_feedback_set(
     from sfxworkbench.similarity import set_similarity_feedback
 
     effective_max_duration = None if max_duration == 0 else max_duration
+    effective_db = resolve_db_path(ctx, db)
     try:
         result = set_similarity_feedback(
             left_path=left,
             right_path=right,
             state=state,
-            db_path=db,
+            db_path=effective_db,
             scope=scope,
             left_segment_index=left_segment,
             right_segment_index=right_segment,
@@ -318,7 +328,7 @@ def cmd_similarity_feedback_set(
                 {
                     "schema_version": 1,
                     "command": "similarity_feedback_set",
-                    "db_path": db,
+                    "db_path": effective_db,
                     "result": result,
                 }
             )
@@ -327,7 +337,8 @@ def cmd_similarity_feedback_set(
 
 @similarity_feedback_app.command("list")
 def cmd_similarity_feedback_list(
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    ctx: typer.Context,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     scope: Annotated[str | None, typer.Option("--scope", help="Filter to 'file' or 'segment'.")] = None,
     state: Annotated[
         str | None,
@@ -339,8 +350,11 @@ def cmd_similarity_feedback_list(
     """List DB-only similarity review states."""
     from sfxworkbench.similarity import list_similarity_feedback
 
+    effective_db = resolve_db_path(ctx, db)
     try:
-        report = list_similarity_feedback(db_path=db, scope=scope, state=state, limit=limit, quiet=json_output)
+        report = list_similarity_feedback(
+            db_path=effective_db, scope=scope, state=state, limit=limit, quiet=json_output
+        )
     except ValueError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
@@ -350,7 +364,7 @@ def cmd_similarity_feedback_list(
                 {
                     "schema_version": 1,
                     "command": "similarity_feedback_list",
-                    "db_path": db,
+                    "db_path": effective_db,
                     "report": report,
                 }
             )
@@ -359,9 +373,10 @@ def cmd_similarity_feedback_list(
 
 @similarity_feedback_app.command("clear")
 def cmd_similarity_feedback_clear(
+    ctx: typer.Context,
     left: Annotated[Path, typer.Option("--left", help="Indexed left-side file path.")],
     right: Annotated[Path, typer.Option("--right", help="Indexed right-side file path.")],
-    db: Annotated[Path, typer.Option("--db", help="Path to the SQLite index.")] = DEFAULT_DB_PATH,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
     scope: Annotated[str, typer.Option("--scope", help="Feedback scope: 'file' or 'segment'.")] = "file",
     left_segment: Annotated[
         int | None, typer.Option("--left-segment", help="Left segment index for segment feedback.")
@@ -385,11 +400,12 @@ def cmd_similarity_feedback_clear(
     from sfxworkbench.similarity import clear_similarity_feedback
 
     effective_max_duration = None if max_duration == 0 else max_duration
+    effective_db = resolve_db_path(ctx, db)
     try:
         result = clear_similarity_feedback(
             left_path=left,
             right_path=right,
-            db_path=db,
+            db_path=effective_db,
             scope=scope,
             left_segment_index=left_segment,
             right_segment_index=right_segment,
@@ -406,7 +422,7 @@ def cmd_similarity_feedback_clear(
                 {
                     "schema_version": 1,
                     "command": "similarity_feedback_clear",
-                    "db_path": db,
+                    "db_path": effective_db,
                     "result": result,
                 }
             )

@@ -37,18 +37,12 @@ def compose(app) -> ComposeResult:
     from textual.widgets import DataTable, Static
 
     yield from app._page_header(KEY)
+    yield Static("", id="scan-note", classes="note")
+    yield DataTable(id="scan-findings-table")
     yield from app._button_row(
         ("Scan Library", "scan-run"),
         ("Full Audit", "scan-full-audit"),
         ("Refresh", "scan-refresh"),
-    )
-    yield Static("", id="scan-note", classes="note")
-    yield DataTable(id="scan-findings-table")
-    yield from app._titled_table_pair(
-        "History",
-        "scan-reports-table",
-        "History Detail",
-        "scan-report-detail-table",
     )
 
 
