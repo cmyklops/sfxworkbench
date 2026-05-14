@@ -25,6 +25,7 @@ from sfxworkbench.preservation import build_preservation_rules
 _TUI_LIBRARY_PATH_KEY = "tui_library_path"
 _PLAN_SUMMARY_CACHE: dict[tuple[str, float, int, bool], PlanSummary] = {}
 _METADATA_PLAN_INDEX_CACHE: dict[tuple[str, float, int], sqlite3.Connection] = {}
+_INLINE_PLAN_DETAIL_MAX_BYTES = 5 * 1024 * 1024
 
 # Session-level adapter cache. Stores results of heavy read-only adapters keyed
 # by inputs that include each file's ``(path, mtime, size)`` signature so a
@@ -407,6 +408,24 @@ def _metadata_label(namespace: str, key: str) -> str:
     }
     label = labels.get(normalized, key)
     return f"{label} ({namespace})"
+
+
+def _metadata_summary_label(key: str) -> str:
+    normalized = key.lower()
+    labels = {
+        "description": "Description",
+        "icmt": "Comment",
+        "ikey": "Keywords",
+        "inam": "Title",
+        "ignr": "Category",
+        "isbj": "Subject",
+        "title": "Title",
+        "comment": "Comment",
+        "keywords": "Keywords",
+        "category": "Category",
+        "subcategory": "Subcategory",
+    }
+    return labels.get(normalized, key)
 
 
 def _tag_label(field: str) -> str:
@@ -923,7 +942,11 @@ def _metadata_plan_index(plan_path: Path) -> sqlite3.Connection | None:
     if not isinstance(entries, list):
         return None
 
-    conn = sqlite3.connect(":memory:")
+    # The TUI warms this cache on a background thread, then reads from it on
+    # the UI thread. The connection is populated before publication and is
+    # read-only after that, so disabling the same-thread guard avoids a hard
+    # sqlite3.ProgrammingError on the first post-warm render.
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute(
         """
@@ -1137,103 +1160,26 @@ def metadata_workbench_rows(
             )
         rows = conn.execute(
             f"""
-            WITH embedded AS (
-                SELECT file_id,
-                       COUNT(*) AS embedded_fields,
-                       GROUP_CONCAT(
-                           CASE
-                               WHEN lower(key) = 'description' THEN 'Description'
-                               WHEN key = 'ICMT' OR lower(key) = 'comment' THEN 'Comment'
-                               WHEN key = 'IKEY' OR lower(key) = 'keywords' THEN 'Keywords'
-                               WHEN key = 'INAM' OR lower(key) = 'title' THEN 'Title'
-                               WHEN key = 'IGNR' OR lower(key) = 'category' THEN 'Category'
-                               WHEN key = 'ISBJ' THEN 'Subject'
-                               WHEN lower(key) = 'subcategory' THEN 'Subcategory'
-                               ELSE key
-                           END || ': ' ||
-                           SUBSTR(REPLACE(REPLACE(value, char(10), ' '), char(13), ' '), 1, 80),
-                           ' | '
-                       ) AS embedded_summary
-                FROM (
-                    SELECT mf.file_id, mf.namespace, mf.key, mf.value
-                    FROM metadata_fields mf
-                    WHERE mf.value IS NOT NULL AND TRIM(mf.value) != ''
-                      AND (
-                          lower(mf.key) IN ('description', 'comment', 'keywords', 'title', 'category', 'subcategory')
-                          OR mf.key IN ('ICMT', 'IKEY', 'INAM', 'IGNR', 'ISBJ')
-                      )
-                    ORDER BY
-                        CASE
-                            WHEN lower(mf.key) = 'description' THEN 0
-                            WHEN mf.key IN ('IKEY', 'ICMT') THEN 1
-                            WHEN mf.key IN ('INAM', 'ISBJ', 'IGNR') THEN 2
-                            WHEN lower(mf.key) IN ('title', 'comment', 'keywords', 'category', 'subcategory') THEN 3
-                            WHEN lower(mf.key) = 'originator' THEN 8
-                            WHEN lower(mf.key) = 'originatorreference' THEN 9
-                            ELSE 10
-                        END,
-                        mf.namespace,
-                        mf.key
-                )
-                GROUP BY file_id
-            ),
-            accepted AS (
-                SELECT file_id,
-                       COUNT(*) AS accepted_tags,
-                       GROUP_CONCAT(
-                           CASE lower(field)
-                               WHEN 'description' THEN 'Description'
-                               WHEN 'keywords' THEN 'Keywords'
-                               WHEN 'category' THEN 'Category'
-                               WHEN 'subcategory' THEN 'Subcategory'
-                               WHEN 'ucs_category' THEN 'UCS Category'
-                               WHEN 'ucs_subcategory' THEN 'UCS Subcategory'
-                               WHEN 'title' THEN 'Title'
-                               WHEN 'comment' THEN 'Comment'
-                               ELSE field
-                           END || ': ' || SUBSTR(REPLACE(REPLACE(value, char(10), ' '), char(13), ' '), 1, 80),
-                           ' | '
-                       ) AS accepted_summary
-                FROM (
-                    SELECT file_id, field, value
-                    FROM accepted_tags
-                    WHERE value IS NOT NULL AND TRIM(value) != ''
-                    ORDER BY
-                        CASE lower(field)
-                            WHEN 'description' THEN 0
-                            WHEN 'keywords' THEN 1
-                            WHEN 'category' THEN 2
-                            WHEN 'subcategory' THEN 3
-                            WHEN 'ucs_category' THEN 4
-                            WHEN 'ucs_subcategory' THEN 5
-                            WHEN 'title' THEN 6
-                            WHEN 'comment' THEN 7
-                            ELSE 20
-                        END,
-                        field,
-                        value
-                )
-                GROUP BY file_id
+            WITH selected AS (
+                SELECT f.id, f.path, f.filename,
+                       (SELECT COUNT(*) FROM metadata_fields mf WHERE mf.file_id = f.id) AS embedded_fields,
+                       (SELECT COUNT(*) FROM accepted_tags t WHERE t.file_id = f.id) AS accepted_tags,
+                       p.sort_order AS page_sort_order
+                FROM files f
+                LEFT JOIN _metadata_page_paths p ON p.path = f.path
+                WHERE {"p.path IS NOT NULL" if pending_only else f"1 = 1 {like_sql}"}
             )
-            SELECT f.id, f.path, f.filename,
-                   (SELECT COUNT(*) FROM metadata_fields mf WHERE mf.file_id = f.id) AS embedded_fields,
-                   COALESCE(e.embedded_summary, '') AS embedded_summary,
-                   (SELECT COUNT(*) FROM accepted_tags t WHERE t.file_id = f.id) AS accepted_tags,
-                   COALESCE(a.accepted_summary, '') AS accepted_summary
-            FROM files f
-            LEFT JOIN embedded e ON e.file_id = f.id
-            LEFT JOIN accepted a ON a.file_id = f.id
-            LEFT JOIN _metadata_page_paths p ON p.path = f.path
-            WHERE {"p.path IS NOT NULL" if pending_only else f"1 = 1 {like_sql}"}
+            SELECT id, path, filename, embedded_fields, accepted_tags
+            FROM selected
             ORDER BY
-                CASE WHEN p.path IS NOT NULL THEN p.sort_order ELSE 999999999 END,
+                CASE WHEN page_sort_order IS NOT NULL THEN page_sort_order ELSE 999999999 END,
                 CASE
-                    WHEN f.path IN (SELECT path FROM _pending_paths) THEN 0
-                    WHEN COALESCE(a.accepted_tags, 0) > 0 THEN 1
-                    WHEN COALESCE(e.embedded_fields, 0) > 0 THEN 2
+                    WHEN path IN (SELECT path FROM _pending_paths) THEN 0
+                    WHEN accepted_tags > 0 THEN 1
+                    WHEN embedded_fields > 0 THEN 2
                     ELSE 3
                 END,
-                f.path
+                path
             LIMIT ?
             """,
             (() if pending_only else params) + (limit,),
@@ -1241,6 +1187,8 @@ def metadata_workbench_rows(
         file_ids = tuple(int(row["id"]) for row in rows)
         embedded_items_by_id: dict[int, list[TagDisplayItem]] = {file_id: [] for file_id in file_ids}
         accepted_items_by_id: dict[int, list[TagDisplayItem]] = {file_id: [] for file_id in file_ids}
+        embedded_summary_by_id: dict[int, list[str]] = {file_id: [] for file_id in file_ids}
+        accepted_summary_by_id: dict[int, list[str]] = {file_id: [] for file_id in file_ids}
         if file_ids:
             # Caller currently bounds ``limit`` to 100 so this list stays
             # small, but hardening to a temp table now means a future caller
@@ -1275,6 +1223,11 @@ def metadata_workbench_rows(
                     mf.key
                 """
             ):
+                file_id = int(item["file_id"])
+                raw_value = str(item["value"] or "").replace("\n", " ").replace("\r", " ")
+                embedded_summary_by_id.setdefault(file_id, []).append(
+                    f"{_metadata_summary_label(str(item['key']))}: {raw_value[:80]}"
+                )
                 embedded_items_by_id.setdefault(int(item["file_id"]), []).append(
                     TagDisplayItem(
                         source="file",
@@ -1304,7 +1257,12 @@ def metadata_workbench_rows(
                     t.value
                 """
             ):
-                accepted_items_by_id.setdefault(int(item["file_id"]), []).append(
+                file_id = int(item["file_id"])
+                raw_value = str(item["value"] or "").replace("\n", " ").replace("\r", " ")
+                accepted_summary_by_id.setdefault(file_id, []).append(
+                    f"{_tag_label(str(item['field']))}: {raw_value[:80]}"
+                )
+                accepted_items_by_id.setdefault(file_id).append(
                     TagDisplayItem(
                         source="db",
                         field=str(item["field"]),
@@ -1333,8 +1291,8 @@ def metadata_workbench_rows(
         approved_count = sum(1 for item in visible_pending_items if item.status == "approved")
         rejected_count = sum(1 for item in visible_pending_items if item.status == "rejected")
         status = "pending" if pending_count or approved_count else ("accepted" if row["accepted_tags"] else "info")
-        embedded_summary = str(row["embedded_summary"] or "")
-        accepted_summary = str(row["accepted_summary"] or "")
+        embedded_summary = " | ".join(embedded_summary_by_id.get(file_id, []))
+        accepted_summary = " | ".join(accepted_summary_by_id.get(file_id, []))
         pending_summary = " | ".join(_pending_value_summary(item) for item in visible_pending_items[:4])
         tag_items = tuple(
             item
@@ -1617,9 +1575,13 @@ def metadata_findings(db_path: Path = DEFAULT_DB_PATH, *, plan_path: Path | None
     cache_key = ("metadata_findings", _file_signature(db_path), _file_signature(plan_path))
 
     def _build() -> list[FeatureFinding]:
+        # The headline row used to also compute duplicate-aware counts, but
+        # that join over the 278k-row metadata_fields table cost ~3s on every
+        # cold Metadata refresh. ``metadata_plan_duplicate_aware_counts``
+        # stays exported and cached so a future on-demand button can show the
+        # number without paying for it on every fill.
         queues = {queue.key: queue for queue in review_queues(db_path=db_path)}
         plan_counts = metadata_plan_counts(plan_path)
-        dup_counts = metadata_plan_duplicate_aware_counts(plan_path, db_path=db_path)
         pending = plan_counts.pending_add_entries
         approved = plan_counts.approved_add_entries
         if plan_counts.files_with_add_entries:
@@ -1634,12 +1596,6 @@ def metadata_findings(db_path: Path = DEFAULT_DB_PATH, *, plan_path: Path | None
             pending_detail = f"{plan_counts.add_entries:,} add entrie(s)"
         else:
             pending_detail = ""
-        dup_detail = (
-            f"{dup_counts.duplicate_add_entries:,} already on disk; "
-            f"{dup_counts.files_with_truly_pending:,} file(s) still need work"
-            if dup_counts.add_entries
-            else ""
-        )
         return [
             FeatureFinding("metadata", queues["missing_metadata"].label, queues["missing_metadata"].count, "review"),
             FeatureFinding("metadata", queues["missing_bext"].label, queues["missing_bext"].count, "review"),
@@ -1649,13 +1605,6 @@ def metadata_findings(db_path: Path = DEFAULT_DB_PATH, *, plan_path: Path | None
                 pending,
                 "pending" if pending else "clear",
                 pending_detail,
-            ),
-            FeatureFinding(
-                "metadata",
-                "Truly pending (after dedup)",
-                dup_counts.truly_pending_add_entries,
-                "pending" if dup_counts.truly_pending_add_entries else "clear",
-                dup_detail,
             ),
             FeatureFinding(
                 "metadata",

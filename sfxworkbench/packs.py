@@ -131,25 +131,40 @@ def _same_relative_paths(folders: list[_FolderStats]) -> bool:
 
 
 def _has_ancestor_pair(paths: list[Path]) -> bool:
-    for a, b in combinations(paths, 2):
-        if _is_relative_to(a, b) or _is_relative_to(b, a):
-            return True
+    all_parts = {path.parts for path in paths}
+    for path in paths:
+        parts = path.parts
+        for depth in range(1, len(parts)):
+            if parts[:depth] in all_parts:
+                return True
     return False
+
+
+def _same_signature_without_redundant_ancestors(folders: list[_FolderStats]) -> list[_FolderStats]:
+    """Return same-signature folders, dropping ancestors duplicated by descendants."""
+    kept: list[_FolderStats] = []
+    descendant_ancestor_parts: set[tuple[str, ...]] = set()
+    for folder in sorted(folders, key=lambda item: len(item.path.parts), reverse=True):
+        parts = folder.path.parts
+        if parts in descendant_ancestor_parts:
+            continue
+        kept.append(folder)
+        for depth in range(1, len(parts)):
+            descendant_ancestor_parts.add(parts[:depth])
+    return kept
 
 
 def _remove_redundant_ancestors(candidates: list[_FolderStats]) -> list[_FolderStats]:
     """Drop folders that only duplicate a descendant folder's exact signature."""
-    signatures = {folder.path: folder.signature() for folder in candidates}
-    kept: list[_FolderStats] = []
+    by_signature: dict[tuple[tuple[str, int], ...], list[_FolderStats]] = defaultdict(list)
     for folder in candidates:
-        has_same_descendant = any(
-            other.path != folder.path
-            and _is_relative_to(other.path, folder.path)
-            and signatures[other.path] == signatures[folder.path]
-            for other in candidates
-        )
-        if not has_same_descendant:
-            kept.append(folder)
+        by_signature[folder.signature()].append(folder)
+    kept: list[_FolderStats] = []
+    for folders in by_signature.values():
+        if len(folders) == 1:
+            kept.extend(folders)
+        else:
+            kept.extend(_same_signature_without_redundant_ancestors(folders))
     return kept
 
 
@@ -377,18 +392,23 @@ def _quarantine_target(path: Path, quarantine_dir: Path) -> Path:
         i += 1
 
 
-def _folder_files(db_path: Path, folder: Path) -> list[PackPlanFile]:
-    conn = get_connection(db_path)
-    rows = conn.execute(
-        f"""
-        SELECT path, md5, size_bytes
-        FROM files
-        WHERE {path_scope_filter()}
-        ORDER BY path
-        """,
-        path_scope_params(folder),
-    ).fetchall()
-    conn.close()
+def _folder_files(db_path: Path, folder: Path, conn=None) -> list[PackPlanFile]:
+    owns_connection = conn is None
+    if conn is None:
+        conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT path, md5, size_bytes
+            FROM files
+            WHERE {path_scope_filter()}
+            ORDER BY path
+            """,
+            path_scope_params(folder),
+        ).fetchall()
+    finally:
+        if owns_connection:
+            conn.close()
     files: list[PackPlanFile] = []
     for row in rows:
         path = Path(row["path"])
@@ -447,85 +467,89 @@ def build_pack_plan(
     errors: list[dict] = []
     planned_sources: set[str] = set()
 
-    for group in report.exact_groups:
-        folders = sorted(
-            group.folders,
-            key=lambda folder: priority_key(Path(folder.path), rules, include_extension=False),
-        )
-        if len(folders) < 2:
-            continue
-        keep = folders[0]
-        keep_protected_by = preservation_protected_by(Path(keep.path), rules)
-        keep_evidence = evidence(Path(keep.path), rules, include_extension=False)
-        for folder in folders[1:]:
-            protected_match = preservation_protected_by(Path(folder.path), rules)
-            action = "ignore" if protected_match is not None else "quarantine_folder"
-            reason = (
-                f"source folder is inside safe folder: {protected_match}"
-                if protected_match is not None
-                else "folder has the same indexed audio hashes as the keep folder"
+    conn = get_connection(db_path)
+    try:
+        for group in report.exact_groups:
+            folders = sorted(
+                group.folders,
+                key=lambda folder: priority_key(Path(folder.path), rules, include_extension=False),
             )
-            files = _folder_files(db_path, Path(folder.path))
-            entry = PackPlanEntry(
-                source_type="exact_duplicate_folder",
-                source_group_id=group.group_id,
-                folder_path=folder.path,
-                keep_folder_path=keep.path,
-                action=action,
-                reason=reason,
-                file_count=folder.file_count,
-                total_bytes=folder.total_bytes,
-                files=files,
-                protected_by=protected_match,
-                keep_protected_by=keep_protected_by,
-                preservation_evidence=evidence(Path(folder.path), rules, include_extension=False),
-                keep_preservation_evidence=keep_evidence,
-            )
-            entries.append(entry)
-            if action == "quarantine_folder":
-                planned_sources.add(folder.path)
+            if len(folders) < 2:
+                continue
+            keep = folders[0]
+            keep_protected_by = preservation_protected_by(Path(keep.path), rules)
+            keep_evidence = evidence(Path(keep.path), rules, include_extension=False)
+            for folder in folders[1:]:
+                protected_match = preservation_protected_by(Path(folder.path), rules)
+                action = "ignore" if protected_match is not None else "quarantine_folder"
+                reason = (
+                    f"source folder is inside safe folder: {protected_match}"
+                    if protected_match is not None
+                    else "folder has the same indexed audio hashes as the keep folder"
+                )
+                files = _folder_files(db_path, Path(folder.path), conn=conn)
+                entry = PackPlanEntry(
+                    source_type="exact_duplicate_folder",
+                    source_group_id=group.group_id,
+                    folder_path=folder.path,
+                    keep_folder_path=keep.path,
+                    action=action,
+                    reason=reason,
+                    file_count=folder.file_count,
+                    total_bytes=folder.total_bytes,
+                    files=files,
+                    protected_by=protected_match,
+                    keep_protected_by=keep_protected_by,
+                    preservation_evidence=evidence(Path(folder.path), rules, include_extension=False),
+                    keep_preservation_evidence=keep_evidence,
+                )
+                entries.append(entry)
+                if action == "quarantine_folder":
+                    planned_sources.add(folder.path)
 
-    for candidate in report.overlap_candidates:
-        source, keep = _choose_overlap_source(candidate)
-        protected_match = preservation_protected_by(Path(source.path), rules)
-        keep_protected_by = preservation_protected_by(Path(keep.path), rules)
-        keep_evidence = evidence(Path(keep.path), rules, include_extension=False)
-        action = "quarantine_folder" if candidate.smaller_folder_coverage >= 1.0 else "review"
-        reason = (
-            "smaller folder is fully covered by the keep folder"
-            if action == "quarantine_folder"
-            else "folder overlap is not complete; review unique files before taking action"
-        )
-        if protected_match is not None:
-            action = "ignore"
-            reason = f"source folder is inside safe folder: {protected_match}"
-        if source.path in planned_sources:
-            action = "ignore"
-            reason = "folder is already planned by an exact duplicate group"
-        files = _folder_files(db_path, Path(source.path))
-        entries.append(
-            PackPlanEntry(
-                source_type="pack_overlap",
-                source_group_id=candidate.group_id,
-                folder_path=source.path,
-                keep_folder_path=keep.path,
-                action=action,
-                reason=reason,
-                file_count=source.file_count,
-                total_bytes=source.total_bytes,
-                shared_files=candidate.shared_files,
-                shared_bytes=candidate.shared_bytes,
-                smaller_folder_coverage=candidate.smaller_folder_coverage,
-                larger_folder_coverage=candidate.larger_folder_coverage,
-                files=files,
-                protected_by=protected_match,
-                keep_protected_by=keep_protected_by,
-                preservation_evidence=evidence(Path(source.path), rules, include_extension=False),
-                keep_preservation_evidence=keep_evidence,
+        for candidate in report.overlap_candidates:
+            source, keep = _choose_overlap_source(candidate)
+            protected_match = preservation_protected_by(Path(source.path), rules)
+            keep_protected_by = preservation_protected_by(Path(keep.path), rules)
+            keep_evidence = evidence(Path(keep.path), rules, include_extension=False)
+            action = "quarantine_folder" if candidate.smaller_folder_coverage >= 1.0 else "review"
+            reason = (
+                "smaller folder is fully covered by the keep folder"
+                if action == "quarantine_folder"
+                else "folder overlap is not complete; review unique files before taking action"
             )
-        )
-        if action == "quarantine_folder":
-            planned_sources.add(source.path)
+            if protected_match is not None:
+                action = "ignore"
+                reason = f"source folder is inside safe folder: {protected_match}"
+            if source.path in planned_sources:
+                action = "ignore"
+                reason = "folder is already planned by an exact duplicate group"
+            files = _folder_files(db_path, Path(source.path), conn=conn)
+            entries.append(
+                PackPlanEntry(
+                    source_type="pack_overlap",
+                    source_group_id=candidate.group_id,
+                    folder_path=source.path,
+                    keep_folder_path=keep.path,
+                    action=action,
+                    reason=reason,
+                    file_count=source.file_count,
+                    total_bytes=source.total_bytes,
+                    shared_files=candidate.shared_files,
+                    shared_bytes=candidate.shared_bytes,
+                    smaller_folder_coverage=candidate.smaller_folder_coverage,
+                    larger_folder_coverage=candidate.larger_folder_coverage,
+                    files=files,
+                    protected_by=protected_match,
+                    keep_protected_by=keep_protected_by,
+                    preservation_evidence=evidence(Path(source.path), rules, include_extension=False),
+                    keep_preservation_evidence=keep_evidence,
+                )
+            )
+            if action == "quarantine_folder":
+                planned_sources.add(source.path)
+    finally:
+        conn.close()
 
     plan = PackPlan(
         generated_at=_now_iso(),
@@ -635,22 +659,27 @@ def _validate_plan_file(file: PackPlanFile) -> str | None:
     return None
 
 
-def _indexed_folder_paths(db_path: Path, folder: Path) -> set[str]:
-    conn = get_connection(db_path)
-    rows = conn.execute(
-        f"""
-        SELECT path
-        FROM files
-        WHERE {path_scope_filter()}
-        ORDER BY path
-        """,
-        path_scope_params(folder),
-    ).fetchall()
-    conn.close()
+def _indexed_folder_paths(db_path: Path, folder: Path, conn=None) -> set[str]:
+    owns_connection = conn is None
+    if conn is None:
+        conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT path
+            FROM files
+            WHERE {path_scope_filter()}
+            ORDER BY path
+            """,
+            path_scope_params(folder),
+        ).fetchall()
+    finally:
+        if owns_connection:
+            conn.close()
     return {row["path"] for row in rows}
 
 
-def _validate_pack_entry(entry: PackPlanEntry, db_path: Path | None = None) -> list[dict]:
+def _validate_pack_entry(entry: PackPlanEntry, db_path: Path | None = None, conn=None) -> list[dict]:
     errors: list[dict] = []
     folder = Path(entry.folder_path)
     keep = Path(entry.keep_folder_path)
@@ -662,7 +691,7 @@ def _validate_pack_entry(entry: PackPlanEntry, db_path: Path | None = None) -> l
         return errors
     planned_paths = {file.path for file in entry.files}
     if db_path is not None:
-        indexed_paths = _indexed_folder_paths(db_path, folder)
+        indexed_paths = _indexed_folder_paths(db_path, folder, conn=conn)
         for path in sorted(indexed_paths - planned_paths):
             errors.append({"path": path, "error": "indexed file was not in plan"})
     for file in entry.files:
@@ -722,51 +751,56 @@ def apply_pack_plan(
 
     applied: list[PackPlanEntry] = []
     root = Path(plan.root)
-    for index, entry in enumerate(plan.entries):
-        if entry.action != "quarantine_folder":
-            continue
-        if require_reviewed and index not in approved:
-            result.errors.append({"path": entry.folder_path, "error": f"group {index + 1} is not approved"})
-            continue
-        protected_match = preservation_protected_by(Path(entry.folder_path), effective_rules)
-        if protected_match is not None:
-            result.errors.append(
-                {
-                    "path": entry.folder_path,
-                    "safe_folder": protected_match,
-                    "error": "source folder is protected by safe folder",
-                }
-            )
-            continue
-        validation_errors = _validate_pack_entry(entry, db_path=db_path)
-        if validation_errors:
-            result.errors.extend(validation_errors)
-            continue
-        source = Path(entry.folder_path)
-        result.files_moved += len(entry.files) if dry_run else 0
-        result.bytes_quarantined += entry.total_bytes if dry_run else 0
-        if dry_run:
-            result.quarantined += 1
-            if not quiet:
-                console.print(f"[dim]Would quarantine folder: {source}[/dim]")
-            continue
+    validation_conn = get_connection(db_path) if dry_run and db_path is not None else None
+    try:
+        for index, entry in enumerate(plan.entries):
+            if entry.action != "quarantine_folder":
+                continue
+            if require_reviewed and index not in approved:
+                result.errors.append({"path": entry.folder_path, "error": f"group {index + 1} is not approved"})
+                continue
+            protected_match = preservation_protected_by(Path(entry.folder_path), effective_rules)
+            if protected_match is not None:
+                result.errors.append(
+                    {
+                        "path": entry.folder_path,
+                        "safe_folder": protected_match,
+                        "error": "source folder is protected by safe folder",
+                    }
+                )
+                continue
+            validation_errors = _validate_pack_entry(entry, db_path=db_path, conn=validation_conn)
+            if validation_errors:
+                result.errors.extend(validation_errors)
+                continue
+            source = Path(entry.folder_path)
+            result.files_moved += len(entry.files) if dry_run else 0
+            result.bytes_quarantined += entry.total_bytes if dry_run else 0
+            if dry_run:
+                result.quarantined += 1
+                if not quiet:
+                    console.print(f"[dim]Would quarantine folder: {source}[/dim]")
+                continue
 
-        assert quarantine_dir is not None
-        target = _quarantine_target(source, quarantine_dir)
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(source), str(target))
-            applied_entry = entry.model_copy(update={"quarantine_path": str(target)})
-            applied.append(applied_entry)
-            result.quarantined += 1
-            result.files_moved += len(entry.files)
-            result.bytes_quarantined += entry.total_bytes
-            if db_path is not None:
-                _update_quarantined_rows(db_path, source, target, root)
-            if not quiet:
-                console.print(f"[green]Quarantined folder:[/green] {source} -> {target}")
-        except OSError as e:
-            result.errors.append({"path": str(source), "target": str(target), "error": str(e)})
+            assert quarantine_dir is not None
+            target = _quarantine_target(source, quarantine_dir)
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(source), str(target))
+                applied_entry = entry.model_copy(update={"quarantine_path": str(target)})
+                applied.append(applied_entry)
+                result.quarantined += 1
+                result.files_moved += len(entry.files)
+                result.bytes_quarantined += entry.total_bytes
+                if db_path is not None:
+                    _update_quarantined_rows(db_path, source, target, root)
+                if not quiet:
+                    console.print(f"[green]Quarantined folder:[/green] {source} -> {target}")
+            except OSError as e:
+                result.errors.append({"path": str(source), "target": str(target), "error": str(e)})
+    finally:
+        if validation_conn is not None:
+            validation_conn.close()
 
     if not dry_run and applied:
         if log_path is None:

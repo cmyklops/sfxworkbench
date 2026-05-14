@@ -206,7 +206,10 @@ def test_read_audio_info_uses_optional_wavinfo(monkeypatch: pytest.MonkeyPatch, 
 
     monkeypatch.setitem(sys.modules, "wavinfo", types.SimpleNamespace(WavInfoReader=FakeWavInfoReader))
 
-    from sfxworkbench.audio import read_audio_info
+    from sfxworkbench import audio
+
+    audio._load_wavinfo.cache_clear()
+    read_audio_info = audio.read_audio_info
 
     info = read_audio_info(wav)
 
@@ -220,3 +223,28 @@ def test_read_audio_info_uses_optional_wavinfo(monkeypatch: pytest.MonkeyPatch, 
     assert info.has_adm is False
     assert info.has_sampler is False
     assert "wavinfo" in info.metadata_sources
+
+
+def test_missing_wavinfo_import_is_cached(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    wav = _make_wav(tmp_path / "metadata.wav")
+    monkeypatch.delitem(sys.modules, "wavinfo", raising=False)
+
+    from sfxworkbench import audio
+
+    audio._load_wavinfo.cache_clear()
+    real_import = __import__
+    attempts = 0
+
+    def counting_import(name, globals=None, locals=None, fromlist=(), level=0):
+        nonlocal attempts
+        if name == "wavinfo":
+            attempts += 1
+            raise ImportError("fixture: wavinfo is unavailable")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr("builtins.__import__", counting_import)
+
+    assert audio._read_wavinfo_metadata(wav) == {"metadata_sources": []}
+    assert audio._read_wavinfo_metadata(wav) == {"metadata_sources": []}
+    assert attempts == 1
+    audio._load_wavinfo.cache_clear()

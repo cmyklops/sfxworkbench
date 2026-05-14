@@ -36,7 +36,7 @@ from sfxworkbench.models import (
     SimilaritySegmentsReport,
     SimilaritySegmentsSummary,
 )
-from sfxworkbench.utils import atomic_write_json
+from sfxworkbench.utils import atomic_write_json, progress_interval
 
 console = Console()
 
@@ -703,6 +703,13 @@ def crawl_similarity_descriptors(
     total = len(rows)
     if progress_callback is not None:
         progress_callback("crawling", 0, total, f"Found {total:,} indexed audio file(s)")
+    report_every = progress_interval(total)
+
+    def report_progress(completed: int, message: str, *, force: bool = False) -> None:
+        if progress_callback is None:
+            return
+        if force or completed % report_every == 0 or completed == total:
+            progress_callback("crawling", completed, total, message)
 
     summary = SimilarityCrawlSummary(total_files=len(rows))
     descriptors: list[SimilarityDescriptor] = []
@@ -731,20 +738,17 @@ def crawl_similarity_descriptors(
                 row, existing, max_duration_s=max_duration_s, parameters_hash=parameters_hash
             ):
                 summary.skipped += 1
-                if progress_callback is not None:
-                    progress_callback("crawling", processed, total, f"Skipped current descriptor: {row['filename']}")
+                report_progress(processed, f"Skipped current descriptor: {row['filename']}")
                 continue
 
             if max_files is not None and summary.analyzed >= max_files:
                 summary.pending += 1
-                if progress_callback is not None:
-                    progress_callback("crawling", processed, total, f"Deferred stale descriptor: {row['filename']}")
+                report_progress(processed, f"Deferred stale descriptor: {row['filename']}")
                 continue
 
             path = Path(row["path"])
             generated_at = _utc_now()
-            if progress_callback is not None:
-                progress_callback("crawling", processed - 1, total, f"Analyzing {row['filename']}")
+            report_progress(processed - 1, f"Analyzing {row['filename']}", force=processed == 1)
             if not path.exists():
                 metrics = {"error": "file not found"}
                 segments = []
@@ -783,8 +787,7 @@ def crawl_similarity_descriptors(
                 pending = 0
             if throttle_ms:
                 time.sleep(throttle_ms / 1000.0)
-            if progress_callback is not None:
-                progress_callback("crawling", processed, total, f"Analyzed {row['filename']}")
+            report_progress(processed, f"Analyzed {row['filename']}")
     except KeyboardInterrupt:
         status = "interrupted"
         stop_reason = "keyboard_interrupt"

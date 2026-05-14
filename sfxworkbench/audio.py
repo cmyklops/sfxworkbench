@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import struct
 from collections.abc import Mapping, Sequence
+from functools import lru_cache
 from pathlib import Path
 
 from sfxworkbench.models import AudioInfo
@@ -135,11 +136,20 @@ def _scope_has_payload(scope: object) -> bool:
     return bool(scope)
 
 
-def _read_wavinfo_metadata(path: Path) -> dict[str, object]:
-    """Read optional extended WAV metadata flags via wavinfo when available."""
+@lru_cache(maxsize=1)
+def _load_wavinfo():
+    """Return the optional wavinfo module, caching absence as well as success."""
     try:
         import wavinfo
     except ImportError:
+        return None
+    return wavinfo
+
+
+def _read_wavinfo_metadata(path: Path) -> dict[str, object]:
+    """Read optional extended WAV metadata flags via wavinfo when available."""
+    wavinfo = _load_wavinfo()
+    if wavinfo is None:
         return {"metadata_sources": []}
 
     try:

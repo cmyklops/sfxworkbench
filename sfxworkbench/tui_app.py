@@ -763,9 +763,21 @@ def run_tui(
             if not self.is_mounted:
                 return
             compact = self._compact
-            if compact != self._last_compact:
-                self._last_compact = compact
-                self._refresh()
+            if compact == self._last_compact:
+                return
+            self._last_compact = compact
+            # Crossing the 105-width threshold flips the strips' clip widths
+            # and the Files tab's column set. Nothing else depends on the
+            # compact flag, so a narrow re-render is enough — calling
+            # ``_refresh()`` here used to mark every tab dirty and refill the
+            # active one, which on a 500-row Metadata table meant a ~500ms
+            # freeze for every accidental terminal resize.
+            self._fill_status_strip()
+            self._fill_operation_strip()
+            self._fill_action_result()
+            self._dirty_tabs.add("files")
+            if self._active_feature() == "files":
+                self._fill_files()
 
         @property
         def _compact(self) -> bool:
@@ -1391,6 +1403,9 @@ def run_tui(
             self.query_one("#library-path-input", Input).value = (
                 "" if self._library_path == "PATH" else self._library_path
             )
+            # Different library = different DB and report dir; every cached
+            # adapter result is now stale.
+            clear_adapter_cache()
             self._refresh()
 
         def _start_action(self, action: str, label: str, run: Callable[[], ActionResult]) -> None:
@@ -1663,6 +1678,11 @@ def run_tui(
             # and invalidate every tab since we can't know what partial
             # state landed.
             dirty = result.refresh if result.refresh else None
+            # Drop the session adapter cache after every action: this is the
+            # only place mutations actually happen, so it's the only place we
+            # need to bust cached findings/rows. Resize and the manual ``r``
+            # refresh leave the cache intact so they stay snappy.
+            clear_adapter_cache()
             self._refresh(dirty)
             self._fill_action_result()
 
@@ -1679,10 +1699,11 @@ def run_tui(
             # behavior used by startup, resize, library-path change, and the
             # manual refresh binding.
             #
-            # Adapter caches survive tab switches but not actions: any apply,
-            # scan, or clean run can mutate the DB or active plan, so we drop
-            # the cache here before the strips and active tab re-read.
-            clear_adapter_cache()
+            # Cache invalidation lives in ``_handle_completion`` (after a real
+            # action runs) and ``_set_library_path`` (different library = full
+            # invalidation), so a resize-induced ``_refresh()`` does not pay
+            # the cold-path cost. File-signature keys auto-invalidate any
+            # cached entry whose underlying file mutated.
             self._fill_status_strip()
             self._fill_operation_strip()
             self._fill_action_result()
@@ -2071,6 +2092,10 @@ def run_tui(
                     "No files indexed yet. Use Scan Library to populate this view."
                 )
                 return
+            # Build every row up-front and submit them in one ``add_rows`` call
+            # so Textual's reactive system fires one batch update instead of
+            # 500 separate row mutations. Saves ~10× on the populate path.
+            built_rows: list[tuple] = []
             for row in self._file_rows:
                 # Tier 3.8: prepend a marker glyph to the Filename column when
                 # this row is in the user's selection set. Sort keys read
@@ -2080,30 +2105,36 @@ def run_tui(
                 filename_display = marker + row.filename
                 if self._compact:
                     meta = ("B" if row.has_bext else "-") + ("I" if row.has_ixml else "-")
-                    table.add_row(
-                        filename_display,
-                        _fmt(row.sample_rate),
-                        _fmt(row.channels),
-                        meta,
-                        _fmt(row.accepted_tag_count),
-                        _fmt(row.issue_count),
-                        _clip_middle(row.path),
+                    built_rows.append(
+                        (
+                            filename_display,
+                            _fmt(row.sample_rate),
+                            _fmt(row.channels),
+                            meta,
+                            _fmt(row.accepted_tag_count),
+                            _fmt(row.issue_count),
+                            _clip_middle(row.path),
+                        )
                     )
                 else:
-                    table.add_row(
-                        filename_display,
-                        row.extension or "",
-                        _fmt(row.sample_rate),
-                        _fmt(row.bit_depth),
-                        _fmt(row.channels),
-                        "yes" if row.has_bext else "no",
-                        "yes" if row.has_ixml else "no",
-                        "yes" if row.is_ucs else "no",
-                        _fmt(row.accepted_tag_count),
-                        _fmt(row.metadata_field_count),
-                        _fmt(row.issue_count),
-                        _clip_middle(row.path),
+                    built_rows.append(
+                        (
+                            filename_display,
+                            row.extension or "",
+                            _fmt(row.sample_rate),
+                            _fmt(row.bit_depth),
+                            _fmt(row.channels),
+                            "yes" if row.has_bext else "no",
+                            "yes" if row.has_ixml else "no",
+                            "yes" if row.is_ucs else "no",
+                            _fmt(row.accepted_tag_count),
+                            _fmt(row.metadata_field_count),
+                            _fmt(row.issue_count),
+                            _clip_middle(row.path),
+                        )
                     )
+            if built_rows:
+                table.add_rows(built_rows)
             self._show_file_detail(0)
 
         def _show_file_detail(self, row_index: int | None) -> None:

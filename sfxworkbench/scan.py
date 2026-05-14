@@ -15,6 +15,7 @@ from sfxworkbench.db import get_connection
 from sfxworkbench.metadata_fields import replace_metadata_fields
 from sfxworkbench.models import ScanResult
 from sfxworkbench.ucs import looks_ucs
+from sfxworkbench.utils import progress_interval
 
 console = Console()
 
@@ -90,6 +91,7 @@ def scan_library(
         console.print(f"Found [yellow]{total:,}[/yellow] audio files.")
     if progress_callback is not None:
         progress_callback("scanning", 0, total, f"Found {total:,} audio files")
+    report_every = progress_interval(total)
 
     result = ScanResult(total=total)
     now_str = datetime.now(UTC).isoformat()
@@ -227,7 +229,7 @@ def scan_library(
                 cancelled = True
                 break
             processed += 1
-            if progress_callback is not None:
+            if progress_callback is not None and (processed % report_every == 0 or processed == total):
                 progress_callback("scanning", processed, total, f.name)
     else:
         with progress:
@@ -243,7 +245,7 @@ def scan_library(
                     break
                 progress.advance(task)
                 processed += 1
-                if progress_callback is not None:
+                if progress_callback is not None and (processed % report_every == 0 or processed == total):
                     progress_callback("scanning", processed, total, f.name)
 
     # Final flush + scan_meta update

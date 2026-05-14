@@ -752,7 +752,7 @@ def build_metadata_review_screen(plan_path: Path, *, db_path: Path = DEFAULT_DB_
             if not self.items:
                 table.add_row(_state_token("info"), f"No pending tag suggestions in {plan_path.name}", *(["—"] * 7))
                 return
-            visible_index = 0
+            built: list[tuple] = []
             for item in self._sorted_items_for_display():
                 if not self._item_passes_filters(item):
                     continue
@@ -766,12 +766,16 @@ def build_metadata_review_screen(plan_path: Path, *, db_path: Path = DEFAULT_DB_
                     elif status == "rejected":
                         rejected += 1
                 counts = [pending, approved, rejected]
+                visible_index = len(built)
                 self._counts_by_path[item.path] = counts
                 self._row_index_by_path[item.path] = visible_index
                 self._visible_row_indices.append(self.items.index(item))
-                table.add_row(*self._file_row_cells(item, counts))
-                visible_index += 1
-            if visible_index == 0:
+                built.append(self._file_row_cells(item, counts))
+            if built:
+                # One reactive update for the whole batch beats N row mutations
+                # at 100+ row scale.
+                table.add_rows(built)
+            else:
                 table.add_row(_state_token("info"), "No rows match the active filters.", *(["—"] * 7))
 
         def _refresh_file_row(self, path: str, previous_status: str, new_status: str) -> None:
