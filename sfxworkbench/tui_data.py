@@ -1158,6 +1158,20 @@ def metadata_workbench_rows(
                 "INSERT OR IGNORE INTO _pending_paths (path) VALUES (?)",
                 ((path,) for path in pending_by_path),
             )
+        if pending_only:
+            # Drive the join from the ≤500-row page table so the per-row
+            # COUNT subqueries fire ~500 times, not once per row in ``files``.
+            # ``files.path`` is UNIQUE, so the lookup is index-backed.
+            selected_sql = """
+                FROM _metadata_page_paths p
+                JOIN files f ON f.path = p.path
+            """
+        else:
+            selected_sql = f"""
+                FROM files f
+                LEFT JOIN _metadata_page_paths p ON p.path = f.path
+                WHERE 1 = 1 {like_sql}
+            """
         rows = conn.execute(
             f"""
             WITH selected AS (
@@ -1165,9 +1179,7 @@ def metadata_workbench_rows(
                        (SELECT COUNT(*) FROM metadata_fields mf WHERE mf.file_id = f.id) AS embedded_fields,
                        (SELECT COUNT(*) FROM accepted_tags t WHERE t.file_id = f.id) AS accepted_tags,
                        p.sort_order AS page_sort_order
-                FROM files f
-                LEFT JOIN _metadata_page_paths p ON p.path = f.path
-                WHERE {"p.path IS NOT NULL" if pending_only else f"1 = 1 {like_sql}"}
+                {selected_sql}
             )
             SELECT id, path, filename, embedded_fields, accepted_tags
             FROM selected

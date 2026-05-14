@@ -121,9 +121,13 @@ def _field_rank(field: str) -> tuple[int, str]:
     return (_SEARCH_FIELD_RANKS.get(field.casefold(), 50), field.casefold())
 
 
-def _metadata_context_rows_from_db(path: str, db_path: Path) -> tuple[MetadataContextRow, ...]:
+def _metadata_context_rows_from_db(
+    path: str, db_path: Path, *, conn: object | None = None
+) -> tuple[MetadataContextRow, ...]:
     """Return embedded, accepted, and technical metadata rows for one file."""
-    conn = get_connection(db_path)
+    owns_conn = conn is None
+    if conn is None:
+        conn = get_connection(db_path)
     try:
         file_row = conn.execute(
             """
@@ -161,7 +165,8 @@ def _metadata_context_rows_from_db(path: str, db_path: Path) -> tuple[MetadataCo
             (file_id,),
         ).fetchall()
     finally:
-        conn.close()
+        if owns_conn:
+            conn.close()
 
     rows: list[MetadataContextRow] = []
     for row in embedded_rows:
@@ -229,10 +234,12 @@ def _metadata_context_rows_from_db(path: str, db_path: Path) -> tuple[MetadataCo
     )
 
 
-def build_metadata_context(path: str, db_path: Path = DEFAULT_DB_PATH) -> tuple[MetadataContextRow, ...]:
+def build_metadata_context(
+    path: str, db_path: Path = DEFAULT_DB_PATH, *, conn: object | None = None
+) -> tuple[MetadataContextRow, ...]:
     """Return non-editable context rows for the metadata review right pane."""
     try:
-        return _metadata_context_rows_from_db(path, db_path)
+        return _metadata_context_rows_from_db(path, db_path, conn=conn)
     except Exception:
         return ()
 
@@ -530,6 +537,10 @@ def build_metadata_review_screen(plan_path: Path, *, db_path: Path = DEFAULT_DB_
             # screen is open, so cache it per file to keep approve/reject
             # keystrokes local to the table state.
             self._context_by_path: dict[str, tuple[MetadataContextRow, ...]] = {}
+            # Single shared debounce timer for the three filter inputs so a
+            # burst of keystrokes triggers one ``_refresh_files`` rebuild
+            # instead of one per character.
+            self._filter_debounce_timer = None
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=False)
@@ -596,6 +607,20 @@ def build_metadata_review_screen(plan_path: Path, *, db_path: Path = DEFAULT_DB_
             self.candidate_cursor = 0
             self._counts_by_path.clear()
             self._row_index_by_path.clear()
+            # Pre-warm the context cache for every file in the page using one
+            # shared connection. Arrow-key navigation hits ``_refresh_candidates``
+            # which used to call ``build_metadata_context`` on first selection
+            # — that opened a fresh connection and ran 3 queries per file.
+            self._context_by_path = {}
+            if self.items:
+                conn = get_connection(db_path)
+                try:
+                    for item in self.items:
+                        self._context_by_path[item.path] = build_metadata_context(
+                            item.path, db_path=db_path, conn=conn
+                        )
+                finally:
+                    conn.close()
 
         def _candidate_text(self, candidate: TagCandidate, status: str) -> Text:
             return _tag_text(candidate.proposed_value, candidate.field, status=status, source=candidate.source)
@@ -824,29 +849,40 @@ def build_metadata_review_screen(plan_path: Path, *, db_path: Path = DEFAULT_DB_
             if current is None:
                 table.add_row(_state_token("info"), "", "No pending tag suggestions", "", "", "")
                 return
+            built: list[tuple] = []
             for candidate in self._sorted_candidates_for_display(current):
                 status = self._effective_status(current.path, candidate)
-                table.add_row(
-                    _state_token(status),
-                    candidate.field,
-                    self._candidate_text(candidate, status),
-                    candidate.current_value or "",
-                    candidate.diff_marker,
-                    f"{candidate.confidence:.2f}",
+                built.append(
+                    (
+                        _state_token(status),
+                        candidate.field,
+                        self._candidate_text(candidate, status),
+                        candidate.current_value or "",
+                        candidate.diff_marker,
+                        f"{candidate.confidence:.2f}",
+                    )
                 )
-            context_rows = self._context_by_path.setdefault(
-                current.path,
-                build_metadata_context(current.path, db_path=db_path),
-            )
+            # Contexts are pre-warmed by ``_load_page``; fall back to a fresh
+            # build only if the file isn't in the page (defensive).
+            context_rows = self._context_by_path.get(current.path)
+            if context_rows is None:
+                context_rows = build_metadata_context(current.path, db_path=db_path)
+                self._context_by_path[current.path] = context_rows
             for row in context_rows:
-                table.add_row(
-                    _state_token("accepted" if row.origin == "accepted" else "info"),
-                    row.field,
-                    row.value,
-                    "",
-                    "",
-                    "" if row.confidence is None else f"{row.confidence:.2f}",
+                built.append(
+                    (
+                        _state_token("accepted" if row.origin == "accepted" else "info"),
+                        row.field,
+                        row.value,
+                        "",
+                        "",
+                        "" if row.confidence is None else f"{row.confidence:.2f}",
+                    )
                 )
+            if built:
+                # One reactive update for the whole batch beats ~60 mutations
+                # on every arrow-key navigation.
+                table.add_rows(built)
 
         def _approval_key(self, path: str, candidate: TagCandidate) -> tuple[str, str, str]:
             return (path, candidate.field, candidate.proposed_value)
@@ -886,7 +922,11 @@ def build_metadata_review_screen(plan_path: Path, *, db_path: Path = DEFAULT_DB_
                 self._filter_source = event.value
             else:
                 return
-            self._refresh_files()
+            if self._filter_debounce_timer is not None:
+                self._filter_debounce_timer.stop()
+            # 150ms is short enough that the rebuild feels live but long
+            # enough that a typing burst collapses to one rebuild.
+            self._filter_debounce_timer = self.set_timer(0.15, self._refresh_files)
 
         def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
             column_index = int(getattr(event, "column_index", -1))

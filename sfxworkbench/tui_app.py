@@ -1952,39 +1952,46 @@ def run_tui(
             tag plan on a real library. Painting "Loading…" immediately and
             warming the cache in a background thread keeps the keyboard
             responsive; once the thread returns, the cached values are served
-            instantly from the main-thread render path.
+            instantly from the main-thread render path. ``Random Pending`` is
+            uncacheable (the ordering varies per fetch), so the warm thread
+            hands its result back via ``_metadata_prewarmed_rows`` instead.
             """
             import threading
 
             from sfxworkbench.tui_screens import metadata_tab
 
             plan_path = self._report_dir / "metadata_tag_plan.json"
-            findings_key = (
-                "metadata_findings",
-                _data_file_signature(self.db_path),
-                _data_file_signature(plan_path),
-            )
-            rows_key = (
-                "metadata_workbench_rows",
-                _data_file_signature(self.db_path),
-                _data_file_signature(plan_path) if plan_path is not None else ("", 0.0, 0),
-                getattr(self, "_metadata_query", ""),
-                int(getattr(self, "_metadata_page_size", 500)),
-                int(getattr(self, "_metadata_offset", 0)),
-                True,
-            )
-            if getattr(self, "_metadata_random_pending", False) or (
-                _data_cache_get(findings_key) is not None and _data_cache_get(rows_key) is not None
-            ):
-                metadata_tab.fill(self)
-                self._dirty_tabs.discard("metadata")
-                return
+            random_pending = getattr(self, "_metadata_random_pending", False)
+            if not random_pending:
+                findings_key = (
+                    "metadata_findings",
+                    _data_file_signature(self.db_path),
+                    _data_file_signature(plan_path),
+                )
+                rows_key = (
+                    "metadata_workbench_rows",
+                    _data_file_signature(self.db_path),
+                    _data_file_signature(plan_path) if plan_path is not None else ("", 0.0, 0),
+                    getattr(self, "_metadata_query", ""),
+                    int(getattr(self, "_metadata_page_size", 500)),
+                    int(getattr(self, "_metadata_offset", 0)),
+                    True,
+                )
+                if (
+                    _data_cache_get(findings_key) is not None
+                    and _data_cache_get(rows_key) is not None
+                ):
+                    metadata_tab.fill(self)
+                    self._dirty_tabs.discard("metadata")
+                    return
 
             try:
                 table = self.query_one("#metadata-rows-table", DataTable)
                 table.clear(columns=True)
                 table.add_columns("Status")
-                table.add_row("Loading prioritized metadata rows…")
+                table.add_row(
+                    "Loading random pending…" if random_pending else "Loading prioritized metadata rows…"
+                )
             except NoMatches:
                 pass
 
@@ -1997,19 +2004,24 @@ def run_tui(
                 from sfxworkbench.tui_data import metadata_findings as _mf
                 from sfxworkbench.tui_data import metadata_workbench_rows as _mw
 
+                prewarmed: list | None = None
                 try:
                     _mf(db_path=db_path_local, plan_path=plan_path)
-                    _mw(
+                    result = _mw(
                         db_path=db_path_local,
                         plan_path=plan_path,
                         query=query,
                         limit=page_size,
                         offset=offset,
-                        random_pending=False,
+                        random_pending=random_pending,
                         pending_only=True,
                     )
+                    if random_pending:
+                        prewarmed = list(result)
                 except Exception:  # pragma: no cover - defensive thread boundary
                     pass
+                if random_pending:
+                    self._metadata_prewarmed_rows = prewarmed
                 self.call_from_thread(self._fill_metadata_after_warm)
 
             threading.Thread(target=_warm, daemon=True).start()

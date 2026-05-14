@@ -66,15 +66,23 @@ def fill(app) -> None:
             ("Filename", "filename", 56),
         ),
     )
-    rows = metadata_workbench_rows(
-        db_path=app.db_path,
-        plan_path=plan_path,
-        query=getattr(app, "_metadata_query", ""),
-        limit=getattr(app, "_metadata_page_size", 500),
-        offset=getattr(app, "_metadata_offset", 0),
-        random_pending=getattr(app, "_metadata_random_pending", False),
-        pending_only=True,
-    )
+    # ``Random Pending`` results can't be cached (random order varies per
+    # fetch), so the warm thread hands them back via ``_metadata_prewarmed_rows``
+    # instead of going through the adapter cache.
+    prewarmed = getattr(app, "_metadata_prewarmed_rows", None)
+    if prewarmed is not None:
+        rows = prewarmed
+        app._metadata_prewarmed_rows = None
+    else:
+        rows = metadata_workbench_rows(
+            db_path=app.db_path,
+            plan_path=plan_path,
+            query=getattr(app, "_metadata_query", ""),
+            limit=getattr(app, "_metadata_page_size", 500),
+            offset=getattr(app, "_metadata_offset", 0),
+            random_pending=getattr(app, "_metadata_random_pending", False),
+            pending_only=True,
+        )
     rows = app._sort_for_table(
         "metadata-rows-table",
         rows,
