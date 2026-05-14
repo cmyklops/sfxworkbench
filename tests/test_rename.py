@@ -176,6 +176,62 @@ def test_portable_rename_spaces_ampersand_replacement(tmp_path: Path) -> None:
     assert plan.entries[0].new_filename == "Doors and Building stuff.wav"
 
 
+def test_portable_rename_fixes_reserved_windows_basenames(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    root.mkdir()
+    bad_file = root / "CON.wav"
+    bad_file.write_bytes(b"audio")
+
+    plan = build_rename_plan(root, pattern="portable")
+
+    assert len(plan.entries) == 1
+    assert plan.entries[0].new_filename == "CON_.wav"
+    assert "windows_reserved_name" in plan.entries[0].issue_fixes
+
+
+def test_portable_rename_records_trailing_dot_fix(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    bad_dir = Path(str(root / "badname."))
+    bad_dir.mkdir(parents=True)
+    bad_file = bad_dir / "Audio.wav"
+    bad_file.write_bytes(b"audio")
+
+    plan = build_rename_plan(root, pattern="portable")
+
+    assert len(plan.entries) == 1
+    assert plan.entries[0].new_filename == "badname"
+    assert "trailing_dot_or_space" in plan.entries[0].issue_fixes
+
+
+def test_portable_rename_detects_windows_casefold_existing_collision(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    root.mkdir()
+    bad_file = root / "rain!.wav"
+    bad_file.write_bytes(b"audio")
+    conflict = root / "RAIN_.wav"
+    conflict.write_bytes(b"audio")
+
+    plan = build_rename_plan(root, pattern="portable")
+
+    assert plan.entries == []
+    assert plan.errors[0]["error"] == "target collides on Windows"
+    assert plan.errors[0]["conflict"] == str(conflict)
+
+
+def test_portable_rename_detects_windows_casefold_planned_collision(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    root.mkdir()
+    first = root / "Rain!.wav"
+    second = root / "rain?.wav"
+    first.write_bytes(b"audio")
+    second.write_bytes(b"audio")
+
+    plan = build_rename_plan(root, pattern="portable")
+
+    assert len(plan.entries) == 1
+    assert plan.errors[0]["error"] == "target planned more than once"
+
+
 def test_portable_rename_directory_ampersand_updates_db_and_issues(tmp_path: Path, tmp_db: Path) -> None:
     root = tmp_path / "lib"
     bad_dir = root / "Series 9000 Open & Close"

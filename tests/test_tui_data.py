@@ -6,6 +6,7 @@ import json
 import sqlite3
 from pathlib import Path
 
+import sfxworkbench.tui_data as tui_data
 from sfxworkbench.cli import app
 from sfxworkbench.scan import scan_library
 from sfxworkbench.tui_data import (
@@ -508,6 +509,50 @@ def test_tui_metadata_rows_can_page_and_randomize_pending_plan_files(
     cached_page = metadata_workbench_rows(tmp_db, plan_path=plan_path, limit=1, offset=1, pending_only=True)
 
     assert [row.filename for row in cached_page] == [second.name]
+
+
+def test_tui_metadata_plan_index_persists_between_memory_cache_misses(
+    tmp_library: Path, tmp_db: Path, tmp_path: Path, monkeypatch
+) -> None:
+    scan_library(tmp_library, tmp_db, skip_hash=True, quiet=True)
+    first = tmp_library / "sounds" / "AMB_RAIN_01.wav"
+    plan_path = tmp_path / "metadata_tag_plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "entry_id": 1,
+                        "path": str(first),
+                        "filename": first.name,
+                        "field": "description",
+                        "proposed_value": "Steady rain",
+                        "source": "filename",
+                        "review_status": "pending",
+                    }
+                ]
+            }
+        )
+    )
+    monkeypatch.setattr(tui_data, "_PLAN_INDEX_CACHE_DIR", tmp_path / "plan-index-cache")
+    tui_data._METADATA_PLAN_INDEX_CACHE.clear()
+
+    rows = metadata_workbench_rows(tmp_db, plan_path=plan_path, limit=1, pending_only=True)
+
+    assert [row.filename for row in rows] == [first.name]
+    assert list((tmp_path / "plan-index-cache").glob("metadata_plan_*.sqlite"))
+
+    tui_data._METADATA_PLAN_INDEX_CACHE.clear()
+    tui_data.clear_adapter_cache()
+
+    def fail_read_text(*args, **kwargs):
+        raise AssertionError("persistent metadata plan index should avoid reparsing JSON")
+
+    monkeypatch.setattr(Path, "read_text", fail_read_text)
+
+    persisted_rows = metadata_workbench_rows(tmp_db, plan_path=plan_path, limit=1, pending_only=True)
+
+    assert [row.filename for row in persisted_rows] == [first.name]
 
 
 def test_tui_plan_discovery_summarizes_json_plans(tmp_path: Path) -> None:

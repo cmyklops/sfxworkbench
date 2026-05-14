@@ -18,8 +18,12 @@ from sfxworkbench.models import (
 from sfxworkbench.tag_plan import apply_tag_plan, build_tag_plan, review_tag_plan, summarize_tag_plan, write_tag_plan
 from sfxworkbench.tag_sidecar import build_tag_sidecar_report, import_tag_sidecar, write_tag_sidecar_report
 from sfxworkbench.tag_suggest import (
+    PriorCatalogIndex,
+    SuggestContext,
     build_tag_suggestion_report,
+    clean_tag_suggestion_text,
     normalize_and_dedupe,
+    run_suggestors,
     suggest_from_filename,
     suggest_from_group,
     suggest_from_path,
@@ -193,6 +197,54 @@ def test_filename_ignores_ixml_recorder_metadata_assignments() -> None:
     assert suggestions == []
 
 
+def test_tag_suggestion_text_cleaner_strips_recorder_assignment_noise() -> None:
+    cleaned = clean_tag_suggestion_text(
+        "sTAKE=49 sSWVER=2.63 sPROJECT= sSCENE=SFX_ sFILENAME=SFX_T49.WAV sTRK1=Track A sNOTE= room tone"
+    )
+
+    assert cleaned == "room tone"
+
+
+def test_filename_strips_ixml_assignments_but_keeps_terms_after_empty_note() -> None:
+    suggestions = suggest_from_filename(
+        "sTAKE=48 sSWVER=2.63 sPROJECT= sSCENE=SFX_ "
+        "sFILENAME=SFX_T48.WAV sTAPE=130208 sTRK1=Track A sTRK2=Track B "
+        "sNOTE= background atmosphere room tone"
+    )
+
+    by_field = {suggestion.field: suggestion for suggestion in suggestions}
+    assert by_field["description"].value == "Background Atmosphere Room Tone"
+    assert all("=" not in suggestion.value for suggestion in suggestions)
+
+
+def test_assignment_noise_does_not_feed_keywords_or_ucs() -> None:
+    prior = [
+        TagSuggestion(
+            field="description",
+            value="sTAKE=49 sFILENAME=SFX_T49.WAV",
+            source="filename",
+            method="title_case",
+            confidence=0.6,
+        )
+    ]
+    catalog = UcsCatalog(
+        tool_version="test",
+        provenance=UcsCatalogProvenance(
+            source_url="https://example/",
+            source_path="/tmp/cat.csv",
+            source_format="soundminer_csv",
+            release_version="v8",
+            imported_at="2026-01-01T00:00:00+00:00",
+            attribution="test",
+            entry_count=1,
+        ),
+        entries=[UcsEntry(cat_short="SFX", category="SOUND EFFECT", subcategory="TAKE", cat_id="SFXTake")],
+    )
+
+    assert suggest_synonym_keywords(prior) == []
+    assert suggest_ucs_from_prior_tags(prior, catalog) == []
+
+
 def test_filename_drops_timestamp_tokens_from_description() -> None:
     suggestions = suggest_from_filename("then off 0:04, 1:19, 2:47")
     by_field: dict[str, list] = {}
@@ -244,6 +296,33 @@ def test_synonym_keywords_from_description_suggestions() -> None:
     assert any("matched:car crash" in s.evidence for s in suggestions)
 
 
+def test_synonym_keywords_match_plural_and_verb_forms() -> None:
+    base = suggest_from_filename("Cars Crashing 01")
+
+    suggestions = suggest_synonym_keywords(base)
+
+    values = {s.value for s in suggestions}
+    assert {"vehicle impact", "auto collision", "wreck", "impact", "collision"} <= values
+
+
+def test_synonym_keywords_include_common_sfx_terms() -> None:
+    base = suggest_from_filename("Door Slam 01")
+
+    suggestions = suggest_synonym_keywords(base)
+
+    values = {s.value for s in suggestions}
+    assert {"open close", "hinge", "impact", "bang", "hit"} <= values
+
+
+def test_synonym_keywords_cover_common_library_terms() -> None:
+    base = suggest_from_filename("Ufo Servo Flutter Tractor Safe Vault Punch Heartbeat")
+
+    suggestions = suggest_synonym_keywords(base)
+
+    values = {s.value for s in suggestions}
+    assert {"alien", "robotic", "flapping", "farm vehicle", "lock", "impact", "pulse"} <= values
+
+
 def test_synonym_keywords_can_limit_count_and_depth() -> None:
     base = suggest_from_filename("Car Crash 01")
 
@@ -254,6 +333,16 @@ def test_synonym_keywords_can_limit_count_and_depth() -> None:
     assert [s.value for s in limited] == ["vehicle impact", "auto collision", "wreck"]
     assert [s.value for s in shallow] == ["vehicle impact", "impact"]
     assert [s.value for s in shallow_limited] == ["vehicle impact"]
+
+
+def test_synonym_keywords_collapse_generic_ambience_terms() -> None:
+    base = suggest_from_filename("Background Atmosphere Room Tone 01")
+
+    suggestions = suggest_synonym_keywords(base)
+    values = {s.value for s in suggestions}
+
+    assert not (values & {"ambience", "background", "atmosphere", "room tone"})
+    assert values == {"interior"}
 
 
 def test_ucs_catalog_can_use_prior_description_suggestions() -> None:
@@ -270,7 +359,38 @@ def test_ucs_catalog_can_use_prior_description_suggestions() -> None:
     assert "matched:subcategory:RAIN" in by_field["ucs_category"].evidence
 
 
-def test_ucs_prior_tag_suggestions_skip_ambiguous_catalog_matches() -> None:
+def test_ucs_still_emits_for_room_tone_ambience_context() -> None:
+    catalog = UcsCatalog(
+        tool_version="test",
+        provenance=UcsCatalogProvenance(
+            source_url="https://example/",
+            source_path="/tmp/cat.csv",
+            source_format="soundminer_csv",
+            release_version="v8",
+            imported_at="2026-01-01T00:00:00+00:00",
+            attribution="test",
+            entry_count=1,
+        ),
+        entries=[
+            UcsEntry(
+                cat_short="AMB",
+                category="AMBIENCE",
+                subcategory="ROOM TONE",
+                cat_id="AMBRoomtone",
+                synonyms=["background atmosphere", "room tone"],
+            )
+        ],
+    )
+    prior = suggest_from_filename("Background Atmosphere Room Tone 01")
+
+    suggestions = suggest_ucs_from_prior_tags(prior, catalog)
+    by_field = {suggestion.field: suggestion for suggestion in suggestions}
+
+    assert by_field["ucs_category"].value == "AMBIENCE"
+    assert by_field["ucs_subcategory"].value == "ROOM TONE"
+
+
+def test_ucs_prior_tag_suggestions_surface_ambiguous_catalog_matches_for_review() -> None:
     sample = _sample_catalog()
     catalog = sample.model_copy(
         update={
@@ -282,7 +402,23 @@ def test_ucs_prior_tag_suggestions_skip_ambiguous_catalog_matches() -> None:
     )
     prior = suggest_from_filename("Rain Light 01")
 
-    assert suggest_ucs_from_prior_tags(prior, catalog) == []
+    suggestions = suggest_ucs_from_prior_tags(prior, catalog)
+    by_field = {suggestion.field: suggestion for suggestion in suggestions}
+
+    assert by_field["ucs_category"].value == "AMBIENCE"
+    assert by_field["ucs_subcategory"].value == "RAIN"
+    assert by_field["ucs_category"].confidence == 0.62
+    assert any("ambiguous_alternative:WTR_RAIN:WTRRain" in item for item in by_field["ucs_category"].evidence)
+
+
+def test_ucs_prior_catalog_index_matches_direct_catalog_scan() -> None:
+    catalog = _sample_catalog()
+    prior = suggest_from_filename("Rain Light 01")
+
+    direct = suggest_ucs_from_prior_tags(prior, catalog)
+    indexed = suggest_ucs_from_prior_tags(prior, catalog, catalog_index=PriorCatalogIndex.build(catalog))
+
+    assert [suggestion.model_dump() for suggestion in indexed] == [suggestion.model_dump() for suggestion in direct]
 
 
 def test_path_emits_one_description_per_meaningful_folder(tmp_path: Path) -> None:
@@ -424,14 +560,14 @@ def test_normalize_drops_single_letter_tokens() -> None:
     assert cleaned[0].value == "Busy Crowd"
 
 
-def test_normalize_dedupes_same_value_across_sources() -> None:
-    """Two suggestors emitting ``description=Rain`` collapse to one entry."""
+def test_normalize_dedupes_same_value_by_source_priority() -> None:
+    """Two suggestors emitting ``description=Rain`` collapse to the higher-priority source."""
     filename_suggestion = TagSuggestion(
         field="description",
         value="Rain",
         source="filename",
         method="title_case",
-        confidence=0.6,
+        confidence=0.99,
         evidence=["Rain_01"],
     )
     path_suggestion = TagSuggestion(
@@ -439,7 +575,7 @@ def test_normalize_dedupes_same_value_across_sources() -> None:
         value="Rain",
         source="path",
         method="folder_chain",
-        confidence=0.55,
+        confidence=0.50,
         evidence=["Rain"],
     )
 
@@ -448,8 +584,8 @@ def test_normalize_dedupes_same_value_across_sources() -> None:
     assert len(cleaned) == 1
     winner = cleaned[0]
     assert winner.value == "Rain"
-    assert winner.source == "filename"  # higher confidence wins
-    assert any("also_from:path:folder_chain" in entry for entry in winner.evidence)
+    assert winner.source == "path"
+    assert any("also_from:filename:title_case" in entry for entry in winner.evidence)
 
 
 def test_normalize_picks_highest_confidence_single_value() -> None:
@@ -476,6 +612,78 @@ def test_normalize_picks_highest_confidence_single_value() -> None:
     assert winner.value == "Light Rain"
     assert winner.source == "group"
     assert any("alternative:Rain:filename:0.55" in entry for entry in winner.evidence)
+
+
+def test_normalize_source_priority_beats_confidence_for_single_value_fields() -> None:
+    low_path = TagSuggestion(
+        field="description",
+        value="Folder Rain",
+        source="path",
+        method="folder_chain",
+        confidence=0.50,
+    )
+    high_filename = TagSuggestion(
+        field="description",
+        value="Filename Rain",
+        source="filename",
+        method="title_case",
+        confidence=0.99,
+    )
+
+    cleaned = normalize_and_dedupe([high_filename, low_path])
+
+    assert len(cleaned) == 1
+    assert cleaned[0].value == "Folder Rain"
+    assert cleaned[0].source == "path"
+    assert any("alternative:Filename Rain:filename:0.99" in entry for entry in cleaned[0].evidence)
+
+
+def test_normalize_ucs_stem_beats_ucs_catalog_for_conflicting_ucs_fields() -> None:
+    stem = TagSuggestion(
+        field="ucs_subcategory",
+        value="RAIN",
+        source="ucs_stem",
+        method="ucs_heuristic",
+        confidence=0.75,
+    )
+    catalog = TagSuggestion(
+        field="ucs_subcategory",
+        value="WIND",
+        source="ucs_catalog",
+        method="prior_tag_catalog_match",
+        confidence=0.95,
+    )
+
+    cleaned = normalize_and_dedupe([catalog, stem])
+
+    assert len(cleaned) == 1
+    assert cleaned[0].value == "RAIN"
+    assert cleaned[0].source == "ucs_stem"
+    assert any("alternative:WIND:ucs_catalog:0.95" in entry for entry in cleaned[0].evidence)
+
+
+def test_normalize_synonym_cannot_win_single_value_conflict() -> None:
+    synonym = TagSuggestion(
+        field="description",
+        value="Robotic",
+        source="synonym",
+        method="controlled_synonym_map",
+        confidence=1.0,
+    )
+    filename = TagSuggestion(
+        field="description",
+        value="Servo Movement",
+        source="filename",
+        method="title_case",
+        confidence=0.55,
+    )
+
+    cleaned = normalize_and_dedupe([synonym, filename])
+
+    assert len(cleaned) == 1
+    assert cleaned[0].value == "Servo Movement"
+    assert cleaned[0].source == "filename"
+    assert any("alternative:Robotic:synonym:1.00" in entry for entry in cleaned[0].evidence)
 
 
 def test_normalize_enforces_case_per_field() -> None:
@@ -533,6 +741,27 @@ def test_normalize_keeps_keyword_multivalue_distinct_values() -> None:
     assert values == ["downpour", "rain"]
 
 
+def test_normalize_removes_assignment_junk_from_tag_values() -> None:
+    desc = TagSuggestion(
+        field="description",
+        value="sTAKE=49 sFILENAME=SFX_T49.WAV Rain",
+        source="filename",
+        method="title_case",
+        confidence=0.55,
+    )
+    keyword = TagSuggestion(
+        field="keyword",
+        value="sSCENE=SFX_",
+        source="synonym",
+        method="controlled_synonym_map",
+        confidence=0.5,
+    )
+
+    cleaned = normalize_and_dedupe([desc, keyword])
+
+    assert [(s.field, s.value) for s in cleaned] == [("description", "Rain")]
+
+
 def test_ucs_synonym_fallback_emits_when_only_one_synonym_word_matches() -> None:
     """A single shared synonym token (>=3 chars) should yield a tier-0 catalog hit."""
     catalog = UcsCatalog(
@@ -571,12 +800,12 @@ def test_ucs_synonym_fallback_emits_when_only_one_synonym_word_matches() -> None
 
     assert by_field["ucs_category"].value == "AMBIENCE"
     assert by_field["ucs_subcategory"].value == "RAIN"
-    assert by_field["ucs_category"].confidence == 0.55
+    assert by_field["ucs_category"].confidence == 0.62
     assert any("matched:synonym_token:water" in entry for entry in by_field["ucs_category"].evidence)
 
 
-def test_ucs_synonym_fallback_drops_on_tie() -> None:
-    """Two entries that each match by one distinct synonym token must not commit to either."""
+def test_ucs_synonym_fallback_emits_review_grade_suggestion_on_tie() -> None:
+    """Ambiguous UCS catalog hits should be visible for review instead of disappearing."""
     catalog = UcsCatalog(
         tool_version="test",
         provenance=UcsCatalogProvenance(
@@ -615,7 +844,123 @@ def test_ucs_synonym_fallback_drops_on_tie() -> None:
         )
     ]
 
+    suggestions = suggest_ucs_from_prior_tags(prior, catalog)
+    by_field = {s.field: s for s in suggestions}
+
+    assert by_field["ucs_category"].value == "AMBIENCE"
+    assert by_field["ucs_subcategory"].value == "RAIN"
+    assert by_field["ucs_category"].confidence == 0.62
+    assert any("ambiguous_alternative:AMB_WIND:AMBWind" in entry for entry in by_field["ucs_category"].evidence)
+
+
+def test_synonym_output_does_not_feed_ucs_catalog_matching(tmp_path: Path) -> None:
+    catalog = UcsCatalog(
+        tool_version="test",
+        provenance=UcsCatalogProvenance(
+            source_url="https://example/",
+            source_path="/tmp/cat.csv",
+            source_format="soundminer_csv",
+            release_version="v8",
+            imported_at="2026-01-01T00:00:00+00:00",
+            attribution="test",
+            entry_count=1,
+        ),
+        entries=[
+            UcsEntry(
+                cat_short="TECH",
+                category="TECHNOLOGY",
+                subcategory="ROBOTIC",
+                cat_id="TECHRobotic",
+                synonyms=["robotic"],
+            ),
+        ],
+    )
+    file_path = tmp_path / "library" / "Servo Movement 01.wav"
+    file_path.parent.mkdir()
+    ctx = SuggestContext(
+        file_id=1,
+        path=file_path,
+        filename=file_path.name,
+        stem=file_path.stem,
+        root=tmp_path / "library",
+        catalog=catalog,
+        include_synonyms=True,
+    )
+
+    suggestions = run_suggestors(ctx)
+
+    assert not any(
+        s.source == "ucs_catalog" and s.field == "ucs_subcategory" and s.value == "ROBOTIC" for s in suggestions
+    )
+    assert any(s.source == "synonym" and s.field == "keyword" and s.value == "robotic" for s in suggestions)
+
+
+def test_ucs_prior_tag_suggestions_ignore_synonym_source() -> None:
+    catalog = UcsCatalog(
+        tool_version="test",
+        provenance=UcsCatalogProvenance(
+            source_url="https://example/",
+            source_path="/tmp/cat.csv",
+            source_format="soundminer_csv",
+            release_version="v8",
+            imported_at="2026-01-01T00:00:00+00:00",
+            attribution="test",
+            entry_count=1,
+        ),
+        entries=[
+            UcsEntry(
+                cat_short="TECH",
+                category="TECHNOLOGY",
+                subcategory="ROBOTIC",
+                cat_id="TECHRobotic",
+                synonyms=["robotic"],
+            ),
+        ],
+    )
+    prior = [
+        TagSuggestion(
+            field="keyword",
+            value="robotic",
+            source="synonym",
+            method="controlled_synonym_map",
+            confidence=0.62,
+        )
+    ]
+
     assert suggest_ucs_from_prior_tags(prior, catalog) == []
+
+
+def test_ucs_prior_tag_suggestions_can_upgrade_ucs_stem_catalog_miss() -> None:
+    prior = [
+        TagSuggestion(
+            field="ucs_category",
+            value="BAD",
+            source="ucs_stem",
+            method="ucs_heuristic",
+            confidence=0.75,
+        ),
+        TagSuggestion(
+            field="ucs_subcategory",
+            value="RAIN",
+            source="ucs_stem",
+            method="ucs_heuristic",
+            confidence=0.75,
+        ),
+        TagSuggestion(
+            field="description",
+            value="Rain",
+            source="ucs_stem",
+            method="ucs_heuristic",
+            confidence=0.75,
+        ),
+    ]
+
+    suggestions = suggest_ucs_from_prior_tags(prior, _sample_catalog())
+    by_field = {s.field: s for s in suggestions}
+
+    assert by_field["ucs_category"].value == "AMBIENCE"
+    assert by_field["ucs_category"].source == "ucs_catalog"
+    assert by_field["ucs_category"].method == "prior_tag_catalog_match"
 
 
 # ---------------------------------------------------------------------------
@@ -675,13 +1020,13 @@ def test_report_combines_ucs_path_group_evidence(tmp_path: Path, tmp_db: Path) -
     assert report.summary.files_considered == 3
     assert report.summary.files_with_suggestions == 3
     # UCS, group, and path all propose a ``description`` for each file.
-    # ``normalize_and_dedupe`` keeps the highest-confidence value and folds
-    # the lower-confidence sources into the winner's evidence as
-    # ``alternative:`` / ``also_from:`` lines, so per-file sources are not
-    # duplicated in ``by_source``. We confirm the report still draws on
-    # all three by inspecting the winning entry's evidence.
+    # ``normalize_and_dedupe`` keeps the highest-priority value and folds the
+    # lower-priority sources into the winner's evidence as ``alternative:`` /
+    # ``also_from:`` lines, so per-file sources are not duplicated in
+    # ``by_source``. We confirm the report still draws on all three by
+    # inspecting the winning entry's evidence.
     sources_used = set(report.summary.by_source.keys())
-    assert {"ucs_stem", "group"}.issubset(sources_used)
+    assert "ucs_stem" in sources_used
     fields = set(report.summary.by_field.keys())
     assert {"ucs_category", "ucs_subcategory", "description", "take_number"}.issubset(fields)
     description_evidence = " ".join(
@@ -690,7 +1035,58 @@ def test_report_combines_ucs_path_group_evidence(tmp_path: Path, tmp_db: Path) -
         for suggestion in entry.suggestions
         if suggestion.field == "description"
     )
+    assert "group" in description_evidence
     assert "path" in description_evidence
+
+
+def test_report_scopes_windows_style_index_paths(tmp_db: Path) -> None:
+    conn = get_connection(tmp_db)
+    conn.executemany(
+        """
+        INSERT INTO files (
+            path, filename, stem, extension, size_bytes, mtime, md5,
+            sample_rate, bit_depth, channels, duration_s, scanned_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "C:\\Lib\\AMB_RAIN_01.wav",
+                "AMB_RAIN_01.wav",
+                "AMB_RAIN_01",
+                ".wav",
+                10,
+                0.0,
+                "A",
+                48000,
+                24,
+                2,
+                1.0,
+                "2026",
+            ),
+            (
+                "C:\\Lib2\\AMB_RAIN_02.wav",
+                "AMB_RAIN_02.wav",
+                "AMB_RAIN_02",
+                ".wav",
+                10,
+                0.0,
+                "B",
+                48000,
+                24,
+                2,
+                1.0,
+                "2026",
+            ),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    report = build_tag_suggestion_report(Path("c:/lib"), tmp_db)
+
+    assert report.summary.files_considered == 1
+    assert report.entries[0].path == "C:\\Lib\\AMB_RAIN_01.wav"
 
 
 def test_report_progress_reaches_final_file_when_filters_drop_every_suggestion(tmp_path: Path, tmp_db: Path) -> None:
@@ -1209,6 +1605,41 @@ def test_tag_plan_skips_description_when_embedded_description_exists(tmp_path: P
     assert description_entries
     assert {entry.action for entry in description_entries} == {"skip_existing"}
     assert all("Hit" in entry.existing_values for entry in description_entries)
+
+
+def test_tag_plan_replaces_technical_embedded_description_blob(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    folder = root / "Ambience"
+    folder.mkdir(parents=True)
+    audio = folder / "Background Room Tone 01.wav"
+    audio.write_bytes(b"not really audio")
+    _seed_files(tmp_db, [{"path": audio, "md5": "A", "size": len(audio.read_bytes())}])
+    technical_blob = (
+        "sTAKE=48 sSWVER=2.63 sPROJECT= sSCENE=SFX_ "
+        "sFILENAME=SFX_T48.WAV sTAPE=130208 sTRK1=Track A sTRK2=Track B sNOTE="
+    )
+    conn = get_connection(tmp_db)
+    try:
+        file_id = conn.execute("SELECT id FROM files WHERE path = ?", (str(audio),)).fetchone()[0]
+        conn.execute(
+            """
+            INSERT INTO metadata_fields (
+                file_id, namespace, key, value, source, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (file_id, "bext", "description", technical_blob, "test", "2026-05-12T00:00:00"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    plan = build_tag_plan(root, db_path=tmp_db, min_confidence=0.0)
+    description_entries = [entry for entry in plan.entries if entry.field == "description"]
+
+    assert description_entries
+    assert {entry.action for entry in description_entries} == {"add"}
+    assert all(entry.existing_values == [] for entry in description_entries)
 
 
 def test_tag_plan_summarize_groups_values_for_review(tmp_path: Path, tmp_db: Path) -> None:

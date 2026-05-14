@@ -64,6 +64,70 @@ def test_groups_audit_finds_numbered_sequences(tmp_path: Path, tmp_db: Path) -> 
     assert group.markers == ["01", "02", "03", "10"]
 
 
+def test_groups_audit_scopes_windows_style_paths(tmp_db: Path) -> None:
+    conn = get_connection(tmp_db)
+    conn.executemany(
+        """
+        INSERT INTO files (
+            path, filename, stem, extension, size_bytes, mtime, md5,
+            sample_rate, bit_depth, channels, duration_s, scanned_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "C:\\Lib\\Impacts\\Metal Hit 01.wav",
+                "Metal Hit 01.wav",
+                "Metal Hit 01",
+                ".wav",
+                10,
+                0.0,
+                "A",
+                48000,
+                24,
+                2,
+                1.0,
+                "2026",
+            ),
+            (
+                "C:\\Lib\\Impacts\\Metal Hit 02.wav",
+                "Metal Hit 02.wav",
+                "Metal Hit 02",
+                ".wav",
+                10,
+                0.0,
+                "B",
+                48000,
+                24,
+                2,
+                1.0,
+                "2026",
+            ),
+            (
+                "C:\\Lib2\\Impacts\\Metal Hit 03.wav",
+                "Metal Hit 03.wav",
+                "Metal Hit 03",
+                ".wav",
+                10,
+                0.0,
+                "C",
+                48000,
+                24,
+                2,
+                1.0,
+                "2026",
+            ),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    report = audit_related_groups(Path("c:/lib"), tmp_db)
+
+    assert report.summary.indexed_files_considered == 2
+    assert report.summary.candidate_groups == 1
+
+
 def test_groups_audit_finds_channel_sets(tmp_path: Path, tmp_db: Path) -> None:
     root = tmp_path / "library"
     folder = root / "Ambiences"

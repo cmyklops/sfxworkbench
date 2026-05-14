@@ -19,7 +19,7 @@ from sfxworkbench.apply_logs import (
     mark_entries_reviewed,
     write_apply_log,
 )
-from sfxworkbench.db import DEFAULT_DB_PATH, get_connection
+from sfxworkbench.db import DEFAULT_DB_PATH, get_connection, is_scoped_path, resolve_scope_root
 from sfxworkbench.metadata_backends import build_metadata_backends_report
 from sfxworkbench.metadata_fields import replace_metadata_fields
 from sfxworkbench.models import (
@@ -127,14 +127,6 @@ def _default_apply_log_path(plan_path: Path) -> Path:
 
 def _default_backup_dir(plan_path: Path) -> Path:
     return plan_path.parent / f"sfxworkbench_metadata_write_backups_{_now_stamp()}"
-
-
-def _is_relative_to(path: Path, parent: Path) -> bool:
-    try:
-        path.relative_to(parent)
-        return True
-    except ValueError:
-        return False
 
 
 def _decode_evidence(raw: str | None) -> list[str]:
@@ -658,7 +650,7 @@ def build_metadata_write_plan(
         raise ValueError("--limit must be 0 or greater")
     if backend not in {"auto", "bwfmetaedit", "mutagen"}:
         raise ValueError("Supported metadata write backends are: auto, bwfmetaedit, mutagen")
-    resolved_root = root.expanduser().resolve() if root is not None else None
+    resolved_root = resolve_scope_root(root) if root is not None else None
     if resolved_root is not None and not resolved_root.exists():
         raise ValueError(f"path not found: {resolved_root}")
 
@@ -681,11 +673,7 @@ def build_metadata_write_plan(
     conn.close()
 
     if resolved_root is not None:
-        rows = [
-            row
-            for row in rows
-            if Path(row["path"]) == resolved_root or _is_relative_to(Path(row["path"]), resolved_root)
-        ]
+        rows = [row for row in rows if is_scoped_path(row["path"], resolved_root)]
     if limit:
         rows = rows[:limit]
 

@@ -3,6 +3,7 @@
 import hashlib
 import json
 import struct
+import sys
 from pathlib import Path
 
 from sfxworkbench import metadata_backends, metadata_write
@@ -90,6 +91,10 @@ def _seed_metadata_write_file(
 
 
 def _fake_bwfmetaedit(tmp_path: Path) -> Path:
+    if sys.platform == "win32":
+        executable = tmp_path / "bwfmetaedit.cmd"
+        executable.write_text("@echo off\necho BWF MetaEdit 24.04\n", encoding="utf-8")
+        return executable
     executable = tmp_path / "bwfmetaedit"
     executable.write_text("#!/bin/sh\necho 'BWF MetaEdit 24.04'\n", encoding="utf-8")
     executable.chmod(0o755)
@@ -1146,9 +1151,7 @@ def test_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
     assert sidecar_import_payload["result"]["planned"] == 1
     assert sidecar_import_payload["result"]["skipped"] == 1
 
-    fake_bwfmetaedit = tmp_path / "bwfmetaedit"
-    fake_bwfmetaedit.write_text("#!/bin/sh\necho 'BWF MetaEdit 24.04'\n", encoding="utf-8")
-    fake_bwfmetaedit.chmod(0o755)
+    fake_bwfmetaedit = _fake_bwfmetaedit(tmp_path)
     write_plan_out = tmp_path / "metadata_write_plan.json"
     write_plan_payload = _normalize(
         _load(

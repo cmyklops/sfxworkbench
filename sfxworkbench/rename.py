@@ -15,8 +15,15 @@ from rich.table import Table
 
 from sfxworkbench import health, junk
 from sfxworkbench.apply_logs import default_apply_log_path
-from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params
+from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params, scoped_relative_path
 from sfxworkbench.models import RenameEntry, RenamePlan, RenameResult
+from sfxworkbench.path_safety import (
+    avoid_windows_reserved_component,
+    existing_windows_collision,
+    has_windows_trailing_dot_or_space,
+    windows_collision_path_key,
+    windows_reserved_basename,
+)
 from sfxworkbench.preservation import PreservationRules, build_preservation_rules, move_protected_by
 from sfxworkbench.ucs import looks_ucs_casefold, normalize_stem
 
@@ -114,12 +121,17 @@ def _portable_component(name: str) -> tuple[str, list[str]]:
     cleaned = _PORTABLE_UNDERSCORE_CHARS_RE.sub("_", ascii_name)
     if translated != normalized or cleaned != ascii_name or any(char in normalized for char in "#&;'\\!"):
         fixes.append("risky_or_illegal_chars")
+    if has_windows_trailing_dot_or_space(cleaned):
+        fixes.append("trailing_dot_or_space")
     stripped = cleaned.strip()
     if stripped != cleaned:
         fixes.append("leading_trailing_space")
     cleaned = _UNDERSCORE_RE.sub("_", stripped)
     cleaned = re.sub(r"\s{2,}", " ", cleaned)
     cleaned = cleaned.strip("._ ")
+    if windows_reserved_basename(cleaned) is not None:
+        fixes.append("windows_reserved_name")
+        cleaned, _reserved_changed = avoid_windows_reserved_component(cleaned)
     if not cleaned or cleaned in {".", ".."}:
         cleaned = "UNTITLED"
         fixes.append("empty_name")
@@ -197,7 +209,7 @@ def build_rename_plan(
     rules = build_preservation_rules(config_path=config_path, safe_folders=safe_folders)
     entries_by_path: dict[Path, RenameEntry] = {}
     errors: list[dict] = []
-    planned_targets: set[Path] = set()
+    planned_target_keys: set[str] = set()
 
     for path in sorted(root.rglob("*")):
         if not path.is_file():
@@ -227,13 +239,28 @@ def build_rename_plan(
             if protection_error is not None:
                 errors.append(protection_error)
                 continue
+            existing_collision = existing_windows_collision(source, target)
+            if existing_collision is not None:
+                if existing_collision.name == target.name:
+                    errors.append({"path": str(source), "target": str(target), "error": "target exists"})
+                    continue
+                errors.append(
+                    {
+                        "path": str(source),
+                        "target": str(target),
+                        "error": "target collides on Windows",
+                        "conflict": str(existing_collision),
+                    }
+                )
+                continue
             if target.exists():
                 errors.append({"path": str(source), "target": str(target), "error": "target exists"})
                 continue
-            if target in planned_targets:
+            target_key = windows_collision_path_key(target)
+            if target_key in planned_target_keys:
                 errors.append({"path": str(source), "target": str(target), "error": "target planned more than once"})
                 continue
-            planned_targets.add(target)
+            planned_target_keys.add(target_key)
             entries_by_path[source] = RenameEntry(
                 old_path=str(source),
                 new_path=str(target),
@@ -305,12 +332,10 @@ def _update_directory_rows(conn, old: Path, new: Path, root: Path) -> None:
     updates: list[tuple[str, str, str, str, int]] = []
     refreshed: list[tuple[int, Path]] = []
     for row in rows:
-        old_file = Path(row["path"])
-        try:
-            relative = old_file.relative_to(old)
-        except ValueError:
+        relative = scoped_relative_path(row["path"], old)
+        if relative is None:
             continue
-        new_file = new / relative
+        new_file = new.joinpath(*Path(relative).parts)
         updates.append((str(new_file), new_file.name, new_file.stem, new_file.suffix.lower(), row["id"]))
         refreshed.append((row["id"], new_file))
     conn.executemany(
@@ -326,15 +351,18 @@ def _update_directory_rows(conn, old: Path, new: Path, root: Path) -> None:
 
 
 def _indexed_target_conflict(conn, old: Path, new: Path) -> str | None:
-    if old.is_dir():
-        rows = conn.execute(
-            f"SELECT path FROM files WHERE {path_scope_filter()} LIMIT 1",
-            path_scope_params(new),
-        ).fetchall()
-    else:
-        rows = conn.execute("SELECT path FROM files WHERE path = ? LIMIT 1", (str(new),)).fetchall()
+    rows = conn.execute("SELECT path FROM files").fetchall()
+    new_key = windows_collision_path_key(new)
+    old_key = windows_collision_path_key(old)
     for row in rows:
-        if row["path"] != str(old):
+        row_key = windows_collision_path_key(row["path"])
+        if old.is_dir():
+            hits_new = row_key == new_key or row_key.startswith(new_key.rstrip("/") + "/")
+            hits_old = row_key == old_key or row_key.startswith(old_key.rstrip("/") + "/")
+        else:
+            hits_new = row_key == new_key
+            hits_old = row_key == old_key
+        if hits_new and not hits_old:
             return row["path"]
     return None
 

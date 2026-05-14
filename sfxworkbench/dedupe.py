@@ -18,6 +18,7 @@ from sfxworkbench.apply_logs import (
 )
 from sfxworkbench.db import get_connection
 from sfxworkbench.models import DedupeApplyResult, DedupeGroup, DedupeReviewResult, DedupeSummary
+from sfxworkbench.path_safety import path_exists_windows
 from sfxworkbench.preservation import build_preservation_rules, evidence, priority_key, protected_by
 from sfxworkbench.utils import fmt_bytes
 
@@ -50,7 +51,7 @@ def _quarantine_target(path: Path, quarantine_dir: Path) -> Path:
     """Map an absolute source path into a quarantine tree without overwriting."""
     parts = [part for part in path.parts if part not in (path.anchor, "/")]
     target = quarantine_dir.joinpath(*parts)
-    if not target.exists():
+    if not path_exists_windows(target):
         return target
     stem = target.stem
     suffix = target.suffix
@@ -58,7 +59,7 @@ def _quarantine_target(path: Path, quarantine_dir: Path) -> Path:
     i = 1
     while True:
         candidate = parent / f"{stem}__{i}{suffix}"
-        if not candidate.exists():
+        if not path_exists_windows(candidate):
             return candidate
         i += 1
 

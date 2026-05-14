@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from sfxworkbench import __version__
-from sfxworkbench.db import DEFAULT_DB_PATH, get_connection, path_scope_filter, path_scope_params
+from sfxworkbench.db import DEFAULT_DB_PATH, get_connection, path_scope_filter, path_scope_params, resolve_scope_root
 from sfxworkbench.models import ProcessedFileEntry, ProcessedFileReport, ProcessedFileSummary
 from sfxworkbench.utils import atomic_write_json
 
@@ -80,7 +80,7 @@ def build_processed_file_report(
     """Detect likely rendered/processed variants. No files are changed."""
     if limit < 0:
         raise ValueError("--limit must be 0 or greater")
-    root = root.resolve()
+    root = resolve_scope_root(root)
     rows = _load_rows(root, db_path)
     source_by_parent_key: dict[tuple[str, str], str] = {}
     row_tokens: dict[int, set[str]] = {}

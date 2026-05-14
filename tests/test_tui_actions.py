@@ -7,6 +7,7 @@ import shutil
 from pathlib import Path
 
 from sfxworkbench.db import get_connection
+from sfxworkbench.models import UcsCatalog, UcsCatalogProvenance, UcsEntry
 from sfxworkbench.scan import scan_library
 from sfxworkbench.tui_actions import (
     ActionResult,
@@ -27,6 +28,38 @@ from sfxworkbench.tui_actions import (
     tag_plan_action,
     write_action_history,
 )
+
+
+def _sample_ucs_catalog() -> UcsCatalog:
+    return UcsCatalog(
+        tool_version="test",
+        provenance=UcsCatalogProvenance(
+            source_url="https://universalcategorysystem.com/",
+            source_path="/tmp/_categorylist.csv",
+            source_format="soundminer_csv",
+            release_version="v8.2.1",
+            imported_at="2026-01-01T00:00:00+00:00",
+            attribution="test",
+            entry_count=1,
+        ),
+        entries=[
+            UcsEntry(cat_short="AMB", category="AMBIENCE", subcategory="RAIN", cat_id="AMBRain"),
+        ],
+    )
+
+
+def _write_sample_ucs_csv(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "Category,SubCategory,CatID,CatShort,Explanations,Synonyms - Comma Separated",
+                'AMBIENCE,RAIN,AMBRain,AMB,"Rain ambience.","Rain, Weather"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def test_tui_action_runner_scan_audit_and_clean_preview(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
@@ -520,6 +553,8 @@ def test_tui_apply_tag_plan_preserves_user_rejections_when_some_already_approved
 def test_tui_tag_plan_falls_back_when_ucs_catalog_is_missing(
     tmp_library: Path, tmp_db: Path, tmp_path: Path, monkeypatch
 ) -> None:
+    monkeypatch.delenv("SFXWORKBENCH_UCS_SOURCE", raising=False)
+    monkeypatch.setattr("sfxworkbench.ucs_catalog.default_cache_path", lambda: tmp_path / "missing_ucs_catalog.json")
     monkeypatch.setattr("sfxworkbench.tag_suggest.load_catalog", lambda path=None: None)
     scan_library(tmp_library, tmp_db, skip_hash=True, quiet=True)
     report_dir = tmp_path / "reports"
@@ -527,11 +562,99 @@ def test_tui_tag_plan_falls_back_when_ucs_catalog_is_missing(
     result = tag_plan_action(tmp_library, tmp_db, report_dir)
 
     assert result.ok
-    assert "UCS catalog" not in result.message
+    assert "UCS catalog not loaded" in result.message
     assert result.details is not None
     assert result.details["used_ucs_catalog"] is False
     assert "warning" not in result.details
     assert (report_dir / "metadata_tag_plan.json").exists()
+
+
+def test_tui_tag_plan_imports_ucs_catalog_before_suggesting(
+    tmp_library: Path, tmp_db: Path, tmp_path: Path, monkeypatch
+) -> None:
+    cache = tmp_path / "sfxworkbench" / "ucs_catalog.json"
+    monkeypatch.delenv("SFXWORKBENCH_UCS_DATA", raising=False)
+    monkeypatch.delenv("SFXWORKBENCH_UCS_SOURCE", raising=False)
+    monkeypatch.setattr("sfxworkbench.ucs_catalog.default_cache_path", lambda: cache)
+    report_dir = tmp_path / "reports"
+    _write_sample_ucs_csv(report_dir / "_categorylist.csv")
+    scan_library(tmp_library, tmp_db, skip_hash=True, quiet=True)
+
+    result = tag_plan_action(tmp_library, tmp_db, report_dir)
+
+    assert result.ok
+    assert cache.exists()
+    assert "Imported UCS catalog" in result.message
+    assert result.details is not None
+    assert result.details["used_ucs_catalog"] is True
+    assert result.details["ucs_catalog_imported"] is True
+    assert result.details["ucs_catalog_entries"] == 1
+    assert any(entry["source"] == "ucs_catalog" for entry in result.details["entries"])
+
+
+def test_tui_tag_plan_excludes_take_numbers_by_default(
+    tmp_library: Path, tmp_db: Path, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr("sfxworkbench.tag_suggest.load_catalog", lambda path=None: _sample_ucs_catalog())
+    scan_library(tmp_library, tmp_db, skip_hash=True, quiet=True)
+    report_dir = tmp_path / "reports"
+
+    result = tag_plan_action(tmp_library, tmp_db, report_dir)
+
+    assert result.ok
+    assert result.details is not None
+    assert "take_number" not in result.details["fields"]
+    assert not any(entry["field"] == "take_number" for entry in result.details["entries"])
+
+
+def test_tui_tag_plan_can_cancel_during_suggestion_generation(
+    tmp_library: Path, tmp_db: Path, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("SFXWORKBENCH_UCS_SOURCE", raising=False)
+    monkeypatch.setattr("sfxworkbench.ucs_catalog.default_cache_path", lambda: tmp_path / "missing_ucs_catalog.json")
+    monkeypatch.setattr("sfxworkbench.tag_suggest.load_catalog", lambda path=None: None)
+    scan_library(tmp_library, tmp_db, skip_hash=True, quiet=True)
+    report_dir = tmp_path / "reports"
+
+    result = tag_plan_action(tmp_library, tmp_db, report_dir, cancel_requested=lambda: True)
+
+    assert result.status == "cancelled"
+    assert "cancelled" in result.message
+
+
+def test_tui_tag_plan_keeps_review_grade_ucs_stem_when_catalog_loaded(
+    tmp_library: Path, tmp_db: Path, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr("sfxworkbench.tag_suggest.load_catalog", lambda path=None: _sample_ucs_catalog())
+    scan_library(tmp_library, tmp_db, skip_hash=True, quiet=True)
+    report_dir = tmp_path / "reports"
+
+    result = tag_plan_action(tmp_library, tmp_db, report_dir)
+
+    assert result.ok
+    assert result.details is not None
+    assert result.details["used_ucs_catalog"] is True
+    assert result.details["min_confidence"] == 0.75
+    assert any(entry["source"] == "ucs_stem" for entry in result.details["entries"])
+
+
+def test_tui_tag_plan_synonyms_use_review_confidence_floor_with_catalog(
+    tmp_library: Path, tmp_db: Path, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr("sfxworkbench.tag_suggest.load_catalog", lambda path=None: _sample_ucs_catalog())
+    shutil.copy2(tmp_library / "sounds" / "AMB_RAIN_01.wav", tmp_library / "sounds" / "Car Crash 01.wav")
+    scan_library(tmp_library, tmp_db, skip_hash=True, quiet=True)
+    report_dir = tmp_path / "reports"
+
+    result = tag_plan_action(tmp_library, tmp_db, report_dir, include_synonyms=True)
+
+    assert result.ok
+    assert result.details is not None
+    assert result.details["used_ucs_catalog"] is True
+    assert result.details["min_confidence"] == 0.62
+    assert result.details["synonym_limit"] == 8
+    assert result.details["synonym_depth"] == 0
+    assert any(entry["source"] == "synonym" for entry in result.details["entries"])
 
 
 def test_tui_operation_report_dir_prefers_explicit_report_path(tmp_db: Path, tmp_path: Path) -> None:

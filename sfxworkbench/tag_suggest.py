@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -27,7 +28,7 @@ from rich.table import Table
 
 from sfxworkbench import __version__
 from sfxworkbench.config import ConfidenceProfile
-from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params
+from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params, resolve_scope_root
 from sfxworkbench.groups import audit_related_groups
 from sfxworkbench.metadata_fields import canonicalize, is_multivalue, normalize_value_for_dedup
 from sfxworkbench.models import (
@@ -153,26 +154,75 @@ _TECHNICAL_METADATA_KEYS: frozenset[str] = frozenset(
     }
 )
 _TECHNICAL_METADATA_KEY_RE = re.compile(r"^s(?:TRK\d+)$", re.IGNORECASE)
+_GENERIC_AMBIENCE_KEYWORDS = frozenset({"ambience", "background", "atmosphere", "room tone"})
 
 # Conservative reviewer-facing search-language enrichment. These become
 # `keyword` suggestions, not descriptions, so approved terms can travel through
 # metadata writes without polluting human-readable description fields.
 _SYNONYM_KEYWORDS: dict[tuple[str, ...], tuple[str, ...]] = {
+    ("alarm",): ("alert", "siren", "warning"),
+    ("ambience",): ("background", "atmosphere", "room tone"),
+    ("applause",): ("clapping", "crowd", "audience"),
+    ("background",): ("ambience", "atmosphere", "room tone"),
+    ("bang",): ("impact", "slam", "hit"),
+    ("bird",): ("birds", "chirp", "tweet"),
+    ("body", "fall"): ("body hit", "thud", "impact"),
+    ("boom",): ("impact", "explosion", "slam"),
     ("car", "crash"): ("vehicle impact", "auto collision", "wreck"),
     ("car", "hit"): ("vehicle impact", "auto collision"),
+    ("cheer",): ("crowd", "applause", "audience"),
+    ("cloth",): ("fabric", "rustle", "foley"),
+    ("concrete",): ("cement", "pavement", "stone"),
     ("crash",): ("impact", "collision", "wreck"),
+    ("crowd",): ("people", "audience", "walla"),
+    ("debris",): ("rubble", "fragments", "wreckage"),
+    ("door",): ("open close", "hinge", "slam"),
+    ("drum",): ("percussion", "beat", "rhythm"),
+    ("engine",): ("motor", "vehicle", "idle"),
+    ("equipment",): ("gear", "apparatus", "machine"),
     ("explosion",): ("blast", "detonation", "boom"),
+    ("farm",): ("rural", "field", "countryside"),
+    ("forest",): ("woods", "nature", "ambience"),
     ("fire",): ("flame", "burning", "combustion"),
+    ("flutter",): ("flapping", "waver", "tremble"),
     ("footstep",): ("footsteps", "walk", "foley step"),
     ("footsteps",): ("footstep", "walk", "foley step"),
+    ("gore",): ("blood", "viscera", "flesh"),
     ("glass", "break"): ("glass smash", "shatter", "debris"),
+    ("gravel",): ("rocks", "stones", "dirt"),
+    ("gun",): ("firearm", "weapon", "shot"),
     ("gunshot",): ("gun fire", "shot", "firearm"),
+    ("heartbeat",): ("heart beat", "pulse", "cardio"),
     ("hit",): ("impact", "strike", "thud"),
     ("impact",): ("hit", "strike", "collision"),
+    ("jet",): ("aircraft", "engine", "flyby"),
+    ("logo",): ("ident", "brand", "sting"),
+    ("magic",): ("spell", "fantasy", "shimmer"),
+    ("metal",): ("steel", "iron", "clang"),
+    ("movement",): ("motion", "move", "gesture"),
+    ("pistol",): ("handgun", "firearm", "gun"),
+    ("pulse",): ("beat", "throb", "rhythm"),
+    ("punch",): ("hit", "impact", "strike"),
     ("rain",): ("rainfall", "shower", "downpour"),
+    ("rifle",): ("firearm", "gun", "weapon"),
+    ("rock",): ("stone", "boulder", "gravel"),
+    ("room", "tone"): ("ambience", "background", "interior"),
+    ("safe",): ("vault", "lock", "secure"),
+    ("servo",): ("motor", "mechanical", "robotic"),
+    ("slam",): ("impact", "bang", "hit"),
+    ("splash",): ("water", "wet", "pour"),
+    ("stinger",): ("sting", "accent", "transition"),
+    ("strike",): ("hit", "impact", "tap"),
     ("thunder",): ("storm", "rumble", "thunderclap"),
+    ("tractor",): ("farm vehicle", "engine", "machinery"),
+    ("tumbler",): ("lock", "click", "mechanism"),
+    ("ufo",): ("alien", "spaceship", "sci fi"),
+    ("vault",): ("safe", "lock", "secure"),
+    ("water",): ("liquid", "splash", "stream"),
+    ("weight",): ("heavy", "mass", "impact"),
     ("whoosh",): ("swoosh", "pass by", "swish"),
     ("wind",): ("gust", "air", "storm"),
+    ("wood",): ("timber", "creak", "plank"),
 }
 
 
@@ -292,8 +342,8 @@ def _is_technical_metadata_assignment(token: str) -> bool:
     return _is_technical_metadata_key(key)
 
 
-def _strip_technical_metadata_assignments(text: str) -> str:
-    """Remove recorder/iXML key-value fields before human tag tokenization.
+def clean_tag_suggestion_text(text: str) -> str:
+    """Clean recorder/project noise before tag suggestion tokenization.
 
     Some libraries expose raw iXML-like chunks in filename/group evidence, e.g.
     ``sTAKE=48 sSWVER=2.63 sFILENAME=SFX_T48.WAV sTRK1=Track A``. Those are
@@ -308,16 +358,23 @@ def _strip_technical_metadata_assignments(text: str) -> str:
         if "=" in part:
             skipping_value = False
             if _is_technical_metadata_assignment(part):
-                skipping_value = True
+                key, value = part.split("=", 1)
+                skipping_value = bool(value) and bool(_TECHNICAL_METADATA_KEY_RE.fullmatch(key.strip()))
                 continue
         elif skipping_value:
+            skipping_value = False
             continue
         kept.append(part)
-    return " ".join(kept)
+    return _strip_audio_format_sequences(_strip_date_sequences(" ".join(kept)))
 
 
 def _has_technical_metadata_assignment(text: str) -> bool:
     return any(_is_technical_metadata_assignment(part) for part in text.split())
+
+
+def is_technical_metadata_blob(text: str) -> bool:
+    """Return True when a metadata value is only recorder/iXML assignment noise."""
+    return _has_technical_metadata_assignment(text) and not _tokenize(text)
 
 
 def _is_timestamp_token(token: str) -> bool:
@@ -345,7 +402,7 @@ def _tokenize(text: str) -> list[str]:
     ``[AMB, RAIN, 01]`` while concatenated compounds get recovered.
     """
     out: list[str] = []
-    cleaned_text = _strip_audio_format_sequences(_strip_date_sequences(_strip_technical_metadata_assignments(text)))
+    cleaned_text = clean_tag_suggestion_text(text)
     for token in _SEPARATOR_RE.split(cleaned_text):
         if not token:
             continue
@@ -365,8 +422,119 @@ def _tokenize(text: str) -> list[str]:
     return out
 
 
+def _keyword_token_variants(token: str) -> set[str]:
+    """Return conservative singular/stem variants for keyword matching only."""
+    normalized = token.lower()
+    variants = {normalized}
+    if len(normalized) > 4 and normalized.endswith("ies"):
+        variants.add(f"{normalized[:-3]}y")
+    if len(normalized) > 4 and normalized.endswith("es"):
+        variants.add(normalized[:-2])
+    if len(normalized) > 3 and normalized.endswith("s"):
+        variants.add(normalized[:-1])
+    if len(normalized) > 5 and normalized.endswith("ing"):
+        stem = normalized[:-3]
+        if len(stem) > 3 and stem[-1] == stem[-2]:
+            stem = stem[:-1]
+        variants.add(stem)
+    if len(normalized) > 4 and normalized.endswith("ed"):
+        variants.add(normalized[:-2])
+    return variants
+
+
 def _normalized_keyword_tokens(text: str) -> set[str]:
-    return {token.lower() for token in _tokenize(text)}
+    tokens: set[str] = set()
+    for token in _tokenize(text):
+        tokens.update(_keyword_token_variants(token))
+    return tokens
+
+
+@dataclass(frozen=True)
+class _PriorCatalogTrigger:
+    tokens: frozenset[str]
+    trigger_score: int
+    trigger_label: str
+    entry: UcsEntry
+
+
+@dataclass
+class PriorCatalogIndex:
+    """Pre-tokenized UCS lookup for prior-tag matching."""
+
+    full_by_token: dict[str, list[_PriorCatalogTrigger]] = field(default_factory=dict)
+    synonym_token_by_token: dict[str, list[_PriorCatalogTrigger]] = field(default_factory=dict)
+
+    @classmethod
+    def build(cls, catalog: UcsCatalog) -> PriorCatalogIndex:
+        full_by_token: dict[str, list[_PriorCatalogTrigger]] = defaultdict(list)
+        synonym_token_by_token: dict[str, list[_PriorCatalogTrigger]] = defaultdict(list)
+
+        def add_full(trigger: _PriorCatalogTrigger) -> None:
+            for token in trigger.tokens:
+                full_by_token[token].append(trigger)
+
+        for entry in catalog.entries:
+            subcategory_tokens = frozenset(_normalized_keyword_tokens(entry.subcategory))
+            if subcategory_tokens:
+                add_full(
+                    _PriorCatalogTrigger(
+                        tokens=subcategory_tokens,
+                        trigger_score=2,
+                        trigger_label=f"subcategory:{entry.subcategory}",
+                        entry=entry,
+                    )
+                )
+            for synonym in entry.synonyms:
+                synonym_tokens = frozenset(_normalized_keyword_tokens(synonym))
+                if not synonym_tokens:
+                    continue
+                add_full(
+                    _PriorCatalogTrigger(
+                        tokens=synonym_tokens,
+                        trigger_score=1,
+                        trigger_label=f"synonym:{synonym}",
+                        entry=entry,
+                    )
+                )
+                for token in synonym_tokens:
+                    if len(token) < 3:
+                        continue
+                    synonym_token_by_token[token].append(
+                        _PriorCatalogTrigger(
+                            tokens=frozenset({token}),
+                            trigger_score=0,
+                            trigger_label=f"synonym_token:{token}",
+                            entry=entry,
+                        )
+                    )
+        return cls(full_by_token=dict(full_by_token), synonym_token_by_token=dict(synonym_token_by_token))
+
+    def candidates_for(self, token_set: set[str]) -> list[tuple[int, int, bool, str, UcsEntry]]:
+        best_by_entry: dict[str, tuple[int, str, UcsEntry]] = {}
+
+        def consider(trigger: _PriorCatalogTrigger) -> None:
+            entry_key = trigger.entry.cat_id
+            current = best_by_entry.get(entry_key)
+            if current is None or trigger.trigger_score > current[0]:
+                best_by_entry[entry_key] = (trigger.trigger_score, trigger.trigger_label, trigger.entry)
+
+        for token in token_set:
+            for trigger in self.full_by_token.get(token, ()):
+                if trigger.tokens.issubset(token_set):
+                    consider(trigger)
+        for token in token_set:
+            if len(token) < 3:
+                continue
+            for trigger in self.synonym_token_by_token.get(token, ()):
+                consider(trigger)
+
+        candidates: list[tuple[int, int, bool, str, UcsEntry]] = []
+        for trigger_score, trigger_label, entry in best_by_entry.values():
+            category_tokens = _normalized_keyword_tokens(entry.cat_short) | _normalized_keyword_tokens(entry.category)
+            has_category_context = bool(token_set & category_tokens)
+            score = trigger_score + (1 if has_category_context else 0)
+            candidates.append((score, trigger_score, has_category_context, trigger_label, entry))
+        return candidates
 
 
 def _title_case_token(token: str) -> str:
@@ -710,6 +878,7 @@ def suggest_synonym_keywords(
 
     synonym_suggestions: list[TagSuggestion] = []
     emitted: set[str] = set()
+    generic_ambience_context = _has_generic_ambience_context(token_set)
     for trigger_tokens, keywords in _SYNONYM_KEYWORDS.items():
         if not set(trigger_tokens).issubset(token_set):
             continue
@@ -717,6 +886,8 @@ def suggest_synonym_keywords(
         candidate_keywords = keywords[:synonym_depth] if synonym_depth else keywords
         for keyword in candidate_keywords:
             normalized = keyword.lower()
+            if generic_ambience_context and normalized in _GENERIC_AMBIENCE_KEYWORDS:
+                continue
             if normalized in emitted or normalized in existing_terms:
                 continue
             emitted.add(normalized)
@@ -733,6 +904,10 @@ def suggest_synonym_keywords(
             if synonym_limit and len(synonym_suggestions) >= synonym_limit:
                 return synonym_suggestions
     return synonym_suggestions
+
+
+def _has_generic_ambience_context(token_set: set[str]) -> bool:
+    return bool({"ambience", "background", "atmosphere"} & token_set) or {"room", "tone"}.issubset(token_set)
 
 
 def _prior_catalog_trigger(entry: UcsEntry, token_set: set[str]) -> tuple[int, str] | None:
@@ -758,14 +933,23 @@ def _prior_catalog_trigger(entry: UcsEntry, token_set: set[str]) -> tuple[int, s
     return None
 
 
-def _has_prior_ucs_fields(suggestions: list[TagSuggestion]) -> bool:
-    return any(suggestion.field in {"ucs_category", "ucs_subcategory"} for suggestion in suggestions)
+def _has_catalog_ucs_fields(suggestions: list[TagSuggestion]) -> bool:
+    return any(
+        suggestion.field in {"ucs_category", "ucs_subcategory"} and suggestion.source == "ucs_catalog"
+        for suggestion in suggestions
+    )
+
+
+def _catalog_sort_key(candidate: tuple[int, int, bool, str, UcsEntry]) -> tuple[str, str, str]:
+    _score, _trigger_score, _has_category_context, _trigger_label, entry = candidate
+    return (entry.cat_short, entry.subcategory, entry.cat_id)
 
 
 def suggest_ucs_from_prior_tags(
     suggestions: list[TagSuggestion],
     catalog: UcsCatalog | None,
     *,
+    catalog_index: PriorCatalogIndex | None = None,
     profile: ConfidenceProfile | None = None,
 ) -> list[TagSuggestion]:
     """Suggest UCS fields from earlier proposed semantic tags.
@@ -774,12 +958,13 @@ def suggest_ucs_from_prior_tags(
     suggestions. It is intentionally conservative: if multiple catalog entries
     tie for the same best match, it emits nothing rather than guessing.
     """
-    if catalog is None or _has_prior_ucs_fields(suggestions):
+    if catalog is None or _has_catalog_ucs_fields(suggestions):
         return []
     semantic_suggestions = [
         suggestion
         for suggestion in suggestions
         if suggestion.field in {"description", "keyword", "keywords", "category", "subcategory"}
+        and suggestion.source.lower() != "synonym"
         and suggestion.value.strip()
     ]
     if not semantic_suggestions:
@@ -791,33 +976,52 @@ def suggest_ucs_from_prior_tags(
         token_set.update(_normalized_keyword_tokens(suggestion.value))
         evidence.append(f"{suggestion.source}:{suggestion.field}:{suggestion.value}")
 
-    candidates: list[tuple[int, int, bool, str, UcsEntry]] = []
-    for entry in catalog.entries:
-        trigger = _prior_catalog_trigger(entry, token_set)
-        if trigger is None:
-            continue
-        trigger_score, trigger_label = trigger
-        category_tokens = _normalized_keyword_tokens(entry.cat_short) | _normalized_keyword_tokens(entry.category)
-        has_category_context = bool(token_set & category_tokens)
-        score = trigger_score + (1 if has_category_context else 0)
-        candidates.append((score, trigger_score, has_category_context, trigger_label, entry))
+    candidates: list[tuple[int, int, bool, str, UcsEntry]]
+    if catalog_index is not None:
+        candidates = catalog_index.candidates_for(token_set)
+    else:
+        candidates = []
+        for entry in catalog.entries:
+            trigger = _prior_catalog_trigger(entry, token_set)
+            if trigger is None:
+                continue
+            trigger_score, trigger_label = trigger
+            category_tokens = _normalized_keyword_tokens(entry.cat_short) | _normalized_keyword_tokens(entry.category)
+            has_category_context = bool(token_set & category_tokens)
+            score = trigger_score + (1 if has_category_context else 0)
+            candidates.append((score, trigger_score, has_category_context, trigger_label, entry))
     if not candidates:
         return []
 
     best_score = max(candidate[0] for candidate in candidates)
-    best = [candidate for candidate in candidates if candidate[0] == best_score]
-    if len(best) > 1:
-        return []
+    best = sorted((candidate for candidate in candidates if candidate[0] == best_score), key=_catalog_sort_key)
+    ambiguous_alternatives = best[1:]
 
     _score, trigger_score, has_category_context, trigger_label, entry = best[0]
     p = profile or _DEFAULT_CONFIDENCE
-    if trigger_score == 0:
+    if ambiguous_alternatives:
+        # UCS is valuable enough to review even when catalog evidence ties.
+        # Keep it below exact/full-token matches and record alternatives so
+        # reviewers can reject or correct the deterministic first pick.
+        confidence = min(p.ucs_catalog, 0.62)
+    elif trigger_score == 0:
         # Tier-0 single-token synonym hit: useful as a starting point for
-        # review but not strong enough to flow through unattended apply.
-        confidence = min(p.ucs_catalog, 0.55)
+        # review. It should survive the TUI's synonym confidence floor.
+        confidence = min(p.ucs_catalog, 0.62)
     else:
         confidence = min(p.ucs_catalog, 0.86 if has_category_context else 0.82)
-    catalog_evidence = [f"matched:{trigger_label}", f"cat_short:{entry.cat_short}", f"cat_id:{entry.cat_id}", *evidence]
+    catalog_evidence = [
+        f"matched:{trigger_label}",
+        f"cat_short:{entry.cat_short}",
+        f"cat_id:{entry.cat_id}",
+        *(
+            f"ambiguous_alternative:{alt_entry.cat_short}_{alt_entry.subcategory}:{alt_entry.cat_id}"
+            for _alt_score, _alt_trigger_score, _alt_has_category_context, _alt_trigger_label, alt_entry in ambiguous_alternatives[
+                :8
+            ]
+        ),
+        *evidence,
+    ]
     return [
         TagSuggestion(
             field="ucs_category",
@@ -863,6 +1067,7 @@ class SuggestContext:
     stem: str
     root: Path
     catalog: UcsCatalog | None = None
+    catalog_prior_index: PriorCatalogIndex | None = None
     group_match: tuple[RelatedSoundGroup, RelatedSoundFile] | None = None
     include_synonyms: bool = False
     synonym_limit: int = 0
@@ -945,7 +1150,12 @@ class UcsPriorTagSuggestor:
     name: str = "ucs_prior_tags"
 
     def propose(self, ctx: SuggestContext, prior: list[TagSuggestion]) -> Iterable[TagSuggestion]:
-        return suggest_ucs_from_prior_tags(prior, ctx.catalog, profile=ctx.profile)
+        return suggest_ucs_from_prior_tags(
+            prior,
+            ctx.catalog,
+            catalog_index=ctx.catalog_prior_index,
+            profile=ctx.profile,
+        )
 
 
 @dataclass(frozen=True)
@@ -987,6 +1197,18 @@ SUGGESTOR_SOURCES: tuple[str, ...] = (
     "csv",
 )
 
+# Source priority used when competing suggestions resolve to the same field.
+# Confidence remains meaningful for filtering and review, but provenance wins
+# conflicts across sources in this order.
+_SOURCE_PRIORITY: dict[str, int] = {
+    "ucs_stem": 60,
+    "ucs_catalog": 50,
+    "group": 40,
+    "path": 30,
+    "filename": 20,
+    "synonym": 10,
+}
+
 # Internal punctuation that should be split out of a value rather than left
 # embedded inside a token. Mirrors ``_SEPARATOR_RE`` for value-level cleanup.
 _VALUE_INTERNAL_PUNCT_RE = re.compile(r"[()\[\]{}<>;,!?\"'`/\\|]")
@@ -1016,6 +1238,10 @@ def _clean_suggestion_value(field: str, value: str) -> str:
     stripped = value.strip()
     if not stripped:
         return ""
+    if canonical not in _FIELD_PASSTHROUGH:
+        stripped = clean_tag_suggestion_text(stripped).strip()
+        if not stripped:
+            return ""
     if canonical in _FIELD_UPPERCASE:
         flattened = _VALUE_INTERNAL_PUNCT_RE.sub(" ", stripped)
         return _VALUE_WHITESPACE_RE.sub(" ", flattened).strip().upper()
@@ -1047,16 +1273,22 @@ def _merge_evidence(winner_evidence: list[str], extras: list[str]) -> list[str]:
     return merged
 
 
+def _source_rank(suggestion: TagSuggestion) -> tuple[int, float]:
+    """Rank suggestions by source priority first, confidence second."""
+    return (_SOURCE_PRIORITY.get(suggestion.source.lower(), 0), suggestion.confidence)
+
+
 def normalize_and_dedupe(suggestions: list[TagSuggestion]) -> list[TagSuggestion]:
     """Clean, dedupe, and resolve single-value contention across suggestors.
 
     This is the final stage of :func:`run_suggestors`. It guarantees:
     1. Each suggestion's value is junk-stripped and case-normalized per field.
     2. The same ``(canonical_field, casefolded_value)`` only appears once;
-       the highest-confidence representative wins and folds loser sources
-       into ``evidence`` as ``also_from:<source>:<method>`` entries.
+       the highest-priority source wins, then confidence breaks ties within
+       the same priority. Loser sources fold into ``evidence`` as
+       ``also_from:<source>:<method>`` entries.
     3. For single-value fields with distinct values across sources, only the
-       highest-confidence value survives; alternates are recorded as
+       highest-priority source survives; alternates are recorded as
        ``alternative:<value>:<source>:<confidence>`` evidence on the winner.
     """
     # Step 1: clean each value; drop suggestions that no longer carry content.
@@ -1081,7 +1313,7 @@ def normalize_and_dedupe(suggestions: list[TagSuggestion]) -> list[TagSuggestion
             by_value[key] = suggestion
             insertion_order.append(key)
             continue
-        if suggestion.confidence > existing.confidence:
+        if _source_rank(suggestion) > _source_rank(existing):
             winner, loser = suggestion, existing
         else:
             winner, loser = existing, suggestion
@@ -1102,10 +1334,11 @@ def normalize_and_dedupe(suggestions: list[TagSuggestion]) -> list[TagSuggestion
         if len(keys) == 1 or is_multivalue(canonical):
             keep.update(keys)
             continue
-        # Single-value field with multiple distinct values: highest confidence
-        # wins. The other values become ``alternative:...`` evidence so the
-        # reviewer can see the runners-up without a separate plan row.
-        keys_sorted = sorted(keys, key=lambda k: by_value[k].confidence, reverse=True)
+        # Single-value field with multiple distinct values: source priority
+        # wins, with confidence as the tie-breaker. The other values become
+        # ``alternative:...`` evidence so the reviewer can see the runners-up
+        # without a separate plan row.
+        keys_sorted = sorted(keys, key=lambda k: _source_rank(by_value[k]), reverse=True)
         winner_key = keys_sorted[0]
         loser_keys = keys_sorted[1:]
         if loser_keys:
@@ -1138,8 +1371,9 @@ DEFAULT_SUGGESTORS: tuple[Suggestor, ...] = tuple(_DEFAULT_SUGGESTOR_LIST)
 """Ordered list of suggestors used by :func:`build_tag_suggestion_report`.
 
 Order matters: stages that gate on prior evidence (FilenameSuggestor's
-``skip_description``, UcsPriorTagSuggestor's catalog remap, and
-SynonymSuggestor's meta-expansion) must come after the sources they consult.
+``skip_description`` and UcsPriorTagSuggestor's catalog remap) must come after
+the sources they consult. SynonymSuggestor runs last so it enriches the chosen
+UCS/semantic evidence instead of driving UCS classification.
 """
 
 
@@ -1209,6 +1443,7 @@ def build_tag_suggestion_report(
     fields: list[str] | None = None,
     confidence_profile: ConfidenceProfile | None = None,
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> TagSuggestionReport:
     """Walk the index for files under ``root`` and produce per-file suggestions."""
     if min_confidence < 0 or min_confidence > 1:
@@ -1222,7 +1457,7 @@ def build_tag_suggestion_report(
     source_filters = normalize_filter_values(sources, option_name="--source")
     field_filters = normalize_filter_values(fields, option_name="--field")
 
-    root = root.resolve()
+    root = resolve_scope_root(root)
     # Surface the prep phase explicitly — these two queries each pull every
     # in-scope file from the DB (and ``_build_group_index`` runs the audit
     # itself). On a 50k-file library they're several seconds combined and
@@ -1230,11 +1465,15 @@ def build_tag_suggestion_report(
     if progress_callback is not None:
         progress_callback("loading", 0, None, "Loading indexed files...")
     rows = _load_files(root, db_path)
+    if cancel_requested is not None and cancel_requested():
+        raise InterruptedError("Tag suggestion generation cancelled")
     if progress_callback is not None:
         progress_callback("loading", len(rows), len(rows), f"Loaded {len(rows):,} file(s); building group index...")
     group_index = _build_group_index(root, db_path)
+    if cancel_requested is not None and cancel_requested():
+        raise InterruptedError("Tag suggestion generation cancelled")
     if progress_callback is not None:
-        progress_callback("loading", len(rows), len(rows), "Loaded group index. Loading UCS catalog...")
+        progress_callback("loading", len(rows), len(rows), "Loaded group index; loading UCS catalog...")
     catalog: UcsCatalog | None = None
     resolved_catalog_path: Path | None = None
     if use_ucs_catalog or ucs_catalog_path is not None:
@@ -1242,6 +1481,9 @@ def build_tag_suggestion_report(
         catalog = load_catalog(ucs_catalog_path)
         if catalog is None:
             raise ValueError("No UCS catalog loaded. Run `sfx ucs import SOURCE` first or pass --ucs-catalog.")
+    if cancel_requested is not None and cancel_requested():
+        raise InterruptedError("Tag suggestion generation cancelled")
+    catalog_prior_index = PriorCatalogIndex.build(catalog) if catalog is not None else None
 
     entries: list[TagSuggestionEntry] = []
     by_source: dict[str, int] = {}
@@ -1253,11 +1495,13 @@ def build_tag_suggestion_report(
     from sfxworkbench.utils import progress_interval
 
     total_rows = len(rows)
-    report_every = progress_interval(total_rows)
+    report_every = min(progress_interval(total_rows), 250)
     if progress_callback is not None:
         progress_callback("suggesting", 0, total_rows, f"Processing {total_rows:,} indexed file(s)...")
 
     for row_index, row in enumerate(rows):
+        if cancel_requested is not None and row_index % 100 == 0 and cancel_requested():
+            raise InterruptedError("Tag suggestion generation cancelled")
         path = Path(row["path"])
         stem_raw = row["stem"] or path.stem
         stem = normalize_stem(stem_raw)
@@ -1268,6 +1512,7 @@ def build_tag_suggestion_report(
             stem=stem,
             root=root,
             catalog=catalog,
+            catalog_prior_index=catalog_prior_index,
             group_match=group_index.by_path.get(str(path)),
             include_synonyms=include_synonyms,
             synonym_limit=synonym_limit,
@@ -1283,7 +1528,9 @@ def build_tag_suggestion_report(
         # Report at the log-scaled interval so a 1M-file suggestion run
         # doesn't fire 20k status updates. Always report the final row so
         # the bar lands at 100%, even when this file yields no suggestions.
-        if progress_callback is not None and ((row_index + 1) % report_every == 0 or row_index + 1 == total_rows):
+        if progress_callback is not None and (
+            row_index == 0 or (row_index + 1) % report_every == 0 or row_index + 1 == total_rows
+        ):
             progress_callback(
                 "suggesting",
                 row_index + 1,

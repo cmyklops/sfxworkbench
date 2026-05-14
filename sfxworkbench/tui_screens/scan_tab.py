@@ -64,3 +64,23 @@ def fill(app) -> None:
         "scan-findings-table",
         scan_findings(db_path=app.db_path, config_path=app.config_path),
     )
+
+
+def fill_loading(app) -> None:
+    """Paint the Scan shell without touching DB/report adapters."""
+    from textual.widgets import Static
+
+    app.query_one("#scan-note", Static).update("Loading index summary…")
+    table = app._reset_table("scan-findings-table", ("Finding", "Count", "State", "Detail"))
+    table.add_row("Loading index summary", "", "", "Counts will fill in shortly.")
+
+
+def fill_rows(app, rows) -> None:
+    """Paint already-computed Scan findings from a background load."""
+    from textual.widgets import Static
+
+    app.query_one("#scan-note", Static).update(
+        "Full Audit refreshes the index and writes read-only reports for "
+        "health, metadata, duplicates, packs, groups, format, and UCS."
+    )
+    app._fill_findings("scan-findings-table", rows)

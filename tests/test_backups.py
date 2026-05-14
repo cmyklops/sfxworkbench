@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -39,6 +40,7 @@ def test_make_original_backup_creates_sibling_with_timestamp(tmp_path: Path) -> 
     assert target.read_bytes() == b"original content"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits are not stable on Windows")
 def test_make_original_backup_preserves_mode_and_mtime(tmp_path: Path) -> None:
     target = tmp_path / "audio.wav"
     target.write_bytes(b"x")

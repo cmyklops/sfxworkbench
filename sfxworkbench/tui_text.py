@@ -7,6 +7,7 @@ from rich.text import Text
 _TAG_FIELD_STYLES = {
     "description": "cyan",
     "icmt": "cyan",
+    "keyword": "magenta",
     "keywords": "magenta",
     "ikey": "magenta",
     "category": "green",

@@ -19,7 +19,14 @@ from sfxworkbench.apply_logs import (
     default_apply_log_path_for_plan,
     mark_entries_reviewed,
 )
-from sfxworkbench.db import DEFAULT_DB_PATH, connection, path_scope_filter, path_scope_params
+from sfxworkbench.db import (
+    DEFAULT_DB_PATH,
+    canonical_path_key,
+    connection,
+    path_scope_filter,
+    path_scope_params,
+    resolve_scope_root,
+)
 from sfxworkbench.metadata_fields import (
     canonicalize as _canonical_tag_field,
 )
@@ -39,7 +46,12 @@ from sfxworkbench.models import (
     TagReviewResult,
     TagSuggestionReport,
 )
-from sfxworkbench.tag_suggest import build_tag_suggestion_report, filter_suggestions, normalize_filter_values
+from sfxworkbench.tag_suggest import (
+    build_tag_suggestion_report,
+    filter_suggestions,
+    is_technical_metadata_blob,
+    normalize_filter_values,
+)
 from sfxworkbench.utils import atomic_write_json, json_dumps
 
 console = Console()
@@ -162,6 +174,13 @@ def _should_skip_existing(field: str, proposed_value: str, existing_values: list
     return True
 
 
+def _clean_existing_values_for_suggestion(field: str, existing_values: list[str]) -> list[str]:
+    canonical = _canonical_tag_field(field)
+    if canonical in {"description", "comment", "title"}:
+        return [value for value in existing_values if not is_technical_metadata_blob(value)]
+    return existing_values
+
+
 def _planned_seen_key(field: str, proposed_value: str) -> str:
     if is_multivalue(_canonical_tag_field(field)):
         return normalize_value_for_dedup(proposed_value)
@@ -205,7 +224,8 @@ def _plan_from_suggestion_report(
         for suggestion_entry in report.entries:
             suggestions = filter_suggestions(suggestion_entry.suggestions, sources=source_filters, fields=field_filters)
             for suggestion in suggestions:
-                existing_values = _existing_values(conn, file_id=suggestion_entry.file_id, field=suggestion.field)
+                raw_existing_values = _existing_values(conn, file_id=suggestion_entry.file_id, field=suggestion.field)
+                existing_values = _clean_existing_values_for_suggestion(suggestion.field, raw_existing_values)
                 seen_key = (suggestion_entry.file_id, _canonical_tag_field(suggestion.field))
                 seen_values = planned_values.setdefault(seen_key, set())
                 action = "add"
@@ -269,7 +289,7 @@ def _csv_row_value(row: dict[str, str], *names: str) -> str | None:
 def _load_indexed_file_lookup(
     root: Path, db_path: Path
 ) -> tuple[list[dict], dict[int, dict], dict[str, dict], dict[str, list[dict]]]:
-    root = root.resolve()
+    root = resolve_scope_root(root)
     with connection(db_path) as conn:
         rows = [
             dict(row)
@@ -285,7 +305,7 @@ def _load_indexed_file_lookup(
             ).fetchall()
         ]
     by_id = {int(row["id"]): row for row in rows}
-    by_path = {str(Path(row["path"]).resolve()): row for row in rows}
+    by_path = {canonical_path_key(row["path"]): row for row in rows}
     by_name: dict[str, list[dict]] = {}
     for row in rows:
         by_name.setdefault(str(row["filename"]).lower(), []).append(row)
@@ -310,10 +330,12 @@ def _match_csv_row(
 
     path_value = _csv_row_value(row, "path", "file", "filepath")
     if path_value is not None:
-        path = Path(path_value).expanduser()
-        if not path.is_absolute():
-            path = root / path
-        match = by_path.get(str(path.resolve()))
+        match = by_path.get(canonical_path_key(path_value))
+        if match is None:
+            path = Path(path_value).expanduser()
+            if not path.is_absolute():
+                path = root / path
+            match = by_path.get(canonical_path_key(path))
         return match, None if match is not None else f"no indexed path: {path_value}"
 
     name = _csv_row_value(row, "filename", "stem")
@@ -362,7 +384,9 @@ def _plan_from_csv(
                 continue
             if field_filters and field.lower() not in field_filters:
                 continue
-            file_row, error = _match_csv_row(row, root=root.resolve(), by_id=by_id, by_path=by_path, by_name=by_name)
+            file_row, error = _match_csv_row(
+                row, root=resolve_scope_root(root), by_id=by_id, by_path=by_path, by_name=by_name
+            )
             if error is not None or file_row is None:
                 errors.append({"row": row_number, "error": error or "file not matched"})
                 continue
@@ -410,7 +434,7 @@ def _plan_from_csv(
     plan = TagPlan(
         generated_at=_now_iso(),
         tool_version=__version__,
-        root=str(root.resolve()),
+        root=str(resolve_scope_root(root)),
         db_path=str(db_path),
         source_report=str(csv_path),
         target=target,
@@ -442,6 +466,7 @@ def build_tag_plan(
     sources: list[str] | None = None,
     fields: list[str] | None = None,
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> TagPlan:
     """Build a reviewed DB-only tag plan from suggestions."""
     if target != "db":
@@ -466,6 +491,7 @@ def build_tag_plan(
             sources=sources,
             fields=fields,
             progress_callback=progress_callback,
+            cancel_requested=cancel_requested,
         )
     return _plan_from_suggestion_report(
         report,

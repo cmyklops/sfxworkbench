@@ -4,6 +4,7 @@ import unicodedata
 from pathlib import Path
 
 from sfxworkbench.models import FilenameIssue
+from sfxworkbench.path_safety import has_windows_trailing_dot_or_space, windows_reserved_basename
 
 # Characters that are illegal on Windows/exFAT (breaks cross-platform portability)
 _ILLEGAL_CHARS = set(':*?"<>|')
@@ -28,6 +29,8 @@ def check_path(path: Path, root: Path) -> list[FilenameIssue]:
       6. non_ascii              — contains non-ASCII characters (informational)
       7. leading_trailing_space — name starts or ends with a space
       8. dot_prefix             — name starts with a dot (hidden on macOS/Linux)
+      9. windows_reserved_name  — component basename is reserved on Windows
+      10. trailing_dot_or_space — Windows strips trailing dot/space
     """
     issues: list[FilenameIssue] = []
     abs_str = str(path)
@@ -61,6 +64,25 @@ def check_path(path: Path, root: Path) -> list[FilenameIssue]:
                     component=component,
                     issue="illegal_chars",
                     detail=f"Contains characters illegal on Windows/exFAT: {found_illegal}",
+                )
+            )
+
+        reserved = windows_reserved_basename(component)
+        if reserved is not None:
+            issues.append(
+                FilenameIssue(
+                    component=component,
+                    issue="windows_reserved_name",
+                    detail=f"Basename {reserved!r} is reserved on Windows, even with an extension.",
+                )
+            )
+
+        if has_windows_trailing_dot_or_space(component):
+            issues.append(
+                FilenameIssue(
+                    component=component,
+                    issue="trailing_dot_or_space",
+                    detail="Windows strips trailing dots and spaces, which can cause collisions or missing files.",
                 )
             )
 

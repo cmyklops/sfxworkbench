@@ -15,7 +15,14 @@ from rich.console import Console
 from rich.table import Table
 
 from sfxworkbench import __version__
-from sfxworkbench.db import DEFAULT_DB_PATH, get_connection, path_scope_filter, path_scope_params
+from sfxworkbench.db import (
+    DEFAULT_DB_PATH,
+    get_connection,
+    path_scope_filter,
+    path_scope_params,
+    resolve_scope_root,
+    scoped_relative_parts,
+)
 from sfxworkbench.metadata_write import read_bwfmetaedit_fields
 from sfxworkbench.models import (
     TagProposal,
@@ -209,12 +216,10 @@ def _load_rows(db_path: Path, root: Path):
 
 
 def _path_tokens(path: Path, root: Path) -> set[str]:
-    try:
-        relative = path.resolve().relative_to(root.resolve())
-    except ValueError:
-        relative = path
+    relative_parts = scoped_relative_parts(path, root)
+    parts = relative_parts[:-1] if relative_parts is not None else path.parts[:-1]
     tokens: set[str] = set()
-    for part in relative.parts[:-1]:
+    for part in parts:
         tokens.update(_tokens(part))
     return tokens
 
@@ -501,7 +506,7 @@ def build_tag_proposal_report(
         raise ValueError("--limit must be 0 or greater")
     if min_confidence < 0 or min_confidence > 1:
         raise ValueError("--min-confidence must be between 0 and 1")
-    root = root.resolve()
+    root = resolve_scope_root(root)
     resolved_catalog_path = resolve_catalog_path(catalog_path)
     catalog = load_catalog(catalog_path)
     if catalog is None:

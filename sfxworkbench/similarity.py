@@ -14,7 +14,7 @@ from rich.console import Console
 from rich.table import Table
 
 from sfxworkbench import __version__
-from sfxworkbench.db import DEFAULT_DB_PATH, get_connection
+from sfxworkbench.db import DEFAULT_DB_PATH, get_connection, is_scoped_path, resolve_scope_root
 from sfxworkbench.models import (
     SimilarityAuditFile,
     SimilarityAuditGroup,
@@ -51,14 +51,6 @@ ProgressCallback = Callable[[str, int, int | None, str], None]
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _is_relative_to(path: Path, parent: Path) -> bool:
-    try:
-        path.relative_to(parent)
-        return True
-    except ValueError:
-        return False
 
 
 def _duration_bucket(duration_s: float | None) -> str | None:
@@ -646,7 +638,7 @@ def crawl_similarity_descriptors(
     cancel_requested: Callable[[], bool] | None = None,
 ) -> SimilarityCrawlReport:
     """Analyze indexed files under root and cache deterministic descriptors."""
-    root = root.resolve()
+    root = resolve_scope_root(root)
     if not root.exists():
         raise ValueError(f"path not found: {root}")
     if max_files is not None and max_files < 1:
@@ -699,7 +691,7 @@ def crawl_similarity_descriptors(
         ORDER BY path
         """
     ).fetchall()
-    rows = [row for row in rows if Path(row["path"]) == root or _is_relative_to(Path(row["path"]), root)]
+    rows = [row for row in rows if is_scoped_path(row["path"], root)]
     total = len(rows)
     if progress_callback is not None:
         progress_callback("crawling", 0, total, f"Found {total:,} indexed audio file(s)")
@@ -872,7 +864,7 @@ def _descriptor_rows(conn, *, root: Path | None, max_duration_s: float | None):
     ).fetchall()
     if root is None:
         return rows
-    return [row for row in rows if Path(row["path"]) == root or _is_relative_to(Path(row["path"]), root)]
+    return [row for row in rows if is_scoped_path(row["path"], root)]
 
 
 def _segment_rows(conn, *, root: Path | None, max_duration_s: float | None):
@@ -895,7 +887,7 @@ def _segment_rows(conn, *, root: Path | None, max_duration_s: float | None):
     ).fetchall()
     if root is None:
         return rows
-    return [row for row in rows if Path(row["path"]) == root or _is_relative_to(Path(row["path"]), root)]
+    return [row for row in rows if is_scoped_path(row["path"], root)]
 
 
 def _normalize_scope(scope: str) -> str:
@@ -1366,7 +1358,7 @@ def list_similarity_segments(
         (DETERMINISTIC_BACKEND, max_duration_s, max_duration_s),
     ).fetchall()
     conn.close()
-    rows = [row for row in rows if Path(row["path"]) == root or _is_relative_to(Path(row["path"]), root)]
+    rows = [row for row in rows if is_scoped_path(row["path"], root)]
 
     reported_rows = rows if limit == 0 else rows[:limit]
     segments = [

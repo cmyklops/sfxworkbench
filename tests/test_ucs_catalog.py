@@ -10,8 +10,10 @@ import pytest
 from sfxworkbench.models import UcsCatalog
 from sfxworkbench.ucs_catalog import (
     ENV_OVERRIDE,
+    ENV_SOURCE,
     OFFICIAL_ATTRIBUTION,
     default_cache_path,
+    discover_import_source,
     import_catalog,
     load_catalog,
     parse_soundminer_csv,
@@ -193,6 +195,28 @@ def test_default_cache_path_lives_alongside_index_db() -> None:
     assert cache.name == "ucs_catalog.json"
     # Sibling of the default index.db location.
     assert cache.parent == Path(os.path.expanduser("~/.sfxworkbench"))
+
+
+def test_discover_import_source_prefers_env_source(tmp_path: Path, monkeypatch) -> None:
+    src = tmp_path / "_categorylist.csv"
+    _write_sample_csv(src)
+    fallback = tmp_path / "reports" / "_categorylist.csv"
+    fallback.parent.mkdir()
+    _write_sample_csv(fallback)
+
+    monkeypatch.setenv(ENV_SOURCE, str(src))
+
+    assert discover_import_source([fallback.parent]) == src
+
+
+def test_discover_import_source_checks_known_shallow_locations(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv(ENV_SOURCE, raising=False)
+    root = tmp_path / "UCS Release" / "Soundminer"
+    root.mkdir(parents=True)
+    src = root / "_categorylist.csv"
+    _write_sample_csv(src)
+
+    assert discover_import_source([tmp_path]) == src
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from sfxworkbench.db import is_scoped_path
+
 CONFIG_ENV_VAR = "SFXWORKBENCH_CONFIG"
 
 
@@ -47,14 +49,6 @@ def _values_from_config(raw: dict, key: str, *, config_path: Path) -> list:
             raise ValueError(f"{config_path}: preservation must be an object")
         values.extend(_list_from_config(preservation, key, config_path=config_path))
     return values
-
-
-def _is_relative_to(path: Path, parent: Path) -> bool:
-    try:
-        path.relative_to(parent)
-        return True
-    except ValueError:
-        return False
 
 
 def _normalize_folders(folders: list[Path] | None) -> tuple[str, ...]:
@@ -160,7 +154,7 @@ def matching_folder(path: Path, folders: tuple[str, ...]) -> str | None:
     resolved = path.expanduser().resolve()
     for folder in folders:
         candidate = Path(folder)
-        if resolved == candidate or _is_relative_to(resolved, candidate):
+        if is_scoped_path(resolved, candidate):
             return folder
     return None
 
@@ -174,7 +168,7 @@ def move_protected_by(path: Path, rules: PreservationRules) -> str | None:
     resolved = path.expanduser().resolve()
     for folder in rules.safe_folders:
         safe = Path(folder)
-        if resolved == safe or _is_relative_to(resolved, safe) or _is_relative_to(safe, resolved):
+        if is_scoped_path(resolved, safe) or is_scoped_path(safe, resolved):
             return folder
     return None
 

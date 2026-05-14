@@ -25,6 +25,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -50,6 +51,7 @@ OFFICIAL_ATTRIBUTION = (
     "domain initiative. See https://universalcategorysystem.com/."
 )
 ENV_OVERRIDE = "SFXWORKBENCH_UCS_DATA"
+ENV_SOURCE = "SFXWORKBENCH_UCS_SOURCE"
 
 # CSV column names from ``Soundminer/_categorylist.csv`` in UCS Release v8.2.1.
 # The English-language columns sit at the front; the rest are localized
@@ -88,6 +90,49 @@ def resolve_catalog_path(path: Path | None = None) -> Path | None:
     cache = default_cache_path()
     if cache.exists():
         return cache
+    return None
+
+
+def discover_import_source(search_roots: Sequence[Path] | None = None) -> Path | None:
+    """Find a local Soundminer ``_categorylist.csv`` without broad library scans.
+
+    The TUI uses this during explicit suggestion generation when no normalized
+    UCS cache exists yet. Search is deliberately shallow so a large SFX library
+    is not walked just to find catalog data.
+    """
+    env_source = os.environ.get(ENV_SOURCE)
+    if env_source:
+        candidate = Path(env_source).expanduser()
+        return candidate if candidate.exists() else None
+
+    checked: set[Path] = set()
+
+    def existing(path: Path) -> Path | None:
+        expanded = path.expanduser()
+        if expanded in checked:
+            return None
+        checked.add(expanded)
+        return expanded if expanded.is_file() else None
+
+    roots: list[Path] = []
+    for root in search_roots or ():
+        if root:
+            roots.append(root)
+    home = Path.home()
+    roots.extend([home / "Downloads", home / "Desktop", home / "Documents"])
+
+    for root in roots:
+        root = root.expanduser()
+        candidates = [
+            root / "_categorylist.csv",
+            root / "Soundminer" / "_categorylist.csv",
+            root / "UCS Release" / "Soundminer" / "_categorylist.csv",
+            root / "UCS" / "Soundminer" / "_categorylist.csv",
+        ]
+        for candidate in candidates:
+            found = existing(candidate)
+            if found is not None:
+                return found
     return None
 
 

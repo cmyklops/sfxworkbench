@@ -15,7 +15,15 @@ from rich.table import Table
 
 from sfxworkbench import __version__
 from sfxworkbench.apply_logs import default_apply_log_path_for_plan, mark_groups_approved
-from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params
+from sfxworkbench.db import (
+    get_connection,
+    is_scoped_path,
+    path_scope_filter,
+    path_scope_params,
+    resolve_scope_root,
+    scoped_relative_parts,
+    scoped_relative_path,
+)
 from sfxworkbench.models import (
     PackApplyResult,
     PackAuditReport,
@@ -29,6 +37,7 @@ from sfxworkbench.models import (
     PackPlanSummary,
     PackReviewResult,
 )
+from sfxworkbench.path_safety import path_exists_windows
 from sfxworkbench.preservation import build_preservation_rules, evidence, priority_key
 from sfxworkbench.preservation import protected_by as preservation_protected_by
 from sfxworkbench.rename import _update_directory_rows
@@ -110,6 +119,9 @@ def _load_folder_stats(root: Path, db_path: Path) -> tuple[dict[Path, _FolderSta
     considered = 0
     without_hash = 0
     for row in rows:
+        relative_parts = scoped_relative_parts(row["path"], root)
+        if not relative_parts:
+            continue
         path = Path(row["path"])
         md5 = row["md5"]
         size = int(row["size_bytes"] or 0)
@@ -117,11 +129,13 @@ def _load_folder_stats(root: Path, db_path: Path) -> tuple[dict[Path, _FolderSta
             without_hash += 1
             continue
         considered += 1
-        for folder in _iter_folder_chain(path, root):
+        folder_parts = relative_parts[:-1]
+        for depth in range(len(folder_parts), 0, -1):
+            folder = root.joinpath(*folder_parts[:depth])
             stats = folders.setdefault(folder, _FolderStats(path=folder))
             stats.hashes[md5] += 1
             stats.hash_bytes.setdefault(md5, size)
-            stats.relative_paths.append(str(path.relative_to(folder)))
+            stats.relative_paths.append(scoped_relative_path(row["path"], folder) or path.name)
     return folders, considered, without_hash
 
 
@@ -289,7 +303,7 @@ def audit_packs(
     max_overlap_candidates: int = 50,
 ) -> PackAuditReport:
     """Build a report of exact duplicate folders and high-overlap pack candidates."""
-    root = root.resolve()
+    root = resolve_scope_root(root)
     folders, considered, without_hash = _load_folder_stats(root, db_path)
     candidates = _remove_redundant_ancestors([folder for folder in folders.values() if folder.file_count >= min_files])
     exact = _exact_groups(candidates)
@@ -380,14 +394,14 @@ def _default_pack_log_path(plan_path: Path) -> Path:
 def _quarantine_target(path: Path, quarantine_dir: Path) -> Path:
     parts = [part for part in path.resolve().parts if part not in (path.anchor, "/")]
     target = quarantine_dir.joinpath(*parts)
-    if not target.exists():
+    if not path_exists_windows(target):
         return target
     parent = target.parent
     stem = target.name
     i = 1
     while True:
         candidate = parent / f"{stem}__{i}"
-        if not candidate.exists():
+        if not path_exists_windows(candidate):
             return candidate
         i += 1
 
@@ -412,10 +426,13 @@ def _folder_files(db_path: Path, folder: Path, conn=None) -> list[PackPlanFile]:
     files: list[PackPlanFile] = []
     for row in rows:
         path = Path(row["path"])
+        relative = scoped_relative_path(row["path"], folder)
+        if relative is None:
+            continue
         files.append(
             PackPlanFile(
                 path=str(path),
-                relative_path=str(path.relative_to(folder)),
+                relative_path=relative,
                 hash=row["md5"],
                 size_bytes=row["size_bytes"],
             )
@@ -696,7 +713,7 @@ def _validate_pack_entry(entry: PackPlanEntry, db_path: Path | None = None, conn
             errors.append({"path": path, "error": "indexed file was not in plan"})
     for file in entry.files:
         path = Path(file.path)
-        if not _is_relative_to(path, folder):
+        if not is_scoped_path(path, folder):
             errors.append({"path": str(path), "error": "planned file is outside source folder"})
             continue
         validation_error = _validate_plan_file(file)

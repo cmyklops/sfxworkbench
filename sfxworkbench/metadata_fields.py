@@ -21,8 +21,10 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from sqlite3 import Connection
+from typing import TYPE_CHECKING
 
-from sfxworkbench.models import AudioInfo
+if TYPE_CHECKING:
+    from sfxworkbench.models import AudioInfo
 
 
 @dataclass(frozen=True)

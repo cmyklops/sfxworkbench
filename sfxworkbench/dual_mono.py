@@ -12,7 +12,7 @@ from rich.table import Table
 
 from sfxworkbench import __version__
 from sfxworkbench.apply_logs import apply_session, mark_entries_reviewed
-from sfxworkbench.db import DEFAULT_DB_PATH, get_connection, path_scope_filter, path_scope_params
+from sfxworkbench.db import DEFAULT_DB_PATH, get_connection, path_scope_filter, path_scope_params, resolve_scope_root
 from sfxworkbench.models import (
     DualMonoApplyResult,
     DualMonoEntry,
@@ -78,7 +78,7 @@ def build_dual_mono_report(
         raise ValueError("--threshold must be 0 or greater")
     if limit < 0:
         raise ValueError("--limit must be 0 or greater")
-    root = root.resolve()
+    root = resolve_scope_root(root)
     rows = _load_indexed_stereo_rows(root, db_path)
     entries: list[DualMonoEntry] = []
     errors: list[dict] = []

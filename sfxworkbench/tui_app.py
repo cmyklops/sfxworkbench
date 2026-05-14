@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -129,7 +130,6 @@ _ACTION_BUTTON_IDS = {
     "organize-nesting-undo",
     "metadata-audit",
     "metadata-plan",
-    "metadata-plan-synonyms",
     "metadata-apply",
     "metadata-sidecar",
     "metadata-write-apply",
@@ -138,6 +138,8 @@ _ACTION_BUTTON_IDS = {
     "delete-plan",
     "delete-apply",
 }
+
+_FOOTER_TEXT = "q Quit  r Refresh  s Search  R Review tags  c Cancel  p Commands  space Select  ctrl+a Select all"
 
 
 def _fmt(value: object) -> str:
@@ -302,18 +304,13 @@ def run_tui(
 ) -> None:
     """Run the Textual app, importing Textual only for this optional command."""
     initial_library_path = preferred_library_path(db_path)
-    initial_report_paths = report_search_paths(
-        db_path=db_path,
-        report_paths=report_paths,
-        library_path=initial_library_path,
-    )
     try:
         from textual import events
         from textual.app import App, ComposeResult
         from textual.binding import Binding
         from textual.containers import Horizontal, Vertical, VerticalScroll
         from textual.css.query import NoMatches
-        from textual.widgets import Button, ContentSwitcher, DataTable, Footer, Input, Static, Tab, Tabs
+        from textual.widgets import Button, ContentSwitcher, DataTable, Input, Static, Tab, Tabs
         from textual.worker import Worker, WorkerState
 
         if sys.platform == "win32":
@@ -353,10 +350,6 @@ def run_tui(
         Tab {
             padding: 0 3;
             text-style: bold;
-        }
-        Footer {
-            background: #111a23;
-            color: #f8fafc;
         }
         #meta-status-group {
             height: auto;
@@ -399,16 +392,8 @@ def run_tui(
         .page {
             padding: 1;
         }
-        #loading-page {
-            align: center middle;
-        }
-        #loading-title {
-            text-style: bold;
-            color: #f8fafc;
-            margin-bottom: 1;
-        }
-        #loading-note {
-            color: #d7dee7;
+        #feature-pages {
+            height: 1fr;
         }
         .page-header {
             height: auto;
@@ -516,7 +501,8 @@ def run_tui(
             self.config_path = config_path
             self.report_paths = report_paths
             self._library_path = initial_library_path
-            self._resolved_report_paths = list(initial_report_paths)
+            self._resolved_report_paths = list(report_paths or [])
+            self._report_paths_resolved = bool(report_paths)
             self._report_dir = operation_report_dir(
                 db_path,
                 library_path=self._library_path,
@@ -556,11 +542,15 @@ def run_tui(
             self._metadata_prewarmed_rows_by_key: dict[tuple[object, ...], list] = {}
             self._dedupe_query = ""
             self._dedupe_search_debounce = None
+            self._mounted_tabs: set[str] = {"scan"}
+            self._status_pages_cache = None
+            self._status_indexed_gb_cache: float | None = None
+            self._scan_findings_cache = None
             # Tier 5.14: tabs whose data is stale and need a fill before the user
             # next sees them. ``_refresh()`` marks all six; activation drains a
             # tab's dirty flag by filling it. Tabs the user never opens stay
             # dirty and skip the work entirely.
-            self._dirty_tabs: set[str] = set()
+            self._dirty_tabs: set[str] = {"clean", "dedupe", "metadata", "files", "history"}
             # Tier 3.8: file paths the user has selected on the Files tab (via
             # space-toggle). Persists across tab switches; cleared automatically
             # on scan completion since the index is rebuilding. Apply action
@@ -604,26 +594,38 @@ def run_tui(
             with Horizontal(id="operation-row"):
                 yield Static("", id="operation-strip")
                 yield Button("Request Cancel", id="cancel-action", disabled=True)
-            with ContentSwitcher(initial="loading-page", id="feature-pages"):
-                yield from self._loading_page()
-                yield from self._page("scan", self._scan_page)
-                yield from self._page("clean", self._clean_page)
-                yield from self._page("dedupe", self._dedupe_page)
-                yield from self._page("metadata", self._metadata_page)
-                yield from self._page("files", self._files_page)
-                yield from self._page("history", self._history_page)
-            # Textual ``Footer`` renders all visible BINDINGS, replacing the
-            # legacy static "q Quit" hint with full keybinding discoverability.
-            yield Footer()
+            with ContentSwitcher(initial="scan-page", id="feature-pages"):
+                yield self._page_widget("scan", self._scan_page)
+            yield Static(_FOOTER_TEXT, id="mini-footer")
 
-        def _page(self, key: str, factory) -> ComposeResult:
-            with VerticalScroll(id=f"{key}-page", classes="page"):
-                yield from factory()
+        def _page_widget(self, key: str, factory) -> VerticalScroll:
+            class FeaturePage(VerticalScroll):
+                def compose(page_self) -> ComposeResult:
+                    _ = page_self
+                    yield from factory()
 
-        def _loading_page(self) -> ComposeResult:
-            with Vertical(id="loading-page", classes="page"):
-                yield Static("Loading SFX Workbench", id="loading-title")
-                yield Static("Opening the index and preparing review tables...", id="loading-note")
+            return FeaturePage(id=f"{key}-page", classes="page")
+
+        def _page_factory_for_key(self, key: str):
+            return {
+                "scan": self._scan_page,
+                "clean": self._clean_page,
+                "dedupe": self._dedupe_page,
+                "metadata": self._metadata_page,
+                "files": self._files_page,
+                "history": self._history_page,
+            }.get(key)
+
+        def _ensure_page_mounted(self, key: str) -> bool:
+            if key in self._mounted_tabs:
+                return False
+            factory = self._page_factory_for_key(key)
+            if factory is None:
+                return False
+            switcher = self.query_one("#feature-pages", ContentSwitcher)
+            switcher.mount(self._page_widget(key, factory))
+            self._mounted_tabs.add(key)
+            return True
 
         def _page_header(self, key: str) -> ComposeResult:
             _title, note = _PAGE_HEADERS[key]
@@ -689,14 +691,39 @@ def run_tui(
 
         def on_mount(self) -> None:
             self._last_compact = self._compact
-            self.query_one("#status-strip", Static).update("Loading index...")
-            self.query_one("#operation-strip", Static).update("Preparing review tables...")
+            self.query_one("#status-strip", Static).update("Loading index summary…")
+            self.query_one("#operation-strip", Static).update("No action is running.")
+            self._fill_scan_loading()
             self.query_one("#feature-tabs", Tabs).focus()
-            self.set_timer(0.05, self._finish_initial_load)
+            self.set_timer(0.01, self._start_initial_load)
 
-        def _finish_initial_load(self) -> None:
-            self._refresh()
-            self.query_one("#feature-pages", ContentSwitcher).current = "scan-page"
+        def _start_initial_load(self) -> None:
+            def _load() -> None:
+                try:
+                    pages = feature_pages(db_path=db_path, config_path=config_path)
+                    indexed_gb = indexed_library_size_gb(db_path)
+                    from sfxworkbench.tui_data import scan_findings
+
+                    findings = scan_findings(db_path=db_path, config_path=config_path)
+                    self.call_from_thread(self._finish_initial_load, pages, indexed_gb, findings, None)
+                except Exception as exc:  # pragma: no cover - defensive thread boundary
+                    try:
+                        self.call_from_thread(self._finish_initial_load, None, None, None, str(exc))
+                    except RuntimeError:
+                        pass
+
+            threading.Thread(target=_load, daemon=True).start()
+
+        def _finish_initial_load(self, pages, indexed_gb: float | None, scan_findings_rows, error: str | None) -> None:
+            if error is not None:
+                self.query_one("#status-strip", Static).update(f"Index summary failed: {error}")
+                return
+            self._status_pages_cache = pages
+            self._status_indexed_gb_cache = indexed_gb
+            self._scan_findings_cache = scan_findings_rows
+            self._fill_status_strip(use_cache=True)
+            self._fill_operation_strip()
+            self._fill_scan_from_rows(scan_findings_rows)
             self.query_one("#feature-tabs", Tabs).focus()
 
         def on_resize(self, event: events.Resize) -> None:
@@ -713,7 +740,7 @@ def run_tui(
             # ``_refresh()`` here used to mark every tab dirty and refill the
             # active one, which on a 500-row Metadata table meant a ~500ms
             # freeze for every accidental terminal resize.
-            self._fill_status_strip()
+            self._fill_status_strip(use_cache=True)
             self._fill_operation_strip()
             self._fill_action_result()
             self._dirty_tabs.add("files")
@@ -922,13 +949,21 @@ def run_tui(
         def _open_feature(self, key: str) -> None:
             if key == "organize":
                 key = "clean"
+            mounted_now = self._ensure_page_mounted(key)
             self.query_one("#feature-tabs", Tabs).active = key
             self.query_one("#feature-pages", ContentSwitcher).current = f"{key}-page"
+            if mounted_now:
+                self.set_timer(0.01, lambda: self._ensure_tab_filled(key))
+                return
             self._ensure_tab_filled(key)
 
         def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
             tab_id = event.tab.id or "scan"
+            mounted_now = self._ensure_page_mounted(tab_id)
             self.query_one("#feature-pages", ContentSwitcher).current = f"{tab_id}-page"
+            if mounted_now:
+                self.set_timer(0.01, lambda: self._ensure_tab_filled(tab_id))
+                return
             self._ensure_tab_filled(tab_id)
 
         def on_input_changed(self, event: Input.Changed) -> None:
@@ -1195,22 +1230,17 @@ def run_tui(
                 _start(
                     "metadata_plan",
                     "Generate Suggestions",
-                    lambda: tag_plan_action(root, db_path, self._report_dir, progress_callback=pcb),
-                )
-
-            handlers["metadata-plan"] = _h_metadata_plan
-
-            def _h_metadata_plan_synonyms() -> None:
-                root = self._root_path()
-                _start(
-                    "metadata_plan_synonyms",
-                    "Generate Synonyms",
                     lambda: tag_plan_action(
-                        root, db_path, self._report_dir, include_synonyms=True, progress_callback=pcb
+                        root,
+                        db_path,
+                        self._report_dir,
+                        include_synonyms=True,
+                        progress_callback=pcb,
+                        cancel_requested=cancel,
                     ),
                 )
 
-            handlers["metadata-plan-synonyms"] = _h_metadata_plan_synonyms
+            handlers["metadata-plan"] = _h_metadata_plan
 
             def _h_metadata_apply() -> None:
                 root = self._root_path()
@@ -1352,6 +1382,7 @@ def run_tui(
                 report_paths=report_paths,
                 library_path=self._library_path,
             )
+            self._report_paths_resolved = True
             self._report_dir = operation_report_dir(db_path, library_path=self._library_path, report_paths=report_paths)
             self.query_one("#library-path-input", Input).value = (
                 "" if self._library_path == "PATH" else self._library_path
@@ -1497,10 +1528,17 @@ def run_tui(
             self._fill_action_result()
 
         def _latest_quarantine_dir(self) -> Path | None:
-            report_paths = list(self._resolved_report_paths)
-            if self._report_dir.exists() and self._report_dir not in report_paths:
-                report_paths.insert(0, self._report_dir)
-            return _latest_quarantine_dir_from_reports(report_paths)
+            if not self._report_paths_resolved:
+                self._resolved_report_paths = report_search_paths(
+                    db_path=db_path,
+                    report_paths=report_paths,
+                    library_path=self._library_path,
+                )
+                self._report_paths_resolved = True
+            paths = list(self._resolved_report_paths)
+            if self._report_dir.exists() and self._report_dir not in paths:
+                paths.insert(0, self._report_dir)
+            return _latest_quarantine_dir_from_reports(paths)
 
         def _reveal_latest_quarantine(self) -> None:
             selected = self._latest_quarantine_dir()
@@ -1600,6 +1638,7 @@ def run_tui(
                 report_paths=report_paths,
                 library_path=self._library_path,
             )
+            self._report_paths_resolved = True
             if self._report_dir.exists() and self._report_dir not in self._resolved_report_paths:
                 self._resolved_report_paths.insert(0, self._report_dir)
             # Tier 3.8: actions that mutate the file index leave the
@@ -1752,9 +1791,18 @@ def run_tui(
                 return rows
             return sorted(rows, key=key_func, reverse=reverse)
 
-        def _fill_status_strip(self) -> None:
-            pages = feature_pages(db_path=db_path, config_path=config_path)
-            indexed_gb = indexed_library_size_gb(db_path)
+        def _fill_status_strip(self, *, use_cache: bool = False) -> None:
+            if use_cache:
+                pages = self._status_pages_cache
+                indexed_gb = self._status_indexed_gb_cache
+                if pages is None or indexed_gb is None:
+                    self.query_one("#status-strip", Static).update("Loading index summary…")
+                    return
+            else:
+                pages = feature_pages(db_path=db_path, config_path=config_path)
+                indexed_gb = indexed_library_size_gb(db_path)
+                self._status_pages_cache = pages
+                self._status_indexed_gb_cache = indexed_gb
             status = Text()
             for index, page in enumerate(pages):
                 if index:
@@ -1826,6 +1874,7 @@ def run_tui(
             filled = width if total == 0 else int(width * completed / total)
             bar = "#" * filled + "-" * (width - filled)
             percent = 100 if total == 0 else int(100 * completed / total)
+            percent_label = "<1%" if total > 0 and completed > 0 and percent == 0 else f"{percent:3d}%"
             detail = _clip_middle(self._progress_message, width=48 if not self._compact else 24)
             return Text.assemble(
                 ("Progress: ", "bold"),
@@ -1833,7 +1882,7 @@ def run_tui(
                 (" "),
                 (f"{completed:,}/{total:,}", "yellow"),
                 (" "),
-                (f"{percent:3d}%", "yellow"),
+                (percent_label, "yellow"),
                 ("  "),
                 (detail, "dim"),
             )
@@ -1852,6 +1901,17 @@ def run_tui(
             from sfxworkbench.tui_screens import scan_tab
 
             scan_tab.fill(self)
+            self._dirty_tabs.discard("scan")
+
+        def _fill_scan_loading(self) -> None:
+            from sfxworkbench.tui_screens import scan_tab
+
+            scan_tab.fill_loading(self)
+
+        def _fill_scan_from_rows(self, rows) -> None:
+            from sfxworkbench.tui_screens import scan_tab
+
+            scan_tab.fill_rows(self, rows or [])
             self._dirty_tabs.discard("scan")
 
         def _fill_clean(self) -> None:
@@ -2237,10 +2297,17 @@ def run_tui(
             self._fill_history_detail(row_index)
 
         def _history_report_paths(self) -> list[Path]:
-            report_paths = list(self._resolved_report_paths)
-            if self._report_dir.exists() and self._report_dir not in report_paths:
-                report_paths.insert(0, self._report_dir)
-            return report_paths
+            if not self._report_paths_resolved:
+                self._resolved_report_paths = report_search_paths(
+                    db_path=db_path,
+                    report_paths=report_paths,
+                    library_path=self._library_path,
+                )
+                self._report_paths_resolved = True
+            paths = list(self._resolved_report_paths)
+            if self._report_dir.exists() and self._report_dir not in paths:
+                paths.insert(0, self._report_dir)
+            return paths
 
         def _history_category(self) -> str:
             text = self._history_category_filter.strip()

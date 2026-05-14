@@ -7,13 +7,12 @@ import re
 import sqlite3
 import time
 from dataclasses import dataclass, replace
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
 from rich.text import Text
 
-from sfxworkbench.apply_logs import APPLY_LOG_DIR_NAME
-from sfxworkbench.audit_cmd import _STANDARD_SAMPLE_RATES
 from sfxworkbench.db import DEFAULT_DB_PATH, get_connection
 from sfxworkbench.metadata_fields import (
     canonicalize as _canonical_tag_field,
@@ -27,10 +26,13 @@ from sfxworkbench.preservation import build_preservation_rules
 from sfxworkbench.tui_perf import record_phase as _perf_record_phase
 from sfxworkbench.tui_perf import timed as _perf_timed
 
+APPLY_LOG_DIR_NAME = "apply_logs"
+_STANDARD_SAMPLE_RATES = {44100, 48000, 88200, 96000, 176400, 192000}
 _TUI_LIBRARY_PATH_KEY = "tui_library_path"
 _PLAN_SUMMARY_CACHE: dict[tuple[str, float, int, bool], PlanSummary] = {}
 _METADATA_PLAN_INDEX_CACHE: dict[tuple[str, float, int], sqlite3.Connection] = {}
 _INLINE_PLAN_DETAIL_MAX_BYTES = 5 * 1024 * 1024
+_PLAN_INDEX_CACHE_DIR = Path.home() / ".sfxworkbench" / "tui_plan_indexes"
 
 # Session-level adapter cache. Stores results of heavy read-only adapters keyed
 # by inputs that include each file's ``(path, mtime, size)`` signature so a
@@ -924,8 +926,29 @@ def _metadata_plan_index_key(plan_path: Path) -> tuple[str, float, int]:
     return (path, mtime, size)
 
 
+def _metadata_plan_index_cache_path(key: tuple[str, float, int]) -> Path:
+    digest = sha256(f"{key[0]}\0{key[1]}\0{key[2]}".encode()).hexdigest()[:32]
+    return _PLAN_INDEX_CACHE_DIR / f"metadata_plan_{digest}.sqlite"
+
+
+def _connect_metadata_plan_index(path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _metadata_plan_index_is_usable(conn: sqlite3.Connection) -> bool:
+    try:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'plan_entries'"
+        ).fetchone()[0]
+    except sqlite3.Error:
+        return False
+    return bool(count)
+
+
 def _metadata_plan_index(plan_path: Path) -> sqlite3.Connection | None:
-    """Return an in-memory SQLite index for a metadata tag plan."""
+    """Return a SQLite index for a metadata tag plan, backed by a persistent cache."""
     if not plan_path.exists():
         return None
     key = _metadata_plan_index_key(plan_path)
@@ -941,6 +964,22 @@ def _metadata_plan_index(plan_path: Path) -> sqlite3.Connection | None:
             pass
         _METADATA_PLAN_INDEX_CACHE.pop(cached_key, None)
 
+    cache_path = _metadata_plan_index_cache_path(key)
+    try:
+        if cache_path.exists():
+            conn = _connect_metadata_plan_index(cache_path)
+            if _metadata_plan_index_is_usable(conn):
+                _METADATA_PLAN_INDEX_CACHE[key] = conn
+                return conn
+            conn.close()
+    except sqlite3.Error:
+        try:
+            cache_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    except OSError:
+        pass
+
     with _perf_timed("plan_index"):
         from sfxworkbench.utils import load_plan_json_cached
 
@@ -949,12 +988,17 @@ def _metadata_plan_index(plan_path: Path) -> sqlite3.Connection | None:
         if not isinstance(entries, list):
             return None
 
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = cache_path.with_suffix(".tmp.sqlite")
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            tmp_path = Path(":memory:")
         # The TUI warms this cache on a background thread, then reads from it on
         # the UI thread. The connection is populated before publication and is
         # read-only after that, so disabling the same-thread guard avoids a hard
         # sqlite3.ProgrammingError on the first post-warm render.
-        conn = sqlite3.connect(":memory:", check_same_thread=False)
-        conn.row_factory = sqlite3.Row
+        conn = _connect_metadata_plan_index(tmp_path)
         conn.execute(
             """
             CREATE TABLE plan_entries (
@@ -1008,6 +1052,13 @@ def _metadata_plan_index(plan_path: Path) -> sqlite3.Connection | None:
         conn.execute("CREATE INDEX idx_plan_entries_path ON plan_entries(path)")
         conn.execute("CREATE INDEX idx_plan_entries_action_status ON plan_entries(action, status)")
         conn.commit()
+        if tmp_path != Path(":memory:"):
+            conn.close()
+            try:
+                tmp_path.replace(cache_path)
+                conn = _connect_metadata_plan_index(cache_path)
+            except OSError:
+                conn = _connect_metadata_plan_index(tmp_path)
         _METADATA_PLAN_INDEX_CACHE[key] = conn
         return conn
 

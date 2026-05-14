@@ -10,35 +10,21 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from sfxworkbench.apply_logs import APPLY_LOG_DIR_NAME
-from sfxworkbench.audit_bundle import build_audit_bundle
-from sfxworkbench.clean import clean_library
-from sfxworkbench.dedupe import apply_dedupe_plan, find_duplicates, review_dedupe_plan, write_dedupe_plan
-from sfxworkbench.delete import apply_delete_plan, build_delete_plan, review_delete_plan, write_delete_plan
-from sfxworkbench.metadata_audit import build_metadata_audit_report, write_metadata_audit_report
-from sfxworkbench.metadata_write import (
-    apply_metadata_write_plan,
-    build_metadata_write_plan,
-    review_metadata_write_plan,
-    undo_metadata_write_apply_log,
-    write_metadata_write_plan,
-)
-from sfxworkbench.organize import (
-    apply_nesting_plan,
-    apply_organize_report,
-    audit_organization,
-    build_nesting_plan_from_report,
-    review_organize_report,
-    undo_nesting_log,
-    undo_organize_log,
-    write_organize_audit_report,
-)
-from sfxworkbench.packs import apply_pack_plan, audit_packs, build_pack_plan, review_pack_plan, write_pack_audit_report
-from sfxworkbench.rename import apply_rename_plan, build_rename_plan, undo_rename_log, write_rename_log
-from sfxworkbench.scan import scan_library
-from sfxworkbench.tag_plan import apply_tag_plan, build_tag_plan, review_tag_plan, write_tag_plan
-from sfxworkbench.tag_sidecar import build_tag_sidecar_report, write_tag_sidecar_report
-from sfxworkbench.utils import atomic_write_json, fmt_bytes
+APPLY_LOG_DIR_NAME = "apply_logs"
+_TUI_SYNONYM_LIMIT = 8
+_TUI_SYNONYM_DEPTH = 0
+_TUI_UCS_RELEASE_VERSION = "v8.2.1"
+_TUI_DEFAULT_TAG_FIELDS = [
+    "description",
+    "keyword",
+    "ucs_category",
+    "ucs_subcategory",
+    "category",
+    "subcategory",
+    "title",
+    "comment",
+    "channel_position",
+]
 
 
 @dataclass(frozen=True)
@@ -105,6 +91,8 @@ def _compact_details(details: dict[str, Any] | None) -> dict[str, Any]:
 
 def write_action_history(result: ActionResult, report_dir: Path) -> Path:
     """Write a compact JSON history row for every TUI action, including failures."""
+    from sfxworkbench.utils import atomic_write_json
+
     history_dir = _ensure_report_dir(report_dir) / "action_history"
     history_dir.mkdir(parents=True, exist_ok=True)
     output = history_dir / f"tui_action_{_now_stamp()}_{uuid4().hex[:8]}_{_safe_action_name(result.action)}.json"
@@ -253,6 +241,8 @@ def _aggregate_quarantine_entries(report_dir: Path) -> tuple[list[dict], list[Pa
 
 
 def _write_combined_quarantine_log(report_dir: Path, entries: list[dict]) -> Path:
+    from sfxworkbench.utils import atomic_write_json
+
     log_dir = _ensure_report_dir(report_dir) / APPLY_LOG_DIR_NAME
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"combined_quarantine_log_{_now_stamp()}.json"
@@ -268,6 +258,8 @@ def _write_combined_quarantine_log(report_dir: Path, entries: list[dict]) -> Pat
 
 def _write_legacy_quarantine_log(report_dir: Path, quarantine_dirs: list[Path]) -> Path:
     """Back-compat shim used by tests that pre-date :func:`_aggregate_quarantine_entries`."""
+    from sfxworkbench.utils import atomic_write_json
+
     entries = [
         {
             "quarantine_path": str(quarantine_dir),
@@ -296,6 +288,8 @@ def scan_action(
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
 ) -> ActionResult:
+    from sfxworkbench.scan import scan_library
+
     try:
         result = scan_library(
             root,
@@ -327,6 +321,8 @@ def full_audit_action(
     *,
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
 ) -> ActionResult:
+    from sfxworkbench.audit_bundle import build_audit_bundle
+
     try:
         bundle = build_audit_bundle(
             root,
@@ -362,6 +358,8 @@ def clean_action(
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
 ) -> ActionResult:
+    from sfxworkbench.clean import clean_library
+
     action = "clean_apply" if apply else "clean_preview"
     try:
         log_path = _ensure_report_dir(report_dir) / f"clean_{'apply' if apply else 'preview'}_{_now_stamp()}.json"
@@ -396,6 +394,8 @@ def clean_action(
 
 
 def metadata_audit_action(db_path: Path, report_dir: Path) -> ActionResult:
+    from sfxworkbench.metadata_audit import build_metadata_audit_report, write_metadata_audit_report
+
     try:
         report = build_metadata_audit_report(db_path)
         output = _ensure_report_dir(report_dir) / "metadata_audit.json"
@@ -415,6 +415,54 @@ def metadata_audit_action(db_path: Path, report_dir: Path) -> ActionResult:
     )
 
 
+def _ensure_ucs_catalog_for_suggestions(
+    root: Path,
+    report_dir: Path,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+) -> dict[str, Any]:
+    """Load or import the UCS cache before the metadata suggestion pass."""
+    from sfxworkbench.ucs_catalog import (
+        default_cache_path,
+        discover_import_source,
+        import_catalog,
+        load_catalog,
+        resolve_catalog_path,
+    )
+
+    loaded = load_catalog(None)
+    if loaded is not None:
+        return {
+            "ucs_catalog_available": True,
+            "ucs_catalog_imported": False,
+            "ucs_catalog_path": str(resolve_catalog_path(None) or default_cache_path()),
+            "ucs_catalog_entries": loaded.provenance.entry_count,
+        }
+
+    source = discover_import_source([report_dir, root.parent, root])
+    if source is None:
+        return {
+            "ucs_catalog_available": False,
+            "ucs_catalog_imported": False,
+            "ucs_catalog_path": None,
+            "ucs_catalog_source": None,
+        }
+
+    if progress_callback is not None:
+        progress_callback("catalog", 0, None, f"Importing UCS catalog from {source.name}...")
+    result, catalog = import_catalog(
+        source,
+        output_path=default_cache_path(),
+        release_version=_TUI_UCS_RELEASE_VERSION,
+    )
+    return {
+        "ucs_catalog_available": True,
+        "ucs_catalog_imported": True,
+        "ucs_catalog_path": result.catalog_path,
+        "ucs_catalog_source": result.source_path,
+        "ucs_catalog_entries": catalog.provenance.entry_count,
+    }
+
+
 def tag_plan_action(
     root: Path,
     db_path: Path,
@@ -423,30 +471,38 @@ def tag_plan_action(
     sources: list[str] | None = None,
     fields: list[str] | None = None,
     include_synonyms: bool = False,
-    min_confidence: float = 0.8,
+    min_confidence: float = 0.75,
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> ActionResult:
+    from sfxworkbench.tag_plan import build_tag_plan, write_tag_plan
+
     used_catalog = True
+    catalog_details: dict[str, Any] = {}
+    effective_fields = fields if fields is not None else _TUI_DEFAULT_TAG_FIELDS
+    effective_min_confidence = min(min_confidence, 0.62) if include_synonyms else min_confidence
     try:
+        catalog_details = _ensure_ucs_catalog_for_suggestions(root, report_dir, progress_callback)
         try:
             plan = build_tag_plan(
                 root,
                 db_path=db_path,
-                min_confidence=min_confidence,
+                min_confidence=effective_min_confidence,
                 limit=0,
                 use_ucs_catalog=True,
                 include_synonyms=include_synonyms,
-                synonym_limit=3 if include_synonyms else 0,
-                synonym_depth=2 if include_synonyms else 0,
+                synonym_limit=_TUI_SYNONYM_LIMIT if include_synonyms else 0,
+                synonym_depth=_TUI_SYNONYM_DEPTH if include_synonyms else 0,
                 sources=sources,
-                fields=fields,
+                fields=effective_fields,
                 progress_callback=progress_callback,
+                cancel_requested=cancel_requested,
             )
         except ValueError as catalog_error:
             if "No UCS catalog loaded" not in str(catalog_error):
                 raise
             used_catalog = False
-            fallback_confidence = min(min_confidence, 0.55)
+            fallback_confidence = min(effective_min_confidence, 0.55)
             plan = build_tag_plan(
                 root,
                 db_path=db_path,
@@ -454,27 +510,51 @@ def tag_plan_action(
                 limit=0,
                 use_ucs_catalog=False,
                 include_synonyms=include_synonyms,
-                synonym_limit=3 if include_synonyms else 0,
-                synonym_depth=2 if include_synonyms else 0,
+                synonym_limit=_TUI_SYNONYM_LIMIT if include_synonyms else 0,
+                synonym_depth=_TUI_SYNONYM_DEPTH if include_synonyms else 0,
                 sources=sources,
-                fields=fields,
+                fields=effective_fields,
                 progress_callback=progress_callback,
+                cancel_requested=cancel_requested,
             )
         output = _ensure_report_dir(report_dir) / "metadata_tag_plan.json"
         write_tag_plan(plan, output, quiet=True)
+    except InterruptedError as e:
+        return ActionResult(
+            action="tag_plan",
+            status="cancelled",
+            message=str(e),
+            errors=(str(e),),
+            refresh=("metadata", "status"),
+        )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("tag_plan", e)
+    message = f"Built metadata tag plan with {plan.summary.add_entries:,} planned DB tag write(s)."
+    if catalog_details.get("ucs_catalog_imported"):
+        message += f" Imported UCS catalog with {catalog_details.get('ucs_catalog_entries', 0):,} entries first."
+    if not used_catalog:
+        message += " UCS catalog not loaded; used filename/path/group heuristics only."
     return ActionResult(
         action="tag_plan",
         status="ok",
-        message=f"Built metadata tag plan with {plan.summary.add_entries:,} planned DB tag write(s).",
+        message=message,
         output_path=str(output),
         refresh=("metadata", "reports"),
-        details={**plan.model_dump(), "used_ucs_catalog": used_catalog},
+        details={
+            **plan.model_dump(),
+            "used_ucs_catalog": used_catalog,
+            **catalog_details,
+            "fields": effective_fields,
+            "include_synonyms": include_synonyms,
+            "synonym_limit": _TUI_SYNONYM_LIMIT if include_synonyms else 0,
+            "synonym_depth": _TUI_SYNONYM_DEPTH if include_synonyms else 0,
+        },
     )
 
 
 def approve_tag_plan_action(report_dir: Path) -> ActionResult:
+    from sfxworkbench.tag_plan import review_tag_plan
+
     plan_path = report_dir / "metadata_tag_plan.json"
     if not plan_path.exists():
         return ActionResult(
@@ -517,6 +597,8 @@ def apply_tag_plan_action(
         return ActionResult(
             "tag_apply", "error", "No metadata tag plan found.", errors=("No metadata tag plan found.",)
         )
+    from sfxworkbench.tag_plan import apply_tag_plan, review_tag_plan
+
     auto_approve_error = _auto_approve_plan(plan_path, review_tag_plan, _per_entry_plan_has_approvals)
     if auto_approve_error is not None:
         return _action_error("tag_apply", auto_approve_error)
@@ -549,6 +631,8 @@ def apply_tag_plan_action(
 
 
 def export_sidecar_action(root: Path, db_path: Path, report_dir: Path) -> ActionResult:
+    from sfxworkbench.tag_sidecar import build_tag_sidecar_report, write_tag_sidecar_report
+
     try:
         output = _ensure_report_dir(report_dir) / "accepted_tags.sidecar.json"
         report = build_tag_sidecar_report(db_path=db_path, root=root, limit=0)
@@ -566,6 +650,8 @@ def export_sidecar_action(root: Path, db_path: Path, report_dir: Path) -> Action
 
 
 def build_dedupe_plan_action(db_path: Path, report_dir: Path) -> ActionResult:
+    from sfxworkbench.dedupe import find_duplicates, write_dedupe_plan
+
     try:
         groups = find_duplicates(db_path)
         output = _ensure_report_dir(report_dir) / "dedupe_plan.json"
@@ -583,6 +669,8 @@ def build_dedupe_plan_action(db_path: Path, report_dir: Path) -> ActionResult:
 
 
 def approve_dedupe_plan_action(report_dir: Path) -> ActionResult:
+    from sfxworkbench.dedupe import review_dedupe_plan
+
     plan_path = report_dir / "dedupe_plan.json"
     if not plan_path.exists():
         return ActionResult("dedupe_review", "error", "No dedupe plan found.", errors=("No dedupe plan found.",))
@@ -616,6 +704,8 @@ def apply_dedupe_plan_action(
     plan_path = report_dir / "dedupe_plan.json"
     if not plan_path.exists():
         return ActionResult("dedupe_apply", "error", "No dedupe plan found.", errors=("No dedupe plan found.",))
+    from sfxworkbench.dedupe import apply_dedupe_plan, review_dedupe_plan
+
     auto_approve_error = _auto_approve_plan(plan_path, review_dedupe_plan, _group_plan_has_approvals)
     if auto_approve_error is not None:
         return _action_error("dedupe_apply", auto_approve_error)
@@ -649,6 +739,8 @@ def apply_dedupe_plan_action(
 
 
 def pack_audit_action(root: Path, db_path: Path, report_dir: Path) -> ActionResult:
+    from sfxworkbench.packs import audit_packs, write_pack_audit_report
+
     try:
         report = audit_packs(root, db_path=db_path)
         output = _ensure_report_dir(report_dir) / "pack_overlap_report.json"
@@ -674,6 +766,8 @@ def pack_plan_action(report_dir: Path) -> ActionResult:
         return ActionResult(
             "pack_plan", "error", "No pack overlap report found.", errors=("No pack overlap report found.",)
         )
+    from sfxworkbench.packs import build_pack_plan
+
     try:
         output = report_dir / "pack_consolidation_plan.json"
         plan = build_pack_plan(report_path, output_path=output, quiet=True)
@@ -690,6 +784,8 @@ def pack_plan_action(report_dir: Path) -> ActionResult:
 
 
 def approve_pack_plan_action(report_dir: Path) -> ActionResult:
+    from sfxworkbench.packs import review_pack_plan
+
     plan_path = report_dir / "pack_consolidation_plan.json"
     if not plan_path.exists():
         return ActionResult("pack_review", "error", "No pack plan found.", errors=("No pack plan found.",))
@@ -711,6 +807,8 @@ def apply_pack_plan_action(db_path: Path, report_dir: Path) -> ActionResult:
     plan_path = report_dir / "pack_consolidation_plan.json"
     if not plan_path.exists():
         return ActionResult("pack_apply", "error", "No pack plan found.", errors=("No pack plan found.",))
+    from sfxworkbench.packs import apply_pack_plan, review_pack_plan
+
     auto_approve_error = _auto_approve_plan(plan_path, review_pack_plan, _group_plan_has_approvals)
     if auto_approve_error is not None:
         return _action_error("pack_apply", auto_approve_error)
@@ -731,6 +829,8 @@ def apply_pack_plan_action(db_path: Path, report_dir: Path) -> ActionResult:
 
 
 def rename_preview_action(root: Path, report_dir: Path, *, pattern: str = "portable") -> ActionResult:
+    from sfxworkbench.rename import build_rename_plan, write_rename_log
+
     try:
         plan = build_rename_plan(root, pattern=pattern)
         output = _ensure_report_dir(report_dir) / f"{pattern}_rename_plan.json"
@@ -760,6 +860,7 @@ def apply_rename_action(
     if not plan_path.exists():
         return ActionResult("rename_apply", "error", "No rename plan found.", errors=("No rename plan found.",))
     from sfxworkbench.models import RenamePlan
+    from sfxworkbench.rename import apply_rename_plan
 
     try:
         plan = RenamePlan.model_validate_json(plan_path.read_text())
@@ -792,6 +893,8 @@ def undo_rename_action(db_path: Path, report_dir: Path) -> ActionResult:
     log_path = _latest(log_dir, "rename_log_*.json") or _latest(report_dir, "rename_log_*.json")
     if log_path is None:
         return ActionResult("rename_undo", "error", "No rename undo log found.", errors=("No rename undo log found.",))
+    from sfxworkbench.rename import undo_rename_log
+
     try:
         result = undo_rename_log(log_path, db_path=db_path, dry_run=False, quiet=True)
     except Exception as e:  # pragma: no cover - defensive UI boundary
@@ -812,6 +915,8 @@ def organize_audit_action(root: Path, report_dir: Path, *, pattern: str = "strip
     action = "organize_nesting_audit" if pattern == "redundant-nesting" else "organize_audit"
     output_name = "redundant_nesting_report.json" if pattern == "redundant-nesting" else "organize_report.json"
     depth = 8 if pattern == "redundant-nesting" else 1
+    from sfxworkbench.organize import audit_organization, write_organize_audit_report
+
     try:
         report = audit_organization(root, pattern=pattern, depth=depth)
         output = _ensure_report_dir(report_dir) / output_name
@@ -833,6 +938,8 @@ def organize_audit_action(root: Path, report_dir: Path, *, pattern: str = "strip
 
 
 def approve_organize_action(report_dir: Path, *, plan_name: str = "organize_report.json") -> ActionResult:
+    from sfxworkbench.organize import review_organize_report
+
     report_path = report_dir / plan_name
     action = "organize_nesting_review" if plan_name == "nesting_plan.json" else "organize_review"
     if not report_path.exists():
@@ -857,6 +964,8 @@ def apply_organize_action(db_path: Path, report_dir: Path) -> ActionResult:
         return ActionResult(
             "organize_apply", "error", "No organization report found.", errors=("No organization report found.",)
         )
+    from sfxworkbench.organize import apply_organize_report, review_organize_report
+
     auto_approve_error = _auto_approve_plan(report_path, review_organize_report, _per_entry_plan_has_approvals)
     if auto_approve_error is not None:
         return _action_error("organize_apply", auto_approve_error)
@@ -883,6 +992,8 @@ def undo_organize_action(db_path: Path, report_dir: Path) -> ActionResult:
         return ActionResult(
             "organize_undo", "error", "No organization undo log found.", errors=("No organization undo log found.",)
         )
+    from sfxworkbench.organize import undo_organize_log
+
     try:
         result = undo_organize_log(log_path, db_path=db_path, dry_run=False, quiet=True)
     except Exception as e:  # pragma: no cover - defensive UI boundary
@@ -908,6 +1019,8 @@ def build_nesting_plan_action(report_dir: Path, *, kind: str = "repeated_folder_
             "No redundant nesting report found.",
             errors=("No redundant nesting report found.",),
         )
+    from sfxworkbench.organize import build_nesting_plan_from_report
+
     try:
         output = _ensure_report_dir(report_dir) / "nesting_plan.json"
         plan = build_nesting_plan_from_report(report_path, kind=kind, output_path=output, quiet=True)
@@ -930,6 +1043,8 @@ def apply_nesting_action(db_path: Path, report_dir: Path) -> ActionResult:
         return ActionResult(
             "organize_nesting_apply", "error", "No nesting plan found.", errors=("No nesting plan found.",)
         )
+    from sfxworkbench.organize import apply_nesting_plan, review_organize_report
+
     auto_approve_error = _auto_approve_plan(plan_path, review_organize_report, _per_entry_plan_has_approvals)
     if auto_approve_error is not None:
         return _action_error("organize_nesting_apply", auto_approve_error)
@@ -956,6 +1071,8 @@ def undo_nesting_action(db_path: Path, report_dir: Path) -> ActionResult:
         return ActionResult(
             "organize_nesting_undo", "error", "No nesting undo log found.", errors=("No nesting undo log found.",)
         )
+    from sfxworkbench.organize import undo_nesting_log
+
     try:
         result = undo_nesting_log(log_path, db_path=db_path, dry_run=False, quiet=True)
     except Exception as e:  # pragma: no cover - defensive UI boundary
@@ -1031,6 +1148,8 @@ def build_embedded_metadata_plan_action(
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
 ) -> ActionResult:
+    from sfxworkbench.metadata_write import build_metadata_write_plan, write_metadata_write_plan
+
     try:
         output = _ensure_report_dir(report_dir) / "metadata_write_plan.json"
         plan = build_metadata_write_plan(
@@ -1059,6 +1178,8 @@ def build_embedded_metadata_plan_action(
 
 
 def approve_embedded_metadata_action(report_dir: Path) -> ActionResult:
+    from sfxworkbench.metadata_write import review_metadata_write_plan
+
     plan_path = report_dir / "metadata_write_plan.json"
     if not plan_path.exists():
         return ActionResult(
@@ -1101,6 +1222,8 @@ def apply_embedded_metadata_action(
             "No embedded metadata write plan found.",
             errors=("No embedded metadata write plan found.",),
         )
+    from sfxworkbench.metadata_write import apply_metadata_write_plan, review_metadata_write_plan
+
     auto_approve_error = _auto_approve_plan(plan_path, review_metadata_write_plan, _per_entry_plan_has_approvals)
     if auto_approve_error is not None:
         return _action_error("metadata_write_apply", auto_approve_error)
@@ -1144,6 +1267,8 @@ def undo_embedded_metadata_action(db_path: Path, report_dir: Path) -> ActionResu
             "No embedded metadata write undo log found.",
             errors=("No embedded metadata write undo log found.",),
         )
+    from sfxworkbench.metadata_write import undo_metadata_write_apply_log
+
     try:
         result = undo_metadata_write_apply_log(log_path, db_path=db_path, dry_run=False, quiet=True)
     except Exception as e:  # pragma: no cover - defensive UI boundary
@@ -1173,6 +1298,9 @@ def build_delete_plan_action(report_dir: Path) -> ActionResult:
         source_log = _write_combined_quarantine_log(report_dir, entries)
     except OSError as e:
         return _action_error("delete_plan", e)
+    from sfxworkbench.delete import build_delete_plan, write_delete_plan
+    from sfxworkbench.utils import fmt_bytes
+
     try:
         output = _ensure_report_dir(report_dir) / "delete_plan.json"
         plan = build_delete_plan(source_log)
@@ -1195,6 +1323,8 @@ def build_delete_plan_action(report_dir: Path) -> ActionResult:
 
 
 def approve_delete_plan_action(report_dir: Path) -> ActionResult:
+    from sfxworkbench.delete import review_delete_plan
+
     plan_path = report_dir / "delete_plan.json"
     if not plan_path.exists():
         return ActionResult(
@@ -1220,6 +1350,8 @@ def apply_delete_plan_action(report_dir: Path, db_path: Path | None = None) -> A
         return ActionResult(
             "delete_apply", "error", "No permanent-delete plan found.", errors=("No delete plan found.",)
         )
+    from sfxworkbench.delete import apply_delete_plan, review_delete_plan
+
     auto_approve_error = _auto_approve_plan(plan_path, review_delete_plan, _per_entry_plan_has_approvals)
     if auto_approve_error is not None:
         return _action_error("delete_apply", auto_approve_error)

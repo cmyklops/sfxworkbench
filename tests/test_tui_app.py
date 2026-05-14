@@ -44,7 +44,6 @@ def test_tui_operation_buttons_are_registered_for_running_state() -> None:
         "organize-nesting-undo",
         "metadata-audit",
         "metadata-plan",
-        "metadata-plan-synonyms",
         "metadata-apply",
         "metadata-sidecar",
         "metadata-write-apply",
@@ -105,12 +104,65 @@ def test_top_meta_group_precedes_tabs() -> None:
     assert status_strip.index("for index, page in enumerate(pages):") < status_strip.index('"  reports: "')
 
 
-def test_tab_hotkeys_are_hidden_from_footer() -> None:
+def test_static_mini_footer_replaces_textual_footer_on_startup() -> None:
+    app_source = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
+
+    textual_import = app_source[
+        app_source.index("from textual.widgets import") : app_source.index("from textual.worker import")
+    ]
+    assert "Footer" not in textual_import
+    assert "yield Footer()" not in app_source
+    assert 'yield Static(_FOOTER_TEXT, id="mini-footer")' in app_source
+    assert "_FOOTER_TEXT" in app_source
+
+
+def test_tab_hotkeys_are_hidden_from_binding_discovery() -> None:
     app_source = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
 
     for action in ("focus_scan", "focus_clean", "focus_dedupe", "focus_metadata", "focus_files", "focus_history"):
         assert f'"{action}"' in app_source
     assert app_source.count("show=False") >= 6
+
+
+def test_tui_startup_path_does_not_call_heavy_adapters() -> None:
+    app_source = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
+
+    run_tui_prefix = app_source[app_source.index("def run_tui") : app_source.index("try:")]
+    on_mount_source = app_source[app_source.index("def on_mount") : app_source.index("def _start_initial_load")]
+    finish_source = app_source[app_source.index("def _finish_initial_load") : app_source.index("def on_resize")]
+
+    for heavy_call in (
+        "report_search_paths(",
+        "feature_pages(",
+        "indexed_library_size_gb(",
+        "scan_findings(",
+        "review_queues(",
+        "discover_plan_files(",
+        "list_files(",
+        "_refresh(",
+    ):
+        assert heavy_call not in run_tui_prefix
+        assert heavy_call not in on_mount_source
+        assert heavy_call not in finish_source
+
+    initial_load_source = app_source[
+        app_source.index("def _start_initial_load") : app_source.index("def _finish_initial_load")
+    ]
+    assert "threading.Thread(target=_load, daemon=True).start()" in initial_load_source
+
+
+def test_tui_lazy_mounts_inactive_tab_widgets() -> None:
+    app_source = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
+
+    compose_source = app_source[app_source.index("def compose") : app_source.index("def _page_widget")]
+    assert 'with ContentSwitcher(initial="scan-page", id="feature-pages")' in compose_source
+    assert 'self._page_widget("scan", self._scan_page)' in compose_source
+    for inactive_key in ("clean", "dedupe", "metadata", "files", "history"):
+        assert f'self._page_widget("{inactive_key}"' not in compose_source
+
+    assert "def _ensure_page_mounted" in app_source
+    assert "switcher.mount(self._page_widget(key, factory))" in app_source
+    assert "mounted_now = self._ensure_page_mounted(tab_id)" in app_source
 
 
 def test_advanced_actions_moved_to_metadata_and_files_tabs() -> None:
@@ -142,6 +194,17 @@ def test_metadata_review_navigation_buttons_are_visible() -> None:
     assert 'id="metadata-search"' not in metadata_text
     assert metadata_text.index('"metadata-page-random"') < metadata_text.index('"metadata-rows-table"')
     assert "Source symbols: # filename" in metadata_text
+
+
+def test_generate_suggestions_includes_synonyms_by_default_from_tui() -> None:
+    app_text = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
+    metadata_text = (Path(__file__).parents[1] / "sfxworkbench" / "tui_screens" / "metadata_tab.py").read_text()
+
+    handler = app_text[app_text.index('handlers["metadata-plan"]') - 300 : app_text.index('handlers["metadata-plan"]')]
+    assert "include_synonyms=True" in handler
+    assert "cancel_requested=cancel" in handler
+    assert "metadata-plan-synonyms" not in app_text
+    assert "Generate Synonyms" not in metadata_text
 
 
 def test_tui_popup_open_actions_are_single_instance_guards() -> None:

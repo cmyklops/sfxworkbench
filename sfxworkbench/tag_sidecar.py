@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.table import Table
 
 from sfxworkbench import __version__
-from sfxworkbench.db import DEFAULT_DB_PATH, get_connection
+from sfxworkbench.db import DEFAULT_DB_PATH, get_connection, is_scoped_path, resolve_scope_root
 from sfxworkbench.models import TagSidecarEntry, TagSidecarImportResult, TagSidecarReport, TagSidecarTag
 from sfxworkbench.utils import atomic_write_json
 
@@ -31,14 +31,6 @@ def _md5(path: Path, block: int = 65536) -> str | None:
         return h.hexdigest()
     except OSError:
         return None
-
-
-def _is_relative_to(path: Path, parent: Path) -> bool:
-    try:
-        path.relative_to(parent)
-        return True
-    except ValueError:
-        return False
 
 
 def _decode_evidence(raw: str | None) -> list[str]:
@@ -61,7 +53,7 @@ def build_tag_sidecar_report(
     """Build a JSON sidecar payload from accepted DB-only tags."""
     if limit < 0:
         raise ValueError("limit must be 0 or greater")
-    resolved_root = root.expanduser().resolve() if root is not None else None
+    resolved_root = resolve_scope_root(root) if root is not None else None
     if resolved_root is not None and not resolved_root.exists():
         raise ValueError(f"path not found: {resolved_root}")
 
@@ -77,11 +69,7 @@ def build_tag_sidecar_report(
     ).fetchall()
     conn.close()
     if resolved_root is not None:
-        rows = [
-            row
-            for row in rows
-            if Path(row["path"]) == resolved_root or _is_relative_to(Path(row["path"]), resolved_root)
-        ]
+        rows = [row for row in rows if is_scoped_path(row["path"], resolved_root)]
 
     entries_by_path: dict[str, TagSidecarEntry] = {}
     for row in rows:

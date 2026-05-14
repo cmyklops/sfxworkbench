@@ -123,6 +123,22 @@ def test_trailing_space_detected(tmp_path: Path) -> None:
     assert types, "Trailing space should produce leading_trailing_space issue"
 
 
+def test_windows_reserved_basename_detected_even_with_extension(tmp_path: Path) -> None:
+    fake_path = tmp_path / "CON.wav"
+    issues = check_path(fake_path, tmp_path)
+
+    types = _issues_of_type(issues, "windows_reserved_name")
+    assert types, "Reserved Windows basenames should be flagged even with extensions"
+
+
+def test_trailing_dot_detected_for_windows_portability(tmp_path: Path) -> None:
+    fake_path = Path(str(tmp_path) + "/badname.")
+    issues = check_path(fake_path, tmp_path)
+
+    types = _issues_of_type(issues, "trailing_dot_or_space")
+    assert types, "Trailing dot should produce trailing_dot_or_space issue"
+
+
 def test_no_space_issues(tmp_path: Path) -> None:
     fake_path = tmp_path / "no_spaces.wav"
     issues = check_path(fake_path, tmp_path)

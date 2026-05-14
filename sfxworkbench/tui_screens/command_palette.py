@@ -55,7 +55,6 @@ _LABELS: dict[str, str] = {
     "organize-nesting-undo": "Undo nesting",
     "metadata-audit": "Metadata audit",
     "metadata-plan": "Generate tag suggestions",
-    "metadata-plan-synonyms": "Generate synonyms",
     "metadata-review-open": "Open metadata tag review screen",
     "metadata-page-prev": "Previous metadata review page",
     "metadata-page-next": "Next metadata review page",

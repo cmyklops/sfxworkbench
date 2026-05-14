@@ -87,6 +87,7 @@ lint-types = "mypy sfxworkbench"
 fmt = "ruff format ."
 fmt-check = "ruff format --check ."
 json-smoke = "pytest tests/test_cli_json.py tests/test_json_contracts.py -v"
+test-windows-smoke = "pytest tests/test_db.py tests/test_health.py tests/test_groups.py tests/test_packs.py tests/test_tag_suggest.py tests/test_ucs_validate.py -v"
 check = ["lint", "fmt-check", "test"]
 bench-scan = "python scripts/bench_large_library.py"
 beta-audit = "python scripts/internal_beta_audit.py"

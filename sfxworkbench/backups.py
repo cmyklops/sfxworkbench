@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from sfxworkbench.path_safety import path_exists_windows
+
 # Matches the ``<name>.original-YYYYMMDDTHHMMSS.ffffffZ`` suffix added by
 # :func:`make_original_backup`. The fractional ``.ffffff`` portion is required
 # (microseconds — six digits) so two backups taken in the same wall-clock second
@@ -92,6 +94,14 @@ def make_original_backup(path: Path, *, stamp: str | None = None) -> Path:
     if not path.exists():
         raise FileNotFoundError(f"cannot back up missing file: {path}")
     target = backup_path_for(path, stamp=stamp)
+    if path_exists_windows(target):
+        stem = target.stem
+        suffix = target.suffix
+        parent = target.parent
+        index = 1
+        while path_exists_windows(target):
+            target = parent / f"{stem}__{index}{suffix}"
+            index += 1
     shutil.copy2(path, target)
     return target
 

@@ -31,7 +31,6 @@ def compose(app) -> ComposeResult:
     yield from app._button_row(
         ("Metadata Audit", "metadata-audit"),
         ("Generate Suggestions", "metadata-plan"),
-        ("Generate Synonyms", "metadata-plan-synonyms"),
         ("Apply Tags & Plan Embedded", "metadata-apply", "warning"),
         ("Save Tags File", "metadata-sidecar"),
     )

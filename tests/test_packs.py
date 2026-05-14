@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from sfxworkbench.db import get_connection
+from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params
 from sfxworkbench.packs import (
     apply_pack_plan,
     audit_packs,
@@ -79,6 +79,26 @@ def test_pack_audit_finds_exact_duplicate_folders(tmp_path: Path, tmp_db: Path) 
     assert group.total_bytes == 30
     assert group.same_relative_paths is True
     assert [Path(folder.path).name for folder in group.folders] == ["Pack Copy", "Pack"]
+
+
+def test_pack_audit_scopes_windows_style_paths(tmp_db: Path) -> None:
+    conn = get_connection(tmp_db)
+    conn.executemany(
+        """INSERT INTO files (path, filename, stem, extension, size_bytes, mtime, md5, scanned_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        [
+            ("C:\\Lib\\A\\one.wav", "one.wav", "one", ".wav", 10, 0.0, "A", "2026"),
+            ("C:\\Lib\\B\\one.wav", "one.wav", "one", ".wav", 10, 0.0, "A", "2026"),
+            ("C:\\Lib2\\C\\one.wav", "one.wav", "one", ".wav", 10, 0.0, "A", "2026"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    report = audit_packs(Path("c:/lib"), tmp_db, min_files=1)
+
+    assert report.summary.indexed_files_considered == 2
+    assert {Path(folder.path).name for group in report.exact_groups for folder in group.folders} == {"A", "B"}
 
 
 def test_pack_audit_finds_partial_overlap(tmp_path: Path, tmp_db: Path) -> None:
@@ -274,7 +294,10 @@ def test_pack_plan_reviews_applies_and_undoes_exact_duplicate_folder(tmp_path: P
     quarantined_path = Path(json.loads(log_path.read_text())["entries"][0]["quarantine_path"])
     assert quarantined_path.exists()
     conn = get_connection(tmp_db)
-    moved_rows = conn.execute("SELECT path FROM files WHERE path LIKE ?", (str(quarantined_path) + "/%",)).fetchall()
+    moved_rows = conn.execute(
+        f"SELECT path FROM files WHERE {path_scope_filter()}",
+        path_scope_params(quarantined_path),
+    ).fetchall()
     conn.close()
     assert len(moved_rows) == 2
 
@@ -283,7 +306,10 @@ def test_pack_plan_reviews_applies_and_undoes_exact_duplicate_folder(tmp_path: P
     assert undo.restored == 1
     assert duplicate.exists()
     conn = get_connection(tmp_db)
-    restored_rows = conn.execute("SELECT path FROM files WHERE path LIKE ?", (str(duplicate) + "/%",)).fetchall()
+    restored_rows = conn.execute(
+        f"SELECT path FROM files WHERE {path_scope_filter()}",
+        path_scope_params(duplicate),
+    ).fetchall()
     conn.close()
     assert len(restored_rows) == 2
 
@@ -585,7 +611,10 @@ def test_pack_apply_uses_non_overwriting_quarantine_target(tmp_path: Path, tmp_d
     keep = root / "A Pack"
     duplicate = root / "B Pack"
     quarantine_dir = tmp_path / "quarantine"
-    existing_target = quarantine_dir / duplicate.resolve().relative_to("/")
+    resolved_duplicate = duplicate.resolve()
+    existing_target = quarantine_dir.joinpath(
+        *(part for part in resolved_duplicate.parts if part not in (resolved_duplicate.anchor, "/"))
+    )
     existing_target.mkdir(parents=True)
     files = [
         {"path": keep / "one.wav", "md5": "A", "size": 10},

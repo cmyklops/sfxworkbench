@@ -7,6 +7,7 @@ import json
 import shutil
 import struct
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,10 @@ from sfxworkbench.metadata_write import (
 
 
 def _fake_bwfmetaedit(tmp_path: Path) -> Path:
+    if sys.platform == "win32":
+        executable = tmp_path / "bwfmetaedit.cmd"
+        executable.write_text("@echo off\necho BWF MetaEdit 24.04\n", encoding="utf-8")
+        return executable
     executable = tmp_path / "bwfmetaedit"
     executable.write_text("#!/bin/sh\necho 'BWF MetaEdit 24.04'\n", encoding="utf-8")
     executable.chmod(0o755)

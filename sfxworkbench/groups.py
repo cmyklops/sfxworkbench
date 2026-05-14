@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.table import Table
 
 from sfxworkbench import __version__
-from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params
+from sfxworkbench.db import get_connection, is_scoped_path, path_scope_filter, path_scope_params, resolve_scope_root
 from sfxworkbench.models import RelatedGroupsReport, RelatedGroupsSummary, RelatedSoundFile, RelatedSoundGroup
 
 console = Console()
@@ -38,14 +38,6 @@ class _GroupBucket:
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _is_relative_to(path: Path, parent: Path) -> bool:
-    try:
-        path.relative_to(parent)
-        return True
-    except ValueError:
-        return False
 
 
 def _group_key(value: str) -> str:
@@ -121,13 +113,13 @@ def audit_related_groups(root: Path, db_path: Path, min_files: int = 2, limit: i
     if limit < 0:
         raise ValueError("--limit must be 0 or greater")
 
-    root = root.resolve()
+    root = resolve_scope_root(root)
     rows = _load_rows(root, db_path)
     buckets: dict[tuple[str, str, str], _GroupBucket] = {}
 
     for row in rows:
         path = Path(row["path"])
-        if not _is_relative_to(path, root):
+        if not is_scoped_path(row["path"], root):
             continue
         inferred = _infer_related_key(row["stem"] or path.stem)
         if inferred is None:

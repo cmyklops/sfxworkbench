@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -77,6 +78,7 @@ def test_atomic_write_text_creates_parent_dirs(tmp_path: Path) -> None:
     assert target.read_text() == "deep"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits are not stable on Windows")
 def test_atomic_write_text_preserves_existing_permissions(tmp_path: Path) -> None:
     target = tmp_path / "out.txt"
     target.write_text("v1")

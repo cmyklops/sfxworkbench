@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from sfxworkbench import __version__
-from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params
+from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params, resolve_scope_root
 from sfxworkbench.models import UcsValidationIssue, UcsValidationReport, UcsValidationSummary
 from sfxworkbench.ucs import normalize_stem, parse_ucs_stem
 from sfxworkbench.ucs_catalog import load_catalog, lookup_entry, resolve_catalog_path
@@ -34,7 +34,7 @@ def _load_indexed_files(db_path: Path, root: Path | None):
             """
         ).fetchall()
     else:
-        root = root.resolve()
+        root = resolve_scope_root(root)
         rows = conn.execute(
             f"""
             SELECT id, path, filename, stem
