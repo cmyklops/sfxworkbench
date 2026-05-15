@@ -62,6 +62,9 @@ CREATE TABLE IF NOT EXISTS files (
     metadata_sources TEXT,
     is_ucs INTEGER DEFAULT 0,
     scan_error TEXT,
+    hash_scanned_at TEXT,
+    audio_scanned_at TEXT,
+    metadata_scanned_at TEXT,
     scanned_at TEXT NOT NULL
 );
 
@@ -343,6 +346,9 @@ _FILES_COLUMN_MIGRATIONS = {
     "has_cue_markers": "INTEGER DEFAULT 0",
     "has_sampler": "INTEGER DEFAULT 0",
     "metadata_sources": "TEXT",
+    "hash_scanned_at": "TEXT",
+    "audio_scanned_at": "TEXT",
+    "metadata_scanned_at": "TEXT",
 }
 
 _AUDIO_DESCRIPTORS_COLUMN_MIGRATIONS = {

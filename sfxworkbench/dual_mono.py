@@ -24,6 +24,7 @@ from sfxworkbench.models import (
     DualMonoSummary,
 )
 from sfxworkbench.preservation import build_preservation_rules, move_protected_by
+from sfxworkbench.scan import ensure_audio_info
 from sfxworkbench.utils import atomic_write_json
 
 console = Console()
@@ -79,6 +80,7 @@ def build_dual_mono_report(
     if limit < 0:
         raise ValueError("--limit must be 0 or greater")
     root = resolve_scope_root(root)
+    ensure_audio_info(db_path, root)
     rows = _load_indexed_stereo_rows(root, db_path)
     entries: list[DualMonoEntry] = []
     errors: list[dict] = []

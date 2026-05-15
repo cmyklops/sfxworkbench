@@ -86,6 +86,7 @@ def build_audit_bundle(
         skip_hash=skip_hash,
         force_rescan=force_rescan,
         quiet=quiet,
+        mode="full",
         progress_callback=progress_callback,
     )
     scan_path = output / "scan_result.json"
@@ -105,7 +106,7 @@ def build_audit_bundle(
     report_paths["metadata_audit"] = str(metadata_path)
     advance("Wrote metadata audit")
 
-    duplicates = find_duplicates(db_path)
+    duplicates = find_duplicates(db_path, ensure_hash=not skip_hash, root=root)
     duplicate_summary = summarize_duplicates(duplicates)
     duplicates_path = output / "dedupe_summary.json"
     _write_json(
@@ -135,7 +136,7 @@ def build_audit_bundle(
     report_paths["format_audit"] = str(format_path)
     advance("Wrote format audit")
 
-    packs = audit_packs(root, db_path=db_path)
+    packs = audit_packs(root, db_path=db_path, ensure_hash=not skip_hash)
     packs_path = output / "pack_overlap_report.json"
     write_pack_audit_report(packs, packs_path, quiet=True)
     report_paths["pack_overlap"] = str(packs_path)

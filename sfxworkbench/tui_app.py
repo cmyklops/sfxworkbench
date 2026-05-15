@@ -728,6 +728,10 @@ def run_tui(
         Button {
             margin-right: 1;
             min-width: 9;
+            height: 1;
+            border: none;
+            padding: 0 1;
+            text-style: bold;
         }
         #library-controls Button {
             min-width: 13;
@@ -1396,7 +1400,7 @@ def run_tui(
                 root = self._root_path()
                 _start(
                     "scan",
-                    "Scan Library",
+                    "Quick Index",
                     lambda: scan_action(root, db_path, progress_callback=pcb, cancel_requested=cancel),
                 )
 
@@ -1449,7 +1453,15 @@ def run_tui(
 
             # Dedupe
             handlers["dedupe-build"] = lambda: _start(
-                "dedupe_build", "Build Dedupe Plan", lambda: build_dedupe_plan_action(db_path, self._report_dir)
+                "dedupe_build",
+                "Build Dedupe Plan",
+                lambda: build_dedupe_plan_action(
+                    db_path,
+                    self._report_dir,
+                    root=self._root_path(),
+                    progress_callback=pcb,
+                    cancel_requested=cancel,
+                ),
             )
             handlers["dedupe-apply"] = lambda: _confirm(
                 "dedupe_apply",
@@ -1467,7 +1479,17 @@ def run_tui(
             # Packs
             def _h_pack_audit() -> None:
                 root = self._root_path()
-                _start("pack_audit", "Pack Audit", lambda: pack_audit_action(root, db_path, self._report_dir))
+                _start(
+                    "pack_audit",
+                    "Pack Audit",
+                    lambda: pack_audit_action(
+                        root,
+                        db_path,
+                        self._report_dir,
+                        progress_callback=pcb,
+                        cancel_requested=cancel,
+                    ),
+                )
 
             handlers["pack-audit"] = _h_pack_audit
             handlers["pack-plan"] = lambda: _start(
@@ -1556,9 +1578,21 @@ def run_tui(
             )
 
             # Metadata: DB-only tag pipeline
-            handlers["metadata-audit"] = lambda: _start(
-                "metadata_audit", "Metadata Audit", lambda: metadata_audit_action(db_path, self._report_dir)
-            )
+            def _h_metadata_audit() -> None:
+                root = self._root_path()
+                _start(
+                    "metadata_audit",
+                    "Metadata Audit",
+                    lambda: metadata_audit_action(
+                        db_path,
+                        self._report_dir,
+                        root=root,
+                        progress_callback=pcb,
+                        cancel_requested=cancel,
+                    ),
+                )
+
+            handlers["metadata-audit"] = _h_metadata_audit
 
             def _h_metadata_plan() -> None:
                 root = self._root_path()
@@ -2636,11 +2670,11 @@ def run_tui(
             )
             if not self._file_rows:
                 if self._compact:
-                    table.add_row("No files indexed yet", "", "", "", "", "", "Use Scan Library.")
+                    table.add_row("No files indexed yet", "", "", "", "", "", "Use Quick Index.")
                 else:
-                    table.add_row("No files indexed yet", "", "", "", "", "", "", "", "", "", "", "Use Scan Library.")
+                    table.add_row("No files indexed yet", "", "", "", "", "", "", "", "", "", "", "Use Quick Index.")
                 self.query_one("#file-detail", Static).update(
-                    "No files indexed yet. Use Scan Library to populate this view."
+                    "No files indexed yet. Use Quick Index to populate this view."
                 )
                 self._update_button_locks()
                 return

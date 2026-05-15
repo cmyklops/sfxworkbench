@@ -66,6 +66,22 @@ def test_tui_operation_buttons_are_registered_for_running_state() -> None:
     assert expected == _ACTION_BUTTON_IDS
 
 
+def test_scan_tab_uses_quick_index_label() -> None:
+    scan_text = (Path(__file__).parents[1] / "sfxworkbench" / "tui_screens" / "scan_tab.py").read_text()
+    app_text = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
+
+    assert '("Quick Index", "scan-run")' in scan_text
+    assert '"Quick Index"' in app_text
+    assert '"Scan Library"' not in scan_text
+
+
+def test_tui_buttons_avoid_unicode_border_glyphs() -> None:
+    app_text = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
+    button_block = app_text[app_text.index("Button {") : app_text.index("#library-controls Button")]
+
+    assert "border: none;" in button_block
+
+
 def test_progress_helpers_show_phase_rate_and_eta() -> None:
     assert _progress_phase_label("scanning") == "Scanning"
     assert _progress_phase_label("metadata_write") == "Metadata Write"

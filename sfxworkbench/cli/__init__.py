@@ -220,6 +220,10 @@ def cmd_scan(
     ] = None,
     no_hash: Annotated[bool, typer.Option("--no-hash", help="Skip MD5 hashing (faster).")] = False,
     force: Annotated[bool, typer.Option("--force", help="Re-scan all files even if unchanged.")] = False,
+    mode: Annotated[
+        str,
+        typer.Option("--mode", help="Scan depth: index, audio, metadata, hash, or full."),
+    ] = "full",
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ) -> None:
     """Crawl a path and index all audio files into SQLite."""
@@ -230,7 +234,11 @@ def cmd_scan(
         raise typer.Exit(1)
 
     effective_db = resolve_db_path(ctx, db)
-    result = scan_library(path, db_path=effective_db, skip_hash=no_hash, force_rescan=force, quiet=json_output)
+    try:
+        result = scan_library(path, db_path=effective_db, skip_hash=no_hash, force_rescan=force, quiet=json_output, mode=mode)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
     if json_output:
         print(
             json_dumps(

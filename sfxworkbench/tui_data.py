@@ -2578,6 +2578,11 @@ def file_detail(
     plan_path: Path | None = None,
 ) -> FileDetail | None:
     """Return a compact file detail payload for the read-only TUI."""
+    from sfxworkbench.scan import ensure_audio_info, ensure_metadata_info
+
+    detail_path = Path(path)
+    ensure_audio_info(db_path, detail_path)
+    ensure_metadata_info(db_path, detail_path)
     conn = get_connection(db_path)
     try:
         row = conn.execute(

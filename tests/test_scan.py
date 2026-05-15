@@ -37,6 +37,88 @@ def test_scan_indexes_audio_files(tmp_library: Path, tmp_db: Path) -> None:
     assert result.errors == 0
 
 
+def test_scan_index_mode_skips_hash_audio_and_metadata(monkeypatch, tmp_library: Path, tmp_db: Path) -> None:
+    def fail_read_audio_info(path: Path) -> AudioInfo:
+        raise AssertionError(f"audio should not be read during index mode: {path}")
+
+    monkeypatch.setattr("sfxworkbench.scan.audio_mod.read_audio_info", fail_read_audio_info)
+
+    result = scan_library(tmp_library, tmp_db, mode="index")
+
+    conn = get_connection(tmp_db)
+    row = conn.execute(
+        """
+        SELECT md5, sample_rate, has_bext, has_ixml, metadata_sources,
+               hash_scanned_at, audio_scanned_at, metadata_scanned_at
+        FROM files
+        WHERE filename = ?
+        """,
+        ("AMB_RAIN_01.wav",),
+    ).fetchone()
+    field_count = conn.execute("SELECT COUNT(*) FROM metadata_fields").fetchone()[0]
+    conn.close()
+
+    assert result.scanned == result.total
+    assert row["md5"] is None
+    assert row["sample_rate"] is None
+    assert row["has_bext"] == 0
+    assert row["has_ixml"] == 0
+    assert row["metadata_sources"] is None
+    assert row["hash_scanned_at"] is None
+    assert row["audio_scanned_at"] is None
+    assert row["metadata_scanned_at"] is None
+    assert field_count == 0
+
+
+def test_scan_index_mode_preserves_unchanged_enriched_fields(tmp_library: Path, tmp_db: Path) -> None:
+    scan_library(tmp_library, tmp_db, skip_hash=False)
+    second = scan_library(tmp_library, tmp_db, mode="index")
+
+    conn = get_connection(tmp_db)
+    row = conn.execute(
+        "SELECT md5, sample_rate, audio_scanned_at, metadata_scanned_at FROM files WHERE filename = ?",
+        ("AMB_RAIN_01.wav",),
+    ).fetchone()
+    conn.close()
+
+    assert second.scanned == 0
+    assert row["md5"] is not None
+    assert row["sample_rate"] is not None
+    assert row["audio_scanned_at"] is not None
+    assert row["metadata_scanned_at"] is not None
+
+
+def test_scan_index_mode_marks_changed_derived_fields_stale(tmp_library: Path, tmp_db: Path) -> None:
+    scan_library(tmp_library, tmp_db, skip_hash=False)
+    target = next(tmp_library.rglob("AMB_RAIN_01.wav"))
+    new_time = time.time() + 100
+    target.touch()
+    import os
+
+    os.utime(target, (new_time, new_time))
+
+    scan_library(tmp_library, tmp_db, mode="index")
+
+    conn = get_connection(tmp_db)
+    row = conn.execute(
+        """
+        SELECT md5, sample_rate, metadata_sources, hash_scanned_at,
+               audio_scanned_at, metadata_scanned_at
+        FROM files
+        WHERE filename = ?
+        """,
+        ("AMB_RAIN_01.wav",),
+    ).fetchone()
+    conn.close()
+
+    assert row["md5"] is None
+    assert row["sample_rate"] is None
+    assert row["metadata_sources"] is None
+    assert row["hash_scanned_at"] is None
+    assert row["audio_scanned_at"] is None
+    assert row["metadata_scanned_at"] is None
+
+
 def test_scan_skips_junk_files(tmp_library: Path, tmp_db: Path) -> None:
     """._*, .DS_Store, _wfCache/* should never appear in the index."""
     scan_library(tmp_library, tmp_db, skip_hash=True)

@@ -70,7 +70,7 @@ def test_tui_action_runner_scan_audit_and_clean_preview(tmp_library: Path, tmp_d
     clean = clean_action(tmp_library, report_dir, apply=False)
 
     assert scan.ok
-    assert "Indexed" in scan.message
+    assert "Quick-indexed" in scan.message
     assert audit.ok or audit.status == "error"  # Missing UCS catalog is reported but not a crash.
     assert audit.output_path == str(report_dir)
     assert (report_dir / "audit_bundle.json").exists()

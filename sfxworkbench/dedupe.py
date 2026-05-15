@@ -113,7 +113,7 @@ def _db_mutation_signature(db_path: Path) -> tuple[float, float, int]:
     return (main_stat.st_mtime, 0.0, 0)
 
 
-def find_duplicates(db_path: Path) -> list[DedupeGroup]:
+def find_duplicates(db_path: Path, *, ensure_hash: bool = False, root: Path | None = None) -> list[DedupeGroup]:
     """Query the index for files grouped by MD5 where count > 1.
 
     Uses `json_group_array` so paths are returned as a proper JSON array — no
@@ -123,6 +123,10 @@ def find_duplicates(db_path: Path) -> list[DedupeGroup]:
     Results are cached per ``(db_path, mutation-signature)``. Any DB write
     invalidates by changing the WAL signature; the next call recomputes.
     """
+    if ensure_hash:
+        from sfxworkbench.scan import ensure_hashes
+
+        ensure_hashes(db_path, root)
     signature = _db_mutation_signature(db_path)
     cache_key = (str(db_path), *signature)
     cached = _FIND_DUPLICATES_CACHE.get(cache_key)

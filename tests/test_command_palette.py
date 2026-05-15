@@ -6,7 +6,7 @@ from sfxworkbench.tui_screens.command_palette import filter_commands, label_for
 
 
 def test_label_for_uses_lookup_first() -> None:
-    assert label_for("scan-run") == "Scan library"
+    assert label_for("scan-run") == "Quick index"
     assert label_for("metadata-write-apply") == "Write metadata to files"
 
 
@@ -17,8 +17,8 @@ def test_label_for_falls_back_to_title_case() -> None:
 def test_filter_commands_substring_match_is_case_insensitive() -> None:
     matches = filter_commands("scan", ["scan-run", "dedupe-build", "scan-full-audit"])
     paths = [pair[0] for pair in matches]
-    assert "scan-run" in paths
     assert "scan-full-audit" in paths
+    assert "scan-run" in paths
     assert "dedupe-build" not in paths
 
 
@@ -37,4 +37,4 @@ def test_filter_commands_empty_returns_everything_sorted() -> None:
 
 
 def test_filter_commands_strips_whitespace_in_query() -> None:
-    assert filter_commands("  scan  ", ["scan-run", "dedupe-build"]) == [("scan-run", "Scan library")]
+    assert filter_commands("  quick  ", ["scan-run", "dedupe-build"]) == [("scan-run", "Quick index")]

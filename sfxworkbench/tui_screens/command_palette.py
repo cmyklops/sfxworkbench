@@ -27,7 +27,7 @@ _LABELS: dict[str, str] = {
     "use-indexed-root": "Use last-indexed root as library path",
     "cancel-action": "Cancel running action",
     "refresh-all": "Refresh all views",
-    "scan-run": "Scan library",
+    "scan-run": "Quick index",
     "scan-full-audit": "Full audit",
     "files-clear-search": "Clear file search",
     "files-open-file": "Open selected file",

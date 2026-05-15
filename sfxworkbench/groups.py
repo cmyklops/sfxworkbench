@@ -14,6 +14,7 @@ from rich.table import Table
 from sfxworkbench import __version__
 from sfxworkbench.db import get_connection, is_scoped_path, path_scope_filter, path_scope_params, resolve_scope_root
 from sfxworkbench.models import RelatedGroupsReport, RelatedGroupsSummary, RelatedSoundFile, RelatedSoundGroup
+from sfxworkbench.scan import ensure_audio_info
 
 console = Console()
 
@@ -114,6 +115,7 @@ def audit_related_groups(root: Path, db_path: Path, min_files: int = 2, limit: i
         raise ValueError("--limit must be 0 or greater")
 
     root = resolve_scope_root(root)
+    ensure_audio_info(db_path, root)
     rows = _load_rows(root, db_path)
     buckets: dict[tuple[str, str, str], _GroupBucket] = {}
 

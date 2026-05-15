@@ -305,6 +305,7 @@ def scan_action(
             root,
             db_path,
             quiet=True,
+            mode="index",
             progress_callback=progress_callback,
             cancel_requested=cancel_requested,
         )
@@ -315,7 +316,7 @@ def scan_action(
         action="scan",
         status="cancelled" if cancelled else "ok" if result.errors == 0 else "error",
         message=(
-            f"{'Stopped after indexing' if cancelled else 'Indexed'} "
+            f"{'Stopped after quick-indexing' if cancelled else 'Quick-indexed'} "
             f"{result.scanned:,} file(s), skipped {result.skipped:,}, errors {result.errors:,}."
         ),
         errors=() if result.errors == 0 else (f"{result.errors:,} scan error(s)",),
@@ -403,10 +404,19 @@ def clean_action(
     )
 
 
-def metadata_audit_action(db_path: Path, report_dir: Path) -> ActionResult:
+def metadata_audit_action(
+    db_path: Path,
+    report_dir: Path,
+    *,
+    root: Path | None = None,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
+) -> ActionResult:
     from sfxworkbench.metadata_audit import build_metadata_audit_report, write_metadata_audit_report
+    from sfxworkbench.scan import ensure_metadata_info
 
     try:
+        ensure_metadata_info(db_path, root, progress_callback=progress_callback, cancel_requested=cancel_requested)
         report = build_metadata_audit_report(db_path)
         output = _ensure_report_dir(report_dir) / "metadata_audit.json"
         write_metadata_audit_report(report, output, quiet=True)
@@ -485,6 +495,7 @@ def tag_plan_action(
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
 ) -> ActionResult:
+    from sfxworkbench.scan import ensure_metadata_info
     from sfxworkbench.tag_plan import build_tag_plan, write_tag_plan
 
     used_catalog = True
@@ -492,6 +503,7 @@ def tag_plan_action(
     effective_fields = fields if fields is not None else _TUI_DEFAULT_TAG_FIELDS
     effective_min_confidence = min(min_confidence, 0.62) if include_synonyms else min_confidence
     try:
+        ensure_metadata_info(db_path, root, progress_callback=progress_callback, cancel_requested=cancel_requested)
         catalog_details = _ensure_ucs_catalog_for_suggestions(root, report_dir, progress_callback)
         try:
             plan = build_tag_plan(
@@ -659,10 +671,19 @@ def export_sidecar_action(root: Path, db_path: Path, report_dir: Path) -> Action
     )
 
 
-def build_dedupe_plan_action(db_path: Path, report_dir: Path) -> ActionResult:
+def build_dedupe_plan_action(
+    db_path: Path,
+    report_dir: Path,
+    *,
+    root: Path | None = None,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
+) -> ActionResult:
     from sfxworkbench.dedupe import find_duplicates, write_dedupe_plan
+    from sfxworkbench.scan import ensure_hashes
 
     try:
+        ensure_hashes(db_path, root, progress_callback=progress_callback, cancel_requested=cancel_requested)
         groups = find_duplicates(db_path)
         output = _ensure_report_dir(report_dir) / "dedupe_plan.json"
         write_dedupe_plan(groups, output, db_path=db_path, quiet=True)
@@ -748,10 +769,19 @@ def apply_dedupe_plan_action(
     )
 
 
-def pack_audit_action(root: Path, db_path: Path, report_dir: Path) -> ActionResult:
+def pack_audit_action(
+    root: Path,
+    db_path: Path,
+    report_dir: Path,
+    *,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
+) -> ActionResult:
     from sfxworkbench.packs import audit_packs, write_pack_audit_report
+    from sfxworkbench.scan import ensure_hashes
 
     try:
+        ensure_hashes(db_path, root, progress_callback=progress_callback, cancel_requested=cancel_requested)
         report = audit_packs(root, db_path=db_path)
         output = _ensure_report_dir(report_dir) / "pack_overlap_report.json"
         write_pack_audit_report(report, output, quiet=True)

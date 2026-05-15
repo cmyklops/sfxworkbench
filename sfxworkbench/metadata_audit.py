@@ -13,6 +13,7 @@ from sfxworkbench import __version__
 from sfxworkbench.audit_cmd import _STANDARD_SAMPLE_RATES
 from sfxworkbench.db import get_connection
 from sfxworkbench.models import MetadataAuditEntry, MetadataAuditReport, MetadataAuditSummary
+from sfxworkbench.scan import ensure_metadata_info
 
 console = Console()
 
@@ -63,6 +64,7 @@ def build_metadata_audit_report(db_path: Path, limit: int = 200) -> MetadataAudi
     if limit < 0:
         raise ValueError("--limit must be 0 or greater")
 
+    ensure_metadata_info(db_path)
     conn = get_connection(db_path)
     standard_rates = sorted(_STANDARD_SAMPLE_RATES)
     placeholders = ",".join("?" for _ in standard_rates)

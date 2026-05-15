@@ -700,6 +700,9 @@ def build_metadata_write_plan(
     if resolved_root is not None and not resolved_root.exists():
         raise ValueError(f"path not found: {resolved_root}")
 
+    from sfxworkbench.scan import ensure_metadata_info
+
+    ensure_metadata_info(db_path, resolved_root, progress_callback=progress_callback, cancel_requested=cancel_requested)
     backend_report = build_metadata_backends_report(bwfmetaedit=bwfmetaedit)
     backend_info = (
         _auto_backend(backend_report.backends)

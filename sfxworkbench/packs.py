@@ -41,6 +41,7 @@ from sfxworkbench.path_safety import path_exists_windows
 from sfxworkbench.preservation import build_preservation_rules, evidence, priority_key
 from sfxworkbench.preservation import protected_by as preservation_protected_by
 from sfxworkbench.rename import _update_directory_rows
+from sfxworkbench.scan import ensure_hashes
 from sfxworkbench.scan_errors import _md5
 
 console = Console()
@@ -301,9 +302,12 @@ def audit_packs(
     min_files: int = 2,
     overlap_threshold: float = 0.95,
     max_overlap_candidates: int = 50,
+    ensure_hash: bool = True,
 ) -> PackAuditReport:
     """Build a report of exact duplicate folders and high-overlap pack candidates."""
     root = resolve_scope_root(root)
+    if ensure_hash:
+        ensure_hashes(db_path, root)
     folders, considered, without_hash = _load_folder_stats(root, db_path)
     candidates = _remove_redundant_ancestors([folder for folder in folders.values() if folder.file_count >= min_files])
     exact = _exact_groups(candidates)

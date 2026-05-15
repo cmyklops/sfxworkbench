@@ -26,9 +26,8 @@ if TYPE_CHECKING:
 KEY = "scan"
 TITLE = "Scan and Audit"
 NOTE = (
-    "Index the library and run a full audit. Scan refreshes file metadata; Full Audit "
-    "writes read-only reports for health, metadata, duplicates, packs, groups, format, "
-    "and UCS coverage."
+    "Quick Index builds the searchable file list fast. Full Audit enriches audio, metadata, "
+    "hashes, and writes read-only reports."
 )
 
 
@@ -40,7 +39,7 @@ def compose(app) -> ComposeResult:
     yield Static("", id="scan-note", classes="note")
     yield DataTable(id="scan-findings-table")
     yield from app._button_row(
-        ("Scan Library", "scan-run"),
+        ("Quick Index", "scan-run"),
         ("Full Audit", "scan-full-audit"),
     )
 
@@ -56,8 +55,8 @@ def fill(app) -> None:
     from sfxworkbench.tui_data import scan_findings
 
     app.query_one("#scan-note", Static).update(
-        "Full Audit refreshes the index and writes read-only reports for "
-        "health, metadata, duplicates, packs, groups, format, and UCS."
+        "Quick Index builds the searchable file list fast. Full Audit enriches audio, metadata, "
+        "hashes, and writes read-only reports."
     )
     app._fill_findings(
         "scan-findings-table",
@@ -79,7 +78,7 @@ def fill_rows(app, rows) -> None:
     from textual.widgets import Static
 
     app.query_one("#scan-note", Static).update(
-        "Full Audit refreshes the index and writes read-only reports for "
-        "health, metadata, duplicates, packs, groups, format, and UCS."
+        "Quick Index builds the searchable file list fast. Full Audit enriches audio, metadata, "
+        "hashes, and writes read-only reports."
     )
     app._fill_findings("scan-findings-table", rows)
