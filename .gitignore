@@ -9,6 +9,9 @@ venv/
 .pytest_cache/
 /reports/
 /win_test.db
+*.db-shm
+*.db-wal
+*.db-journal
 *.tui.lock
 audit_*.json
 audit_*.md
