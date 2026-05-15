@@ -1,6 +1,7 @@
 """sfx clean command — find and remove junk files from sound libraries."""
 
 import json
+import os
 import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -34,34 +35,57 @@ def find_junk(
     """
     junk_files: list[tuple[Path, int]] = []
     junk_dirs: list[tuple[Path, int]] = []
-    seen_dirs: set[Path] = set()
     visited = 0
     if progress_callback is not None:
         progress_callback("walking", 0, None, f"Walking {root}")
 
-    if quiet:
-        for item in root.rglob("*"):
+    def maybe_report(progress=None, task=None) -> None:
+        if visited % 500 != 0:
+            return
+        message = f"Walked {visited:,} item(s), found {len(junk_files) + len(junk_dirs):,} junk item(s)"
+        if progress_callback is not None:
+            progress_callback("walking", visited, None, message)
+        if progress is not None and task is not None:
+            progress.update(
+                task,
+                description=(
+                    f"Walking... [white]{visited:,}[/white] items, "
+                    f"[yellow]{len(junk_files) + len(junk_dirs):,}[/yellow] junk found"
+                ),
+            )
+
+    def walk(progress=None, task=None) -> None:
+        nonlocal visited
+        if junk.is_junk_dir(root):
+            junk_dirs.append((root, _dir_size(root)))
             visited += 1
-            if progress_callback is not None and visited % 500 == 0:
-                progress_callback(
-                    "walking",
-                    visited,
-                    None,
-                    f"Walked {visited:,} item(s), found {len(junk_files) + len(junk_dirs):,} junk item(s)",
-                )
-            if any(item.is_relative_to(jd) for jd in seen_dirs):
-                continue
-            if item.is_dir():
+            return
+        for dirpath, dirnames, filenames in os.walk(root):
+            parent = Path(dirpath)
+            kept_dirs: list[str] = []
+            for dirname in dirnames:
+                item = parent / dirname
+                visited += 1
+                maybe_report(progress, task)
                 if junk.is_junk_dir(item):
                     dir_size = _dir_size(item)
                     junk_dirs.append((item, dir_size))
-                    seen_dirs.add(item)
-            elif item.is_file() and junk.is_junk_file(item):
-                try:
-                    size = item.stat().st_size
-                except OSError:
-                    size = 0
-                junk_files.append((item, size))
+                else:
+                    kept_dirs.append(dirname)
+            dirnames[:] = kept_dirs
+            for filename in filenames:
+                item = parent / filename
+                visited += 1
+                maybe_report(progress, task)
+                if item.is_file() and junk.is_junk_file(item):
+                    try:
+                        size = item.stat().st_size
+                    except OSError:
+                        size = 0
+                    junk_files.append((item, size))
+
+    if quiet:
+        walk()
         if progress_callback is not None:
             progress_callback(
                 "walking",
@@ -78,41 +102,7 @@ def find_junk(
         transient=True,
     ) as progress:
         task = progress.add_task("Walking...", total=None)
-
-        for item in root.rglob("*"):
-            visited += 1
-            if visited % 500 == 0:
-                if progress_callback is not None:
-                    progress_callback(
-                        "walking",
-                        visited,
-                        None,
-                        f"Walked {visited:,} item(s), found {len(junk_files) + len(junk_dirs):,} junk item(s)",
-                    )
-                progress.update(
-                    task,
-                    description=(
-                        f"Walking... [white]{visited:,}[/white] items, "
-                        f"[yellow]{len(junk_files) + len(junk_dirs):,}[/yellow] junk found"
-                    ),
-                )
-
-            # Skip items already inside a marked junk dir
-            if any(item.is_relative_to(jd) for jd in seen_dirs):
-                continue
-
-            if item.is_dir():
-                if junk.is_junk_dir(item):
-                    dir_size = _dir_size(item)
-                    junk_dirs.append((item, dir_size))
-                    seen_dirs.add(item)
-            elif item.is_file():
-                if junk.is_junk_file(item):
-                    try:
-                        size = item.stat().st_size
-                    except OSError:
-                        size = 0
-                    junk_files.append((item, size))
+        walk(progress, task)
 
     if progress_callback is not None:
         progress_callback(

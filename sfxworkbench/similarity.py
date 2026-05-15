@@ -468,17 +468,20 @@ def _segment_audit_bucket(row: dict) -> tuple[str | None, int, int, int]:
     )
 
 
-def _audit_candidate_unit_pairs(unit_ids: list[int], by_id: dict[int, dict], *, scope: str) -> list[tuple[int, int]]:
-    if scope == "file":
-        return [
-            (left_id, right_id)
-            for left_index, left_id in enumerate(unit_ids)
-            for right_id in unit_ids[left_index + 1 :]
-        ]
+def _file_audit_bucket(row: dict) -> tuple[str | None, int, int, int]:
+    return (
+        row.get("duration_bucket"),
+        int(math.log1p(float(row.get("zero_crossing_rate") or 0.0)) * 1.5),
+        int(math.log1p(float(row.get("spectral_centroid") or 0.0)) * 1.5),
+        int(math.log1p(float(row.get("spectral_rolloff") or 0.0)) * 1.5),
+    )
 
+
+def _audit_candidate_unit_pairs(unit_ids: list[int], by_id: dict[int, dict], *, scope: str) -> list[tuple[int, int]]:
     buckets: dict[tuple[str | None, int, int, int], list[int]] = {}
     for unit_id in unit_ids:
-        buckets.setdefault(_segment_audit_bucket(by_id[unit_id]), []).append(unit_id)
+        bucket = _file_audit_bucket(by_id[unit_id]) if scope == "file" else _segment_audit_bucket(by_id[unit_id])
+        buckets.setdefault(bucket, []).append(unit_id)
 
     pairs: set[tuple[int, int]] = set()
     for bucket_ids in buckets.values():

@@ -33,6 +33,7 @@ _TUI_LIBRARY_PATH_KEY = "tui_library_path"
 _PLAN_SUMMARY_CACHE: dict[tuple[str, float, int, bool], PlanSummary] = {}
 _METADATA_PLAN_INDEX_CACHE: dict[tuple[str, float, int], sqlite3.Connection] = {}
 _INLINE_PLAN_DETAIL_MAX_BYTES = 5 * 1024 * 1024
+_LIGHTWEIGHT_SUMMARY_FULL_PARSE_MAX_BYTES = 128 * 1024
 _PLAN_INDEX_CACHE_DIR = Path.home() / ".sfxworkbench" / "tui_plan_indexes"
 
 # Session-level adapter cache. Stores results of heavy read-only adapters keyed
@@ -1121,6 +1122,49 @@ def _metadata_plan_state(plan_path: Path) -> dict[str, dict[str, int | set[str] 
     return _metadata_plan_state_from_rows(rows)
 
 
+def _metadata_plan_paths(plan_path: Path) -> list[str]:
+    index = _metadata_plan_index(plan_path)
+    if index is None:
+        return []
+    rows = index.execute(
+        """
+        SELECT path
+        FROM plan_entries
+        WHERE action = 'add'
+        GROUP BY path
+        ORDER BY path
+        """
+    ).fetchall()
+    return [str(row["path"]) for row in rows]
+
+
+def _metadata_plan_state_for_paths(
+    plan_path: Path,
+    paths: list[str],
+) -> dict[str, dict[str, int | set[str] | list[str] | list[TagDisplayItem]]]:
+    index = _metadata_plan_index(plan_path)
+    if index is None or not paths:
+        return {}
+    rows: list[sqlite3.Row] = []
+    for start in range(0, len(paths), 900):
+        chunk = paths[start : start + 900]
+        placeholders = ",".join("?" for _ in chunk)
+        rows.extend(
+            index.execute(
+                f"""
+                SELECT *
+                FROM plan_entries
+                WHERE action = 'add'
+                  AND path IN ({placeholders})
+                ORDER BY path, entry_id
+                """,
+                tuple(chunk),
+            ).fetchall()
+        )
+    rows.sort(key=lambda row: (str(row["path"]), int(row["entry_id"])))
+    return _metadata_plan_state_from_rows(rows)
+
+
 def _metadata_pending_plan_page(
     plan_path: Path,
     *,
@@ -1189,6 +1233,7 @@ def metadata_workbench_rows(
         if cached is not None:
             return cached
     pending_by_path: dict[str, dict[str, int | set[str] | list[str] | list[TagDisplayItem]]] = {}
+    pending_paths: list[str] = []
     page_paths: list[str] = []
     if plan_path is not None and plan_path.exists():
         if pending_only:
@@ -1202,7 +1247,7 @@ def metadata_workbench_rows(
             if not page_paths:
                 return []
         else:
-            pending_by_path = _metadata_plan_state(plan_path)
+            pending_paths = _metadata_plan_paths(plan_path)
 
     sql_start = time.perf_counter()
     like_sql, params = _like_filter_clause(("f.filename", "f.path"), query)
@@ -1222,10 +1267,10 @@ def metadata_workbench_rows(
         # placeholders for the path list itself.
         conn.execute("CREATE TEMP TABLE IF NOT EXISTS _pending_paths (path TEXT PRIMARY KEY)")
         conn.execute("DELETE FROM _pending_paths")
-        if pending_by_path:
+        if pending_paths:
             conn.executemany(
                 "INSERT OR IGNORE INTO _pending_paths (path) VALUES (?)",
-                ((path,) for path in pending_by_path),
+                ((path,) for path in pending_paths),
             )
         if pending_only:
             # Drive the join from the ≤500-row page table so the per-row
@@ -1265,6 +1310,8 @@ def metadata_workbench_rows(
             """,
             (() if pending_only else params) + (limit,),
         ).fetchall()
+        if plan_path is not None and plan_path.exists() and not pending_only and rows:
+            pending_by_path = _metadata_plan_state_for_paths(plan_path, [str(row["path"]) for row in rows])
         file_ids = tuple(int(row["id"]) for row in rows)
         embedded_items_by_id: dict[int, list[TagDisplayItem]] = {file_id: [] for file_id in file_ids}
         accepted_items_by_id: dict[int, list[TagDisplayItem]] = {file_id: [] for file_id in file_ids}
@@ -3130,6 +3177,135 @@ def _summarize_tag_plan_from_summary(path: Path) -> PlanSummary | None:
     )
 
 
+def _json_head_values(path: Path, *, max_bytes: int = 64 * 1024) -> dict[str, str]:
+    try:
+        with path.open("rb") as handle:
+            text = handle.read(max_bytes).decode("utf-8", errors="ignore")
+    except OSError:
+        return {}
+    if text.lstrip()[:1] != "{":
+        return {}
+    values: dict[str, str] = {}
+    for key in ("command", "pattern", "target", "action", "status", "tool"):
+        match = re.search(rf'"{re.escape(key)}"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', text)
+        if not match:
+            continue
+        try:
+            values[key] = json.loads(f'"{match.group(1)}"')
+        except json.JSONDecodeError:
+            values[key] = match.group(1)
+    return values
+
+
+def _summary_entry_count(summary: dict[str, Any] | None) -> int:
+    if not summary:
+        return 0
+    for key in (
+        "entries",
+        "total_entries",
+        "candidate_entries",
+        "add_entries",
+        "groups",
+        "duplicate_groups",
+        "candidate_groups",
+        "reported_groups",
+        "candidates",
+        "files",
+        "files_scanned",
+        "removed_files",
+    ):
+        value = _summary_int(summary, key)
+        if value:
+            return value
+    return 0
+
+
+def _lightweight_kind_from_name(path: Path, head: dict[str, str]) -> tuple[str, str, str, bool]:
+    stem = path.stem.casefold()
+    parent = path.parent.name.casefold()
+    command = head.get("command", "")
+    pattern = head.get("pattern", "")
+    target = head.get("target", "")
+    action = head.get("action", "")
+    status = head.get("status", "")
+
+    if parent == "action_history" or stem.startswith("tui_action_") or command == "tui_action":
+        title_action = (action or stem).replace("_", " ").title()
+        title = f"{title_action} ({status})" if status else title_action
+        return "action_history", title, "", False
+    if "metadata_tag_plan" in stem or "tag_plan" in stem:
+        return "tag_plan", "Metadata tag plan", "", False
+    if "metadata_write" in stem or target == "embedded_metadata":
+        return "metadata_write_plan", "Metadata write plan", "", False
+    if "dedupe" in stem:
+        return "dedupe_plan", "Dedupe plan", "", True
+    if "pack" in stem:
+        return "pack_plan", "Pack consolidation plan", "", True
+    if "clean_preview" in stem:
+        return "clean_preview", "Junk cleanup preview", "", False
+    if "clean" in stem and ("log" in stem or "apply" in stem):
+        return "clean_apply", "Junk cleanup log", "", False
+    if "delete" in stem and "plan" in stem:
+        return "delete_plan", "Permanent delete plan", "", False
+    if pattern == "redundant-nesting" or ("nesting" in stem and "report" in stem):
+        return "organize_nesting_report", "Nested folder candidates", pattern, False
+    if "nesting" in stem and "plan" in stem:
+        return "organize_nesting_plan", "Nesting apply plan", pattern, True
+    if pattern.startswith("organize:") or ("organize" in stem and ("log" in stem or "apply" in stem)):
+        return "organize_apply_log", f"Organization log ({pattern})" if pattern else "Organization log", pattern, True
+    if "rename" in stem or "organize" in stem or "plan" in stem:
+        title = f"{pattern} plan" if pattern else path.stem.replace("_", " ").title()
+        return "rename_or_organize", title, pattern, True
+    if command:
+        return command, command.replace("_", " ").title(), pattern, "undo" in command or "log" in command
+    return "json_report", path.stem, pattern, False
+
+
+def _summarize_plan_file_lightweight(path: Path) -> PlanSummary | None:
+    tag_summary = _summarize_tag_plan_from_summary(path)
+    if tag_summary is not None:
+        return tag_summary
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None
+    if size <= _LIGHTWEIGHT_SUMMARY_FULL_PARSE_MAX_BYTES:
+        try:
+            payload = json.loads(path.read_text())
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path}: invalid JSON: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError(f"{path}: expected JSON object")
+        return _summarize_plan_payload(path, payload)
+
+    head = _json_head_values(path)
+    summary = _json_summary_from_tail(path)
+    kind, title, pattern, undoable = _lightweight_kind_from_name(path, head)
+    command = head.get("command") or None
+    category = _report_category(path, kind, command=command, pattern=pattern or None)
+    entries = _summary_entry_count(summary)
+    errors = _summary_int(summary, "errors")
+    description = f"{entries:,} item(s), {errors:,} error(s)"
+    if summary:
+        visible = [
+            f"{key}={value:,}" for key, value in summary.items() if isinstance(value, int | float) and key != "errors"
+        ][:3]
+        if visible:
+            description = ", ".join(visible + ([f"errors={errors:,}"] if errors else []))
+    return PlanSummary(
+        path=str(path),
+        category=category,
+        kind=kind,
+        title=title,
+        entries=entries,
+        errors=errors,
+        protected=_summary_int(summary, "protected"),
+        conflicts=_summary_int(summary, "conflicts") or _summary_int(summary, "conflict_entries"),
+        undoable=undoable,
+        description=description,
+    )
+
+
 def _cache_plan_summary(key: tuple[str, float, int, bool], summary: PlanSummary) -> PlanSummary:
     stale = [cached_key for cached_key in _PLAN_SUMMARY_CACHE if cached_key[0] == key[0] and cached_key != key]
     for cached_key in stale:
@@ -3145,7 +3321,7 @@ def summarize_plan_file(path: Path, *, lightweight: bool = False) -> PlanSummary
     if cached is not None:
         return cached
     if lightweight:
-        summary = _summarize_tag_plan_from_summary(path)
+        summary = _summarize_plan_file_lightweight(path)
         if summary is not None:
             return _cache_plan_summary(key, summary)
     try:

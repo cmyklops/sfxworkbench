@@ -53,7 +53,6 @@ def _indexed_unsafe_fixture(db_path: Path) -> tuple[Path, str, str, str]:
     return path, item.label, path.stem, issue
 
 
-
 def test_tui_dashboard_and_queues_reflect_index_state(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
     scan_library(tmp_library, tmp_db, skip_hash=False, quiet=True)
     config_path = tmp_path / "sfxworkbench.json"
@@ -799,6 +798,39 @@ def test_tui_lightweight_tag_plan_summary_uses_summary_without_full_parse(tmp_pa
     assert summary.title == "Metadata tag plan"
     assert summary.entries == 324078
     assert "139,448 add" in summary.description
+
+
+def test_tui_history_lightweight_summary_avoids_large_full_parse(tmp_path: Path, monkeypatch) -> None:
+    plan_path = tmp_path / "dedupe_plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "entries": [
+                    {
+                        "path": f"/lib/{index}.wav",
+                        "action": "quarantine",
+                        "value": "x" * 256,
+                    }
+                    for index in range(1_000)
+                ],
+                "summary": {"duplicate_groups": 42, "errors": 2},
+            }
+        )
+    )
+
+    def fail_read_text(*args, **kwargs):
+        raise AssertionError("lightweight history summary should not full-parse large JSON")
+
+    monkeypatch.setattr(Path, "read_text", fail_read_text)
+
+    summaries = discover_plan_files([tmp_path], content_query=False)
+
+    assert len(summaries) == 1
+    assert summaries[0].kind == "dedupe_plan"
+    assert summaries[0].category == "Plan"
+    assert summaries[0].entries == 42
+    assert summaries[0].errors == 2
 
 
 def test_tui_plan_detail_rows_expand_nesting_reports_and_action_outputs(tmp_path: Path) -> None:

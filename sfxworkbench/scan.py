@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -54,6 +55,32 @@ def _md5(path: Path, block: int = 65536, cancel_requested: CancelCallback | None
         return None
 
 
+def _collect_audio_files(root: Path, cancel_requested: CancelCallback | None = None) -> list[Path]:
+    """Return indexable audio files while pruning known junk directory trees."""
+    if junk.is_inside_junk_dir(root):
+        return []
+
+    all_files: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        if _should_cancel(cancel_requested):
+            break
+        dirnames[:] = [dirname for dirname in dirnames if dirname not in junk.JUNK_DIR_NAMES]
+        parent = Path(dirpath)
+        for filename in filenames:
+            if _should_cancel(cancel_requested):
+                break
+            if filename.startswith(junk.APPLE_DOUBLE_PREFIX):
+                continue
+            suffix = os.path.splitext(filename)[1].lower()
+            if suffix not in junk.AUDIO_EXTENSIONS:
+                continue
+            f = parent / filename
+            if not f.is_file():
+                continue
+            all_files.append(f)
+    return all_files
+
+
 def scan_library(
     root: Path,
     db_path: Path,
@@ -73,18 +100,7 @@ def scan_library(
         console.print(f"[cyan]Collecting files under {root}...[/cyan]")
     if progress_callback is not None:
         progress_callback("collecting", 0, None, f"Collecting files under {root}")
-    all_files: list[Path] = []
-    for f in root.rglob("*"):
-        if _should_cancel(cancel_requested):
-            break
-        if not f.is_file():
-            continue
-        if junk.is_inside_junk_dir(f):
-            continue
-        if junk.is_junk_file(f):
-            continue
-        if f.suffix.lower() in junk.AUDIO_EXTENSIONS:
-            all_files.append(f)
+    all_files = _collect_audio_files(root, cancel_requested=cancel_requested)
 
     total = len(all_files)
     if not quiet:
