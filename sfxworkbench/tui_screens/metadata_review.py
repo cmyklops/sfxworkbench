@@ -22,6 +22,7 @@ installed — handy for unit tests that exercise the pure helpers below.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -498,6 +499,13 @@ def build_metadata_review_screen(plan_path: Path, *, db_path: Path = DEFAULT_DB_
         MetadataReviewScreen #review-candidates-pane { width: 60%; }
         MetadataReviewScreen .pane-title { background: $primary; color: $background; padding: 0 1; }
         MetadataReviewScreen .note { color: #9fb0c1; margin-bottom: 1; }
+        """
+        if sys.platform == "win32":
+            DEFAULT_CSS += """
+        MetadataReviewScreen VerticalScroll,
+        MetadataReviewScreen DataTable {
+            scrollbar-visibility: hidden;
+        }
         """
 
         def __init__(self) -> None:

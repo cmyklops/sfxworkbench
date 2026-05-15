@@ -337,6 +337,23 @@ def test_keybind_footer_is_hidden_on_startup() -> None:
     assert "_FOOTER_TEXT" not in app_source
 
 
+def test_windows_tui_hides_textual_scrollbars() -> None:
+    repo_root = Path(__file__).parents[1]
+    app_source = (repo_root / "sfxworkbench" / "tui_app.py").read_text()
+    review_source = (repo_root / "sfxworkbench" / "tui_screens" / "metadata_review.py").read_text()
+
+    assert 'if sys.platform == "win32":' in app_source
+    assert "CSS +=" in app_source
+    assert "VerticalScroll," in app_source
+    assert "DataTable {" in app_source
+    assert "scrollbar-visibility: hidden;" in app_source
+    assert 'if sys.platform == "win32":' in review_source
+    assert "DEFAULT_CSS +=" in review_source
+    assert "MetadataReviewScreen VerticalScroll," in review_source
+    assert "MetadataReviewScreen DataTable {" in review_source
+    assert "scrollbar-visibility: hidden;" in review_source
+
+
 def test_tab_hotkeys_are_hidden_from_binding_discovery() -> None:
     app_source = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
 

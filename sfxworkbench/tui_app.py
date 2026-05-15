@@ -785,6 +785,13 @@ def run_tui(
             padding-right: 1;
         }
         """
+        if sys.platform == "win32":
+            CSS += """
+        VerticalScroll,
+        DataTable {
+            scrollbar-visibility: hidden;
+        }
+        """
 
         BINDINGS = [
             ("q", "quit", "Quit"),
