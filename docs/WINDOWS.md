@@ -28,6 +28,16 @@ Run apply/undo workflows only against a disposable copy until the Windows smoke 
 
 Use Windows Terminal or PowerShell against a disposable copy of a sound library. Do not point first-run testing at a production library.
 
+For the simplest setup, open normal PowerShell, not as Administrator, and run:
+
+```powershell
+irm https://raw.githubusercontent.com/cmyklops/sfxworkbench/main/scripts/install-windows-tui.ps1 | iex
+```
+
+The script installs missing prerequisites, clones or updates the repo in your user folder, installs dependencies, and launches the TUI.
+
+Manual fallback:
+
 Install the command-line prerequisites first. If either installer says it changed `PATH`, close every PowerShell tab and open a new one before continuing.
 
 ```powershell
@@ -35,9 +45,10 @@ winget install --id Git.Git --exact --source winget
 winget install --id astral-sh.uv --exact --source winget
 ```
 
-In the new PowerShell session, verify both commands are visible:
+In the new PowerShell session, verify both commands are visible. Start from your user folder, not `C:\WINDOWS\system32`:
 
 ```powershell
+Set-Location $HOME
 git --version
 uv --version
 ```
@@ -47,9 +58,18 @@ If either command is still not found, restart PowerShell again. Do not run the c
 Clone the repo and install the optional TUI dependencies:
 
 ```powershell
-git clone https://github.com/cmyklops/sfxworkbench.git
-cd .\sfxworkbench
-uv sync --extra dev --extra metadata --extra tui
+Set-Location $HOME
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw "Git is not available. Restart PowerShell, then run git --version." }
+if (-not (Get-Command uv -ErrorAction SilentlyContinue)) { throw "uv is not available. Restart PowerShell, then run uv --version." }
+if (Test-Path .\sfxworkbench) {
+    Set-Location .\sfxworkbench
+    git pull
+} else {
+    git clone https://github.com/cmyklops/sfxworkbench.git
+    Set-Location .\sfxworkbench
+}
+uv python install 3.11
+uv sync --python 3.11 --extra dev --extra metadata --extra tui
 ```
 
 Launch the TUI:
