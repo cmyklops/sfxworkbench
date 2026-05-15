@@ -306,6 +306,17 @@ def test_tui_startup_path_does_not_call_heavy_adapters() -> None:
     assert "threading.Thread(target=_load, daemon=True).start()" in initial_load_source
 
 
+def test_history_tab_uses_artifact_registry_not_json_discovery() -> None:
+    app_source = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
+    history_source = app_source[
+        app_source.index("def _fill_history_impl") : app_source.index("def _fill_action_result")
+    ]
+
+    assert "list_artifacts(" in history_source
+    assert "discover_plan_files(" not in history_source
+    assert "plan_detail_rows(" not in history_source
+
+
 def test_tui_lazy_mounts_inactive_tab_widgets() -> None:
     app_source = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
 

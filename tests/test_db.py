@@ -119,3 +119,41 @@ def test_path_scope_filter_matches_windows_descendants_and_escapes_like_chars(tm
 
 def test_windows_collision_path_key_collapses_case_and_trailing_dots() -> None:
     assert windows_collision_path_key("C:\\Lib\\CON. ") == windows_collision_path_key("c:/lib/con")
+
+
+def test_artifact_and_job_schema_is_applied_to_new_database(tmp_path: Path) -> None:
+    db_path = tmp_path / "artifacts.db"
+    conn = get_connection(db_path)
+    try:
+        tables = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert {"artifacts", "jobs", "artifact_rows", "artifact_rows_fts"} <= tables
+
+        artifact_columns = {row["name"] for row in conn.execute("PRAGMA table_info(artifacts)").fetchall()}
+        assert {
+            "id",
+            "path",
+            "kind",
+            "feature",
+            "category",
+            "created_at",
+            "mtime",
+            "size",
+            "summary_json",
+            "entry_count",
+            "error_count",
+            "status",
+        } <= artifact_columns
+
+        job_columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        assert {
+            "id",
+            "action",
+            "status",
+            "started_at",
+            "finished_at",
+            "progress",
+            "output_artifact_id",
+            "error",
+        } <= job_columns
+    finally:
+        conn.close()

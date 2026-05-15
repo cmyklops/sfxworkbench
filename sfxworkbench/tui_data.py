@@ -1463,7 +1463,9 @@ def metadata_workbench_rows(
     return results
 
 
-def _summary_int(summary: dict[str, Any], key: str) -> int:
+def _summary_int(summary: dict[str, Any] | None, key: str) -> int:
+    if not summary:
+        return 0
     value = summary.get(key)
     if isinstance(value, bool):
         return int(value)

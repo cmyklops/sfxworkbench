@@ -15,7 +15,9 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from sfxworkbench.artifacts import default_artifact_search_paths, sync_artifacts_from_paths
 from sfxworkbench.backups import clean_backups
+from sfxworkbench.cli._shared import resolve_db_path
 from sfxworkbench.utils import json_dumps
 
 console = Console()
@@ -26,6 +28,14 @@ maintenance_app = typer.Typer(
     no_args_is_help=True,
     rich_markup_mode="rich",
 )
+
+artifacts_app = typer.Typer(
+    name="artifacts",
+    help="Maintain the SQLite registry of generated JSON artifacts.",
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+)
+maintenance_app.add_typer(artifacts_app, name="artifacts")
 
 
 @maintenance_app.command("clean-backups")
@@ -82,6 +92,47 @@ def cmd_maintenance_clean_backups(
                     "kept": result.kept,
                     "bytes_freed": result.bytes_freed,
                     "removed_paths": [str(p) for p in result.removed_paths],
+                }
+            )
+        )
+
+
+@artifacts_app.command("sync")
+def cmd_maintenance_artifacts_sync(
+    ctx: typer.Context,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
+    report: Annotated[
+        list[Path] | None,
+        typer.Option("--report", help="Report directory or JSON file to index. May be passed more than once."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Rebuild/update the SQLite artifact registry from generated JSON files."""
+    effective_db = resolve_db_path(ctx, db)
+    paths = list(report or default_artifact_search_paths(effective_db))
+    result = sync_artifacts_from_paths(effective_db, paths, materialize=True)
+
+    if not json_output:
+        table = Table(title="Artifact registry sync", show_lines=False)
+        table.add_column("Metric")
+        table.add_column("Value", justify="right")
+        table.add_row("Scanned", f"{result.scanned:,}")
+        table.add_row("Registered", f"{result.registered:,}")
+        table.add_row("Updated", f"{result.updated:,}")
+        table.add_row("Unchanged", f"{result.unchanged:,}")
+        table.add_row("Missing", f"{result.missing:,}")
+        table.add_row("Errors", f"{result.errors:,}")
+        console.print(table)
+
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "maintenance_artifacts_sync",
+                    "db_path": effective_db,
+                    "report_paths": paths,
+                    "result": result.__dict__,
                 }
             )
         )

@@ -16,7 +16,16 @@ from pathlib import Path
 
 from rich.text import Text
 
+from sfxworkbench.artifacts import (
+    artifact_detail_rows,
+    history_feature_labels,
+    list_artifacts,
+    materialize_artifact_rows,
+    register_artifact,
+    sync_artifacts_from_paths,
+)
 from sfxworkbench.db import DEFAULT_DB_PATH
+from sfxworkbench.jobs import finish_job, start_job, update_job_progress
 from sfxworkbench.tui_actions import (
     ActionResult,
     apply_dedupe_plan_action,
@@ -50,15 +59,11 @@ from sfxworkbench.tui_actions import (
 from sfxworkbench.tui_data import (
     APPLY_LOG_DIR_NAME,
     clear_adapter_cache,
-    discover_plan_files,
     feature_pages,
     file_detail,
-    history_feature_labels,
-    history_matches_feature,
     indexed_library_size_gb,
     library_root,
     list_files,
-    plan_detail_rows,
     preferred_library_path,
     report_search_paths,
     save_library_path,
@@ -919,6 +924,7 @@ def run_tui(
             self._running_worker: Worker[ActionResult] | None = None
             self._running_action = ""
             self._running_label = ""
+            self._running_job_id: int | None = None
             self._cancel_requested = False
             self._progress_phase = ""
             self._progress_completed = 0
@@ -931,6 +937,7 @@ def run_tui(
             self._history_category_filter = ""
             self._history_selected_path: str | None = None
             self._history_search_debounce = None
+            self._artifact_sync_running = False
             self._sort_state: dict[str, tuple[str, bool]] = {}
             self._last_compact = False
             self._session_started_at = time.time()
@@ -1119,6 +1126,7 @@ def run_tui(
             self.query_one("#operation-strip", Static).update("No action is running.")
             self._fill_scan_loading()
             self.query_one("#feature-tabs", Tabs).focus()
+            self._start_artifact_sync(materialize=True)
             self.set_timer(0.01, self._start_initial_load)
 
         def _start_initial_load(self) -> None:
@@ -1839,6 +1847,10 @@ def run_tui(
                 return
             self._running_action = action
             self._running_label = label
+            try:
+                self._running_job_id = start_job(db_path, action, message=f"Starting {label}")
+            except sqlite3.Error:
+                self._running_job_id = None
             self._cancel_requested = False
             self._reset_action_progress()
             self._progress_phase = "starting"
@@ -1890,6 +1902,17 @@ def run_tui(
             self._progress_message = ""
 
         def _threadsafe_progress_callback(self, phase: str, completed: int, total: int | None, message: str) -> None:
+            try:
+                update_job_progress(
+                    db_path,
+                    self._running_job_id,
+                    phase=phase,
+                    completed=completed,
+                    total=total,
+                    message=message,
+                )
+            except sqlite3.Error:
+                pass
             try:
                 self.call_from_thread(self._update_action_progress, phase, completed, total, message)
             except RuntimeError:
@@ -2105,19 +2128,34 @@ def run_tui(
                 )
 
         def _finish_running_action(self, result: ActionResult) -> None:
+            job_id = self._running_job_id
             self._running_worker = None
             self._running_action = ""
             self._running_label = ""
+            self._running_job_id = None
             self._cancel_requested = False
             self._reset_action_progress()
             self._set_action_buttons_disabled(False)
             self.query_one("#cancel-action", Button).disabled = True
-            self._run_action(result)
+            self._run_action(result, job_id=job_id)
 
-        def _run_action(self, result: ActionResult) -> None:
+        def _run_action(self, result: ActionResult, *, job_id: int | None = None) -> None:
             self._last_action = result
+            output_artifact_id: int | None = None
+            if result.output_path:
+                output_path = Path(result.output_path).expanduser()
+                if output_path.suffix.lower() == ".json" and output_path.exists():
+                    try:
+                        output_artifact_id = register_artifact(db_path, output_path).id
+                    except (OSError, ValueError, sqlite3.Error):
+                        output_artifact_id = None
             try:
-                write_action_history(result, self._report_dir)
+                history_path = write_action_history(result, self._report_dir)
+                try:
+                    history_artifact_id = register_artifact(db_path, history_path).id
+                    output_artifact_id = output_artifact_id or history_artifact_id
+                except (OSError, ValueError, sqlite3.Error):
+                    pass
             except OSError as e:
                 self._last_action = ActionResult(
                     action=result.action,
@@ -2128,6 +2166,17 @@ def run_tui(
                     refresh=result.refresh,
                     details=result.details,
                 )
+            error_text = "\n".join(self._last_action.errors) if self._last_action.errors else None
+            try:
+                finish_job(
+                    db_path,
+                    job_id,
+                    status=self._last_action.status,
+                    output_artifact_id=output_artifact_id,
+                    error=error_text,
+                )
+            except sqlite3.Error:
+                pass
             self._resolved_report_paths = report_search_paths(
                 db_path=db_path,
                 report_paths=report_paths,
@@ -2171,6 +2220,7 @@ def run_tui(
             # refresh leave the cache intact so they stay snappy.
             clear_adapter_cache()
             self._clear_button_lock_cache()
+            self._start_artifact_sync(materialize=True)
             self._refresh(dirty)
             self._fill_action_result()
 
@@ -2192,6 +2242,8 @@ def run_tui(
             # invalidation), so a resize-induced ``_refresh()`` does not pay
             # the cold-path cost. File-signature keys auto-invalidate any
             # cached entry whose underlying file mutated.
+            if dirty is None or "reports" in dirty:
+                self._start_artifact_sync(materialize=True)
             self._fill_status_strip()
             self._fill_operation_strip()
             self._fill_action_result()
@@ -2744,23 +2796,27 @@ def run_tui(
             table.add_row("Summary", summary.category, summary.title, _fmt(summary.entries), summary.description)
             table.add_row("File", summary.kind, _clip_middle(summary.path, width=104), "", "")
 
-            # A 224 MB tag plan takes >1s to parse. Serve from cache when
-            # available; otherwise paint a placeholder and warm in a thread.
-            detail_key = ("plan_detail_rows", _data_file_signature(Path(summary.path)), 80)
-            cached_rows = _data_cache_get(detail_key)
-            if cached_rows is not None:
-                self._history_detail_apply_rows(table, cached_rows)
+            rows = artifact_detail_rows(
+                db_path,
+                artifact_id=getattr(summary, "id", None),
+                path=summary.path,
+                limit=80,
+                parse_fallback=False,
+            )
+            if rows:
+                self._history_detail_apply_rows(table, rows)
                 return
-            table.add_row("Loading", "", "Reading report detail in the background…", "", "")
+            table.add_row("Loading", "", "Indexing report detail in the background…", "", "")
 
             import threading
 
             summary_path = summary.path
+            summary_id = getattr(summary, "id", None)
 
             def _warm_history_detail() -> None:
                 try:
-                    plan_detail_rows(Path(summary_path), limit=80)
-                except (OSError, ValueError):
+                    materialize_artifact_rows(db_path, artifact_id=summary_id, path=summary_path, limit=1000)
+                except (OSError, ValueError, sqlite3.Error):
                     pass
                 self.call_from_thread(self._fill_history_detail_after_warm, summary_path)
 
@@ -2796,6 +2852,35 @@ def run_tui(
             )
             self._fill_history_detail(row_index)
 
+        def _start_artifact_sync(self, *, materialize: bool = False) -> None:
+            if self._artifact_sync_running:
+                return
+            try:
+                paths = self._history_report_paths()
+            except Exception:
+                paths = [self._report_dir] if self._report_dir.exists() else []
+            if not paths:
+                return
+            self._artifact_sync_running = True
+
+            def _sync() -> None:
+                try:
+                    sync_artifacts_from_paths(db_path, paths, materialize=materialize)
+                finally:
+                    try:
+                        self.call_from_thread(self._finish_artifact_sync)
+                    except RuntimeError:
+                        pass
+
+            threading.Thread(target=_sync, daemon=True).start()
+
+        def _finish_artifact_sync(self) -> None:
+            self._artifact_sync_running = False
+            self._dirty_tabs.add("history")
+            if self._active_feature() == "history":
+                self._fill_history()
+            self._update_button_locks()
+
         def _history_report_paths(self) -> list[Path]:
             if not self._report_paths_resolved:
                 self._resolved_report_paths = report_search_paths(
@@ -2826,16 +2911,13 @@ def run_tui(
                     ("Path", "path", 88),
                 ),
             )
-            summaries = discover_plan_files(
-                self._history_report_paths(),
+            rows = list_artifacts(
+                db_path,
                 query=self._history_query,
                 category=self._history_category(),
-                limit=500,
-                content_query=False,
+                feature=self._history_feature_filter,
+                limit=200,
             )
-            rows = [summary for summary in summaries if history_matches_feature(summary, self._history_feature_filter)][
-                :200
-            ]
             rows = self._sort_for_table(
                 "history-table",
                 rows,

@@ -219,6 +219,65 @@ CREATE TABLE IF NOT EXISTS tag_apply_log (
     result_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS artifacts (
+    id INTEGER PRIMARY KEY,
+    path TEXT UNIQUE NOT NULL,
+    kind TEXT NOT NULL,
+    feature TEXT NOT NULL,
+    category TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    mtime REAL NOT NULL DEFAULT 0,
+    size INTEGER NOT NULL DEFAULT 0,
+    summary_json TEXT,
+    entry_count INTEGER NOT NULL DEFAULT 0,
+    error_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'ok'
+);
+
+CREATE TABLE IF NOT EXISTS jobs (
+    id INTEGER PRIMARY KEY,
+    action TEXT NOT NULL,
+    status TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    progress TEXT,
+    output_artifact_id INTEGER REFERENCES artifacts(id) ON DELETE SET NULL,
+    error TEXT
+);
+
+CREATE TABLE IF NOT EXISTS artifact_rows (
+    id INTEGER PRIMARY KEY,
+    artifact_id INTEGER NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+    row_index INTEGER NOT NULL,
+    row_type TEXT NOT NULL,
+    action TEXT,
+    source TEXT,
+    target TEXT,
+    status TEXT,
+    detail TEXT,
+    search_text TEXT,
+    UNIQUE (artifact_id, row_index)
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS artifact_rows_fts USING fts5(
+    search_text,
+    content='artifact_rows',
+    content_rowid='id'
+);
+
+CREATE TRIGGER IF NOT EXISTS artifact_rows_ai AFTER INSERT ON artifact_rows BEGIN
+    INSERT INTO artifact_rows_fts(rowid, search_text) VALUES (new.id, new.search_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS artifact_rows_au AFTER UPDATE OF search_text ON artifact_rows BEGIN
+    INSERT INTO artifact_rows_fts(artifact_rows_fts, rowid, search_text) VALUES ('delete', old.id, old.search_text);
+    INSERT INTO artifact_rows_fts(rowid, search_text) VALUES (new.id, new.search_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS artifact_rows_ad AFTER DELETE ON artifact_rows BEGIN
+    INSERT INTO artifact_rows_fts(artifact_rows_fts, rowid, search_text) VALUES ('delete', old.id, old.search_text);
+END;
+
 CREATE INDEX IF NOT EXISTS idx_files_ext ON files(extension);
 CREATE INDEX IF NOT EXISTS idx_files_md5 ON files(md5);
 CREATE INDEX IF NOT EXISTS idx_files_size ON files(size_bytes);
@@ -238,6 +297,17 @@ CREATE INDEX IF NOT EXISTS idx_accepted_tags_field ON accepted_tags(field);
 CREATE INDEX IF NOT EXISTS idx_metadata_fields_file ON metadata_fields(file_id);
 CREATE INDEX IF NOT EXISTS idx_metadata_fields_key ON metadata_fields(namespace, key);
 CREATE INDEX IF NOT EXISTS idx_metadata_fields_value ON metadata_fields(value);
+CREATE INDEX IF NOT EXISTS idx_artifacts_created ON artifacts(created_at);
+CREATE INDEX IF NOT EXISTS idx_artifacts_mtime ON artifacts(mtime);
+CREATE INDEX IF NOT EXISTS idx_artifacts_kind ON artifacts(kind);
+CREATE INDEX IF NOT EXISTS idx_artifacts_feature ON artifacts(feature);
+CREATE INDEX IF NOT EXISTS idx_artifacts_category ON artifacts(category);
+CREATE INDEX IF NOT EXISTS idx_artifacts_status ON artifacts(status);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+CREATE INDEX IF NOT EXISTS idx_jobs_action ON jobs(action);
+CREATE INDEX IF NOT EXISTS idx_jobs_started ON jobs(started_at);
+CREATE INDEX IF NOT EXISTS idx_artifact_rows_artifact ON artifact_rows(artifact_id);
+CREATE INDEX IF NOT EXISTS idx_artifact_rows_type ON artifact_rows(row_type);
 """
 
 _FILES_COLUMN_MIGRATIONS = {

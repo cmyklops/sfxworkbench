@@ -833,6 +833,33 @@ def test_tui_history_lightweight_summary_avoids_large_full_parse(tmp_path: Path,
     assert summaries[0].errors == 2
 
 
+def test_tui_history_lightweight_summary_handles_missing_summary(tmp_path: Path, monkeypatch) -> None:
+    report_path = tmp_path / "format_audit.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "tool": "sfxworkbench",
+                "action": "review_only",
+                "entries": [{"path": f"/lib/{index}.wav", "detail": "x" * 256} for index in range(1_000)],
+            }
+        )
+    )
+
+    def fail_read_text(*args, **kwargs):
+        raise AssertionError("lightweight history summary should tolerate missing summary without full parse")
+
+    monkeypatch.setattr(Path, "read_text", fail_read_text)
+
+    summaries = discover_plan_files([tmp_path], content_query=False)
+
+    assert len(summaries) == 1
+    assert summaries[0].kind == "json_report"
+    assert summaries[0].category == "Report"
+    assert summaries[0].entries == 0
+    assert summaries[0].errors == 0
+
+
 def test_tui_plan_detail_rows_expand_nesting_reports_and_action_outputs(tmp_path: Path) -> None:
     report_path = tmp_path / "redundant_nesting_report.json"
     source = tmp_path / "Vendor" / "Pack" / "Pack"
