@@ -157,19 +157,21 @@ _FIELDS_RAW: tuple[TagField, ...] = (
     ),
     TagField(
         canonical="category",
-        aliases=("category", "ignr"),
+        aliases=("category", "genre", "ignr"),
         multivalue=False,
         embedded_keys=(
             ("riff_info", "ignr"),
+            ("tag", "genre"),
             ("tag", "category"),
         ),
     ),
     TagField(
         canonical="subcategory",
-        aliases=("subcategory", "isbj"),
+        aliases=("subcategory", "ww:subcategory", "isbj"),
         multivalue=False,
         embedded_keys=(
             ("riff_info", "isbj"),
+            ("tag", "ww:subcategory"),
             ("tag", "subcategory"),
         ),
     ),
@@ -199,15 +201,45 @@ _FIELDS_RAW: tuple[TagField, ...] = (
     ),
     TagField(
         canonical="ucs_category",
-        aliases=("ucs_category",),
+        aliases=("ucs_category", "ww:ucs_category"),
         multivalue=False,
-        embedded_keys=(),
+        embedded_keys=(("tag", "ww:ucs_category"),),
     ),
     TagField(
         canonical="ucs_subcategory",
-        aliases=("ucs_subcategory",),
+        aliases=("ucs_subcategory", "ww:ucs_subcategory"),
         multivalue=False,
-        embedded_keys=(),
+        embedded_keys=(("tag", "ww:ucs_subcategory"),),
+    ),
+    TagField(
+        canonical="originator",
+        aliases=("originator", "organization"),
+        multivalue=False,
+        embedded_keys=(
+            ("bext", "originator"),
+            ("tag", "organization"),
+        ),
+    ),
+    TagField(
+        canonical="originator_reference",
+        aliases=("originator_reference", "encodedby"),
+        multivalue=False,
+        embedded_keys=(
+            ("bext", "originatorreference"),
+            ("tag", "encodedby"),
+        ),
+    ),
+    TagField(
+        canonical="take_number",
+        aliases=("take_number", "ww:take_number"),
+        multivalue=False,
+        embedded_keys=(("tag", "ww:take_number"),),
+    ),
+    TagField(
+        canonical="channel_position",
+        aliases=("channel_position", "ww:channel_position"),
+        multivalue=False,
+        embedded_keys=(("tag", "ww:channel_position"),),
     ),
 )
 

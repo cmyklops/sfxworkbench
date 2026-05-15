@@ -26,10 +26,11 @@ def _normalize_path(value: str, tmp_path: Path, tmp_library: Path, tmp_db: Path)
         return "<DB>"
     if value == root:
         return "<ROOT>"
-    if value.startswith(root + "/"):
-        return "<ROOT>" + value[len(root) :]
-    if value.startswith(tmp + "/"):
-        return "<TMP>" + value[len(tmp) :]
+    for separator in ("/", "\\"):
+        if value.startswith(root + separator):
+            return ("<ROOT>" + value[len(root) :]).replace("\\", "/")
+        if value.startswith(tmp + separator):
+            return ("<TMP>" + value[len(tmp) :]).replace("\\", "/")
     return value
 
 
@@ -159,8 +160,9 @@ def test_audit_search_export_json_contract(tmp_library: Path, tmp_db: Path, tmp_
     assert audit["command"] == "audit"
     assert audit["db_path"] == "<DB>"
     assert audit["result"]["total_files"] == 5
-    assert audit["result"]["fn_issues_by_type"]["illegal_chars"] == 1
-    assert audit["result"]["fn_issues_by_type"]["unicode_normalization"] == 1
+    assert audit["result"]["fn_issues_by_type"]["risky_chars"] == 1
+    if sys.platform != "win32":
+        assert audit["result"]["fn_issues_by_type"]["unicode_normalization"] == 1
 
     bundle_dir = tmp_path / "audit_bundle"
     bundle = _normalize(
@@ -572,7 +574,7 @@ def test_rename_json_contract(tmp_library: Path, tmp_db: Path, tmp_path: Path) -
 def test_rename_config_safe_folder_json_contract(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
     safe = tmp_library / "Master"
     safe.mkdir()
-    protected = safe / "bad:name.wav"
+    protected = safe / " bad name.wav"
     protected.write_bytes(b"audio")
     config_path = tmp_path / "sfxworkbench.json"
     config_path.write_text(json.dumps({"safe_folders": [str(safe)]}))
@@ -599,7 +601,7 @@ def test_rename_config_safe_folder_json_contract(tmp_library: Path, tmp_db: Path
 
     assert payload["command"] == "rename"
     assert {
-        "path": "<ROOT>/Master/bad:name.wav",
+        "path": "<ROOT>/Master/ bad name.wav",
         "error": "protected by safe folder",
         "safe_folder": "<ROOT>/Master",
     } in payload["plan"]["errors"]
@@ -1183,7 +1185,9 @@ def test_tag_suggest_json_contract(tmp_db: Path, tmp_path: Path, tmp_library: Pa
     assert write_plan_payload["plan"]["dry_run_only"] is True
     assert write_plan_payload["plan"]["backend"]["available"] is True
     assert write_plan_payload["plan"]["backend"]["name"] == "auto"
-    assert write_plan_payload["plan"]["backends"][0]["executable"] == "<TMP>/bwfmetaedit"
+    assert write_plan_payload["plan"]["backends"][0]["executable"] == _normalize_path(
+        str(fake_bwfmetaedit), tmp_path, tmp_library, tmp_db
+    )
     assert write_plan_payload["plan"]["summary"]["candidate_entries"] == 1
     assert write_plan_payload["plan"]["summary"]["supported_entries"] <= 1
 
@@ -1552,14 +1556,14 @@ def test_metadata_write_apply_bwf_and_riff_info_json_contract(
     assert apply_payload["schema_version"] == 1
     assert apply_payload["command"] == "metadata_write_apply"
     assert apply_payload["result"]["dry_run"] is False
-    assert apply_payload["result"]["applied"] == 2
+    assert apply_payload["result"]["applied"] == 4
     assert apply_payload["result"]["files_written"] == 1
     assert apply_payload["result"]["files_verified"] == 1
     assert apply_payload["result"]["write_results"] == [
         {
             "path": "<ROOT>/sounds/Car Crash 01.wav",
             "command": [
-                "<TMP>/bwfmetaedit",
+                _normalize_path(str(bwfmetaedit), tmp_path, tmp_library, tmp_db),
                 "--reject-overwrite",
                 "--specialchars",
                 "--Description=Metal Hit",

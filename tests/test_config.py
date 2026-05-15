@@ -167,7 +167,7 @@ def test_partial_override_preserves_other_defaults(tmp_path: Path) -> None:
 def test_library_root_path_round_trips_through_toml(tmp_path: Path) -> None:
     cfg_file = _write_toml(
         tmp_path / "with_root.toml",
-        f'library_root = "{tmp_path / "library"}"\n',
+        f"library_root = '{tmp_path / 'library'}'\n",
     )
 
     cfg = load_config(config_path=cfg_file)

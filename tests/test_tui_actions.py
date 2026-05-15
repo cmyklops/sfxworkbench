@@ -263,6 +263,41 @@ def test_tui_permanent_delete_plan_includes_every_quarantine_log(tmp_path: Path)
     assert paths == {str(first_dir / "dupe.wav"), str(second_dir / "pack.wav")}
 
 
+def test_tui_permanent_delete_plan_ignores_generated_combined_logs(tmp_path: Path) -> None:
+    report_dir = tmp_path / "reports"
+    apply_log_dir = report_dir / "apply_logs"
+    apply_log_dir.mkdir(parents=True)
+    real = report_dir / "sfxworkbench_dedupe_quarantine_20260510_100000" / "dupe.wav"
+    stale = report_dir / "stale-from-old-combined-log.wav"
+    real.parent.mkdir(parents=True)
+    real.write_bytes(b"01")
+    stale.write_bytes(b"stale")
+    (apply_log_dir / "dedupe_log_20260510_100000.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "entries": [{"path": "/lib/a.wav", "quarantine_path": str(real)}],
+            }
+        )
+    )
+    (apply_log_dir / "combined_quarantine_log_20260511_100000.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "command": "combined_quarantine_log",
+                "entries": [{"path": "/lib/stale.wav", "quarantine_path": str(stale)}],
+            }
+        )
+    )
+
+    plan = build_delete_plan_action(report_dir)
+
+    assert plan.ok
+    assert plan.details is not None
+    assert plan.details["summary"]["candidate_entries"] == 1
+    assert plan.details["entries"][0]["path"] == str(real)
+
+
 def test_tui_permanent_delete_plan_from_legacy_quarantine_folder(tmp_path: Path) -> None:
     report_dir = tmp_path / "reports"
     quarantined = report_dir / "wavwarden_quarantine_20260508_044220"

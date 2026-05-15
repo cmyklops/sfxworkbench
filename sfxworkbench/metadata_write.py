@@ -422,11 +422,13 @@ def render_mutagen_commands(
     for file_id in sorted(grouped):
         file_entries = grouped[file_id]
         fields: dict[str, str | list[str]] = {}
+        entry_count = 0
         allow_overwrite = any(entry.action == "replace_tag" for entry in file_entries)
         command = _base_mutagen_command()
         for entry in sorted(file_entries, key=lambda item: (item.target_key or "", item.entry_id)):
             if entry.target_key is None:
                 continue
+            entry_count += 1
             if entry.target_key in MUTAGEN_MULTIVALUE_KEYS:
                 existing = fields.setdefault(entry.target_key, [])
                 if isinstance(existing, list):
@@ -443,6 +445,7 @@ def render_mutagen_commands(
                 path=file_entries[0].path,
                 command=command,
                 fields=fields,
+                entry_count=entry_count,
                 allow_overwrite=allow_overwrite,
             )
         )
@@ -539,6 +542,7 @@ def render_bwfmetaedit_commands(
     for file_id in sorted(grouped):
         file_entries = grouped[file_id]
         fields: dict[str, str | list[str]] = {}
+        entry_count = 0
         allow_overwrite = any(entry.action in {"replace_bext", "replace_riff_info"} for entry in file_entries)
         command = _base_bwfmetaedit_command(plan, allow_overwrite=allow_overwrite)
         for entry in sorted(file_entries, key=lambda item: (item.target_key or "", item.entry_id)):
@@ -547,6 +551,7 @@ def render_bwfmetaedit_commands(
             command_field = BWF_METAEDIT_COMMAND_FIELDS.get(entry.target_key)
             if command_field is None:
                 continue
+            entry_count += 1
             if entry.target_key in BWF_METAEDIT_MULTIVALUE_KEYS:
                 existing = fields.setdefault(entry.target_key, [])
                 if isinstance(existing, list):
@@ -568,6 +573,7 @@ def render_bwfmetaedit_commands(
                 path=file_entries[0].path,
                 command=command,
                 fields=fields,
+                entry_count=entry_count,
                 allow_overwrite=allow_overwrite,
             )
         )
@@ -1185,9 +1191,9 @@ def apply_metadata_write_plan(
                 # ``result.skipped`` so the apply diagnostic balances —
                 # otherwise ``planned - applied - skipped`` would leave the
                 # filtered commands unaccounted for.
-                result.skipped += len(command.fields)
+                result.skipped += command.entry_count or len(command.fields)
                 continue
-            entry_count = len(command.fields)
+            entry_count = command.entry_count or len(command.fields)
             backend = _command_backend(command)
             source = Path(command.path)
             protected_match = move_protected_by(source, rules)

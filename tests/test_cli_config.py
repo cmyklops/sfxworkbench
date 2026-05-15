@@ -73,7 +73,7 @@ def test_sfx_config_validate_rejects_out_of_range(tmp_path: Path) -> None:
 
 def test_db_config_path_is_used_by_top_level_read_commands(tmp_path: Path, tmp_db: Path, tmp_library: Path) -> None:
     scan_library(tmp_library, tmp_db, skip_hash=True, quiet=True)
-    cfg_file = _write_toml(tmp_path / "db.toml", f'db_path = "{tmp_db}"\n')
+    cfg_file = _write_toml(tmp_path / "db.toml", f"db_path = '{tmp_db}'\n")
 
     audit = runner.invoke(app, ["--config", str(cfg_file), "audit", "--json"])
     search = runner.invoke(app, ["--config", str(cfg_file), "search", "AMB_RAIN", "--json"])
@@ -88,7 +88,7 @@ def test_db_config_path_is_used_by_top_level_read_commands(tmp_path: Path, tmp_d
 
 def test_db_config_path_is_used_by_metadata_audit(tmp_path: Path, tmp_db: Path, tmp_library: Path) -> None:
     scan_library(tmp_library, tmp_db, skip_hash=True, quiet=True)
-    cfg_file = _write_toml(tmp_path / "db.toml", f'db_path = "{tmp_db}"\n')
+    cfg_file = _write_toml(tmp_path / "db.toml", f"db_path = '{tmp_db}'\n")
 
     result = runner.invoke(app, ["--config", str(cfg_file), "metadata", "audit", "--json"])
 

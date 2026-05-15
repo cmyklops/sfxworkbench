@@ -208,6 +208,7 @@ class MetadataWriteCommand(BaseModel):
     path: str
     command: list[str] = []
     fields: dict[str, str | list[str]] = {}
+    entry_count: int = 0
     allow_overwrite: bool = False
     simulated: bool = True
 

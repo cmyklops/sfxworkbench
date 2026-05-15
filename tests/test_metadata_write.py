@@ -39,6 +39,10 @@ def _fake_bwfmetaedit(tmp_path: Path) -> Path:
     return executable
 
 
+def _expected_bwfmetaedit(tmp_path: Path) -> str:
+    return str(tmp_path / ("bwfmetaedit.cmd" if sys.platform == "win32" else "bwfmetaedit"))
+
+
 def _md5(path: Path) -> str:
     h = hashlib.md5()
     h.update(path.read_bytes())
@@ -399,7 +403,7 @@ def test_metadata_write_plan_can_explicitly_replace_existing_bwf_values(tmp_path
     assert "--reject-overwrite" not in command.command
     assert command.fields == {"Description": "Metal Hit"}
     assert command.command == [
-        str(tmp_path / "bwfmetaedit"),
+        _expected_bwfmetaedit(tmp_path),
         "--simulate",
         "--specialchars",
         "--Description=Metal Hit",
@@ -434,7 +438,7 @@ def test_metadata_write_review_and_preview_is_dry_run(tmp_path: Path, tmp_db: Pa
     assert command.path == str(audio)
     assert command.fields == {"Description": "Metal Hit"}
     assert command.command == [
-        str(tmp_path / "bwfmetaedit"),
+        _expected_bwfmetaedit(tmp_path),
         "--simulate",
         "--reject-overwrite",
         "--specialchars",
@@ -472,8 +476,9 @@ def test_metadata_write_bwfmetaedit_maps_keywords_to_riff_info_ikey(tmp_path: Pa
         "Description": "Metal Hit",
         "IKEY": ["auto collision", "vehicle impact", "wreck"],
     }
+    assert command.entry_count == 4
     assert command.command == [
-        str(tmp_path / "bwfmetaedit"),
+        _expected_bwfmetaedit(tmp_path),
         "--simulate",
         "--reject-overwrite",
         "--specialchars",
@@ -916,7 +921,7 @@ def test_metadata_write_fixture_bundle_can_execute_bwfmetaedit_on_copied_fixture
     assert fixture.errors == []
     assert fixture.write_result == {
         "command": [
-            str(tmp_path / "bwfmetaedit"),
+            _expected_bwfmetaedit(tmp_path),
             "--reject-overwrite",
             "--specialchars",
             "--Description=Metal Hit",
@@ -1047,7 +1052,7 @@ def test_metadata_write_apply_writes_bwfmetaedit_original_with_backup_and_db_ref
         {
             "path": str(audio),
             "command": [
-                str(tmp_path / "bwfmetaedit"),
+                _expected_bwfmetaedit(tmp_path),
                 "--reject-overwrite",
                 "--specialchars",
                 "--Description=Metal Hit",
@@ -1529,7 +1534,7 @@ def test_metadata_write_fixture_bundle_copies_audio_and_rewrites_commands(tmp_pa
     assert fixture.expected_fields == {"Description": "Metal Hit"}
     assert fixture.command[-1] == fixture.fixture_path
     assert fixture.command[:-1] == [
-        str(tmp_path / "bwfmetaedit"),
+        _expected_bwfmetaedit(tmp_path),
         "--simulate",
         "--reject-overwrite",
         "--specialchars",

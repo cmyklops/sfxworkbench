@@ -32,6 +32,13 @@ def test_canonicalize_collapses_keyword_aliases() -> None:
     assert canonicalize("  Keyword  ") == "keyword"
 
 
+def test_canonicalize_collapses_embedded_mutagen_aliases() -> None:
+    assert canonicalize("genre") == "category"
+    assert canonicalize("ww:subcategory") == "subcategory"
+    assert canonicalize("organization") == "originator"
+    assert canonicalize("encodedby") == "originator_reference"
+
+
 @pytest.mark.parametrize(
     "raw, expected",
     [
@@ -82,14 +89,18 @@ def test_embedded_keys_for_keyword_covers_riff_info_ikey() -> None:
     assert ("tag", "keywords") in keys
 
 
+def test_embedded_keys_for_category_cover_mutagen_genre() -> None:
+    assert ("tag", "genre") in embedded_keys_for("category")
+    assert ("tag", "ww:subcategory") in embedded_keys_for("subcategory")
+
+
 def test_embedded_keys_for_unknown_field_returns_empty() -> None:
     assert embedded_keys_for("custom_field") == ()
 
 
-def test_embedded_keys_for_ucs_fields_are_empty() -> None:
-    """UCS provenance fields live only in accepted_tags, not in metadata_fields."""
-    assert embedded_keys_for("ucs_category") == ()
-    assert embedded_keys_for("ucs_subcategory") == ()
+def test_embedded_keys_for_ucs_fields_cover_mutagen_private_tags() -> None:
+    assert embedded_keys_for("ucs_category") == (("tag", "ww:ucs_category"),)
+    assert embedded_keys_for("ucs_subcategory") == (("tag", "ww:ucs_subcategory"),)
 
 
 # -- normalize_value_for_dedup / values_equal_for_dedup ---------------------

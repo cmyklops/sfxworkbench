@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -174,6 +175,8 @@ def _has_quarantine_entries(path: Path) -> bool:
         payload = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
         return False
+    if payload.get("command") == "combined_quarantine_log":
+        return False
     entries = payload.get("entries")
     return isinstance(entries, list) and any(
         isinstance(entry, dict) and entry.get("quarantine_path") for entry in entries
@@ -202,6 +205,14 @@ def _quarantine_dirs(report_dir: Path) -> list[Path]:
     return sorted(set(candidates), key=lambda item: item.stat().st_mtime, reverse=True)
 
 
+def _quarantine_path_key(path: str | Path) -> str:
+    return os.path.normcase(str(Path(path).resolve(strict=False)))
+
+
+def _same_or_child_path(path_key: str, parent_key: str) -> bool:
+    return path_key == parent_key or path_key.startswith(parent_key.rstrip("\\/") + os.sep)
+
+
 def _aggregate_quarantine_entries(report_dir: Path) -> tuple[list[dict], list[Path]]:
     """Return ``(entries, source_logs)`` covering every quarantined path under *report_dir*.
 
@@ -225,18 +236,17 @@ def _aggregate_quarantine_entries(report_dir: Path) -> tuple[list[dict], list[Pa
             quarantine_path = item.get("quarantine_path")
             if not isinstance(quarantine_path, str) or not quarantine_path:
                 continue
-            if quarantine_path in seen_paths:
+            path_key = _quarantine_path_key(quarantine_path)
+            if path_key in seen_paths:
                 continue
-            seen_paths.add(quarantine_path)
+            seen_paths.add(path_key)
             entries.append(item)
     for legacy_dir in _quarantine_dirs(report_dir):
-        legacy_str = str(legacy_dir)
-        if legacy_str in seen_paths or any(
-            seen.startswith(legacy_str + "/") or seen == legacy_str for seen in seen_paths
-        ):
+        legacy_key = _quarantine_path_key(legacy_dir)
+        if legacy_key in seen_paths or any(_same_or_child_path(seen, legacy_key) for seen in seen_paths):
             continue
-        seen_paths.add(legacy_str)
-        entries.append({"quarantine_path": legacy_str, "path": None, "source": "legacy_quarantine_folder"})
+        seen_paths.add(legacy_key)
+        entries.append({"quarantine_path": str(legacy_dir), "path": None, "source": "legacy_quarantine_folder"})
     return entries, source_logs
 
 

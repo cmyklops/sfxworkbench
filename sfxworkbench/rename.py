@@ -390,6 +390,7 @@ def apply_rename_plan(
     selection: frozenset[str] | None = frozenset(target_paths) if target_paths is not None else None
     result = RenameResult(planned=len(plan.entries), dry_run=dry_run)
     rules = build_preservation_rules(config_path=config_path, safe_folders=safe_folders)
+    protected_entry_paths: set[str] = set()
     protection_errors = [
         error
         for entry in plan.entries
@@ -398,6 +399,7 @@ def apply_rename_plan(
     ]
     if protection_errors:
         result.errors.extend(protection_errors)
+        protected_entry_paths = {str(error["path"]) for error in protection_errors if "path" in error}
         if not allow_partial:
             if not quiet:
                 console.print("[red]Refusing to apply rename plan with protected safe-folder paths.[/red]")
@@ -439,6 +441,8 @@ def apply_rename_plan(
             progress_callback("renaming", entry_index, total_entries, entry.old_path)
         if selection is not None and entry.old_path not in selection:
             result.skipped += 1
+            continue
+        if entry.old_path in protected_entry_paths:
             continue
         old = Path(entry.old_path)
         new = Path(entry.new_path)

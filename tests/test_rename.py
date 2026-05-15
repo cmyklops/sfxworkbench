@@ -1,8 +1,10 @@
 """Tests for sfxworkbench.rename."""
 
 import json
+import sys
 from pathlib import Path
 
+import pytest
 from sfxworkbench.db import get_connection
 from sfxworkbench.rename import apply_rename_plan, build_rename_plan, undo_rename_log
 from sfxworkbench.scan import scan_library
@@ -11,7 +13,7 @@ from sfxworkbench.scan import scan_library
 def test_rename_plan_sanitizes_and_prefixes_non_ucs(tmp_path: Path) -> None:
     root = tmp_path / "lib"
     root.mkdir()
-    bad = root / "bad:name.wav"
+    bad = root / "bad!name.wav"
     bad.write_bytes(
         b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x44\xac\x00\x00\x88X\x01\x00\x02\x00\x10\x00data\x04\x00\x00\x00\x00\x00\x00\x00"
     )
@@ -66,7 +68,7 @@ def test_rename_refuses_collision(tmp_path: Path) -> None:
 def test_rename_apply_refuses_stale_index_target_before_moving(tmp_path: Path, tmp_db: Path) -> None:
     root = tmp_path / "lib"
     root.mkdir()
-    source = root / "bad:name.wav"
+    source = root / "bad!name.wav"
     source.write_bytes(b"audio")
     plan = build_rename_plan(root)
     entry = plan.entries[0]
@@ -93,22 +95,22 @@ def test_rename_apply_refuses_stale_index_target_before_moving(tmp_path: Path, t
 def test_safe_rename_plan_preserves_names_without_ucs_prefix(tmp_path: Path) -> None:
     root = tmp_path / "lib"
     root.mkdir()
-    bad = root / "bad:name.wav"
+    bad = root / " bad name.wav"
     bad.write_bytes(b"audio")
 
     plan = build_rename_plan(root, pattern="safe")
 
     assert len(plan.entries) == 1
-    assert plan.entries[0].new_filename == "bad_name.wav"
-    assert "illegal_chars" in plan.entries[0].issue_fixes
+    assert plan.entries[0].new_filename == "bad name.wav"
+    assert "leading_trailing_space" in plan.entries[0].issue_fixes
     assert "ucs_prefix" not in plan.entries[0].issue_fixes
 
 
 def test_safe_rename_applies_directory_and_file_updates_db(tmp_path: Path, tmp_db: Path) -> None:
     root = tmp_path / "lib"
-    bad_dir = root / "Bad: Folder "
+    bad_dir = root / " Bad Folder"
     bad_dir.mkdir(parents=True)
-    bad_file = bad_dir / "bad:file.wav"
+    bad_file = bad_dir / " bad file.wav"
     bad_file.write_bytes(
         b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x44\xac\x00\x00\x88X\x01\x00\x02\x00\x10\x00data\x04\x00\x00\x00\x00\x00\x00\x00"
     )
@@ -119,7 +121,7 @@ def test_safe_rename_applies_directory_and_file_updates_db(tmp_path: Path, tmp_d
     result = apply_rename_plan(plan, db_path=tmp_db, log_path=log_path, dry_run=False, quiet=True)
 
     assert result.renamed == 2
-    new_file = root / "Bad_ Folder" / "bad_file.wav"
+    new_file = root / "Bad Folder" / "bad file.wav"
     assert new_file.exists()
     assert not bad_file.exists()
 
@@ -190,6 +192,9 @@ def test_portable_rename_fixes_reserved_windows_basenames(tmp_path: Path) -> Non
 
 
 def test_portable_rename_records_trailing_dot_fix(tmp_path: Path) -> None:
+    if sys.platform == "win32":
+        pytest.skip("Win32 normalizes or rejects trailing-dot filesystem names")
+
     root = tmp_path / "lib"
     bad_dir = Path(str(root / "badname."))
     bad_dir.mkdir(parents=True)
@@ -222,7 +227,7 @@ def test_portable_rename_detects_windows_casefold_planned_collision(tmp_path: Pa
     root = tmp_path / "lib"
     root.mkdir()
     first = root / "Rain!.wav"
-    second = root / "rain?.wav"
+    second = root / "rain;.wav"
     first.write_bytes(b"audio")
     second.write_bytes(b"audio")
 
@@ -282,13 +287,13 @@ def test_portable_rename_shortens_long_paths(tmp_path: Path) -> None:
 def test_apply_rename_plan_allows_partial_when_requested(tmp_path: Path) -> None:
     root = tmp_path / "lib"
     root.mkdir()
-    valid_source = root / "bad:name.wav"
+    valid_source = root / " bad name.wav"
     blocked_source = root / "blocked.wav"
     valid_source.write_bytes(b"audio")
     blocked_source.write_bytes(b"audio")
 
     plan = build_rename_plan(root, pattern="safe")
-    valid_entry = next(e for e in plan.entries if e.old_filename == "bad:name.wav")
+    valid_entry = next(e for e in plan.entries if e.old_filename == " bad name.wav")
     blocked_target = root / "already-there.wav"
     blocked_target.write_bytes(b"audio")
     focused = plan.model_copy(
@@ -316,7 +321,7 @@ def test_rename_plan_uses_config_safe_folder(tmp_path: Path) -> None:
     root = tmp_path / "lib"
     safe = root / "Master"
     safe.mkdir(parents=True)
-    protected = safe / "bad:name.wav"
+    protected = safe / " bad name.wav"
     protected.write_bytes(b"audio")
     config_path = tmp_path / "sfxworkbench.json"
     config_path.write_text(json.dumps({"safe_folders": [str(safe)]}))
@@ -333,11 +338,43 @@ def test_rename_plan_uses_config_safe_folder(tmp_path: Path) -> None:
     ]
 
 
+def test_apply_rename_plan_allow_partial_still_skips_safe_folder_entries(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    safe = root / "Master"
+    safe.mkdir(parents=True)
+    protected = safe / "Boom.wav"
+    protected.write_bytes(b"audio")
+    other = root / "Whoosh!.wav"
+    other.write_bytes(b"audio")
+
+    plan = build_rename_plan(root, pattern="ucs")
+    result = apply_rename_plan(
+        plan,
+        dry_run=False,
+        quiet=True,
+        allow_partial=True,
+        safe_folders=[safe],
+        log_path=tmp_path / "rename_log.json",
+    )
+
+    assert result.renamed == 1
+    assert result.errors == [
+        {
+            "path": str(protected),
+            "error": "protected by safe folder",
+            "safe_folder": str(safe.resolve()),
+        }
+    ]
+    assert protected.exists()
+    assert not (safe / "SFX_MISC_BOOM.wav").exists()
+    assert (root / "SFX_MISC_WHOOSH.wav").exists()
+
+
 def test_apply_rename_plan_refuses_config_safe_folder_for_old_plan(tmp_path: Path) -> None:
     root = tmp_path / "lib"
     safe = root / "Master"
     safe.mkdir(parents=True)
-    protected = safe / "bad:name.wav"
+    protected = safe / " bad name.wav"
     protected.write_bytes(b"audio")
     config_path = tmp_path / "sfxworkbench.json"
     config_path.write_text(json.dumps({"safe_folders": [str(safe)]}))

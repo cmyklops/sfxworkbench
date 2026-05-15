@@ -1,5 +1,6 @@
 """Pytest fixtures for sfxworkbench tests."""
 
+import sys
 import unicodedata
 import wave
 from pathlib import Path
@@ -54,13 +55,15 @@ def tmp_library(tmp_path: Path) -> Path:
     (root / "sounds" / "AMB_RAIN_01.wav.reapeaks").write_bytes(b"\x00" * 32)
     (root / "sounds" / "SFX_GUNSHOT_01.sfk").write_bytes(b"\x00" * 32)
 
-    # File with illegal char in name (:)
-    (root / "sounds" / "bad:name.wav").write_bytes(
+    # File with risky punctuation that is portable enough to create on Windows.
+    (root / "sounds" / "bad!name.wav").write_bytes(
         b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x44\xac\x00\x00\x88X\x01\x00\x02\x00\x10\x00data\x04\x00\x00\x00\x00\x00\x00\x00"
     )
 
     # File with NFD-encoded name
     nfd_name = unicodedata.normalize("NFD", "café_sound.wav")
+    if sys.platform == "win32":
+        nfd_name = "cafe_sound.wav"
     (root / "sounds" / nfd_name).write_bytes(b"\x00" * 8)
 
     return root

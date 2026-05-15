@@ -144,7 +144,7 @@ def _existing_embedded_values(conn, *, file_id: int, field: str) -> list[str]:
     if not field_keys:
         return []
     clauses = " OR ".join("(lower(namespace) = ? AND lower(key) = ?)" for _ in field_keys)
-    params = [value for pair in field_keys for value in pair]
+    params = [value.lower() for pair in field_keys for value in pair]
     rows = conn.execute(
         f"""
         SELECT value

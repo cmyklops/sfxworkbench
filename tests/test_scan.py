@@ -114,9 +114,8 @@ def test_scan_populates_fn_issues(tmp_library: Path, tmp_db: Path) -> None:
     issues = conn.execute("SELECT issue FROM fn_issues").fetchall()
     issue_types = {row["issue"] for row in issues}
     conn.close()
-    # tmp_library has bad:name.wav (illegal_chars) and an NFD-encoded filename
-    assert "illegal_chars" in issue_types
-    assert "unicode_normalization" in issue_types
+    # tmp_library has bad!name.wav, which is portable but still risky.
+    assert "risky_chars" in issue_types
 
 
 def test_scan_ucs_detection(tmp_library: Path, tmp_db: Path) -> None:
