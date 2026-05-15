@@ -47,6 +47,27 @@ SEGMENT_METHOD = "rms_event_v2"
 _COMMIT_BATCH = 250
 FEEDBACK_STATES = {"favorite", "hidden", "ignored", "accepted", "rejected"}
 ProgressCallback = Callable[[str, int, int | None, str], None]
+_PROGRESS_MAX_INTERVAL = 100
+
+
+def _similarity_crawl_progress_message(
+    *,
+    processed: int,
+    total: int,
+    analyzed: int,
+    skipped: int,
+    pending: int,
+    segments: int,
+    errors: int,
+    current: str | None = None,
+) -> str:
+    message = (
+        f"Processed {processed:,}/{total:,}; analyzed {analyzed:,}, "
+        f"skipped {skipped:,}, pending {pending:,}, segments {segments:,}, errors {errors:,}"
+    )
+    if current:
+        return f"{message}; current {current}"
+    return message
 
 
 def _utc_now() -> str:
@@ -697,16 +718,44 @@ def crawl_similarity_descriptors(
     rows = [row for row in rows if is_scoped_path(row["path"], root)]
     total = len(rows)
     if progress_callback is not None:
-        progress_callback("crawling", 0, total, f"Found {total:,} indexed audio file(s)")
-    report_every = progress_interval(total)
+        progress_callback(
+            "crawling",
+            0,
+            total,
+            _similarity_crawl_progress_message(
+                processed=0,
+                total=total,
+                analyzed=0,
+                skipped=0,
+                pending=0,
+                segments=0,
+                errors=0,
+            ),
+        )
+    report_every = min(progress_interval(total), _PROGRESS_MAX_INTERVAL)
 
-    def report_progress(completed: int, message: str, *, force: bool = False) -> None:
+    summary = SimilarityCrawlSummary(total_files=len(rows))
+
+    def report_progress(completed: int, current: str, *, force: bool = False) -> None:
         if progress_callback is None:
             return
         if force or completed % report_every == 0 or completed == total:
-            progress_callback("crawling", completed, total, message)
+            progress_callback(
+                "crawling",
+                completed,
+                total,
+                _similarity_crawl_progress_message(
+                    processed=completed,
+                    total=total,
+                    analyzed=summary.analyzed,
+                    skipped=summary.skipped,
+                    pending=summary.pending,
+                    segments=summary.segments_detected,
+                    errors=summary.errors,
+                    current=current,
+                ),
+            )
 
-    summary = SimilarityCrawlSummary(total_files=len(rows))
     descriptors: list[SimilarityDescriptor] = []
     pending = 0
     status = "completed"
@@ -733,17 +782,17 @@ def crawl_similarity_descriptors(
                 row, existing, max_duration_s=max_duration_s, parameters_hash=parameters_hash
             ):
                 summary.skipped += 1
-                report_progress(processed, f"Skipped current descriptor: {row['filename']}")
+                report_progress(processed, row["filename"])
                 continue
 
             if max_files is not None and summary.analyzed >= max_files:
                 summary.pending += 1
-                report_progress(processed, f"Deferred stale descriptor: {row['filename']}")
+                report_progress(processed, row["filename"])
                 continue
 
             path = Path(row["path"])
             generated_at = _utc_now()
-            report_progress(processed - 1, f"Analyzing {row['filename']}", force=processed == 1)
+            report_progress(processed - 1, row["filename"], force=processed == 1)
             if not path.exists():
                 metrics = {"error": "file not found"}
                 segments = []
@@ -782,7 +831,7 @@ def crawl_similarity_descriptors(
                 pending = 0
             if throttle_ms:
                 time.sleep(throttle_ms / 1000.0)
-            report_progress(processed, f"Analyzed {row['filename']}")
+            report_progress(processed, row["filename"])
     except KeyboardInterrupt:
         status = "interrupted"
         stop_reason = "keyboard_interrupt"
@@ -792,7 +841,15 @@ def crawl_similarity_descriptors(
             "cancelled" if status == "cancelled" else "complete",
             min(total, completed_for_progress),
             total,
-            "Similarity crawl cancelled" if status == "cancelled" else "Similarity crawl complete",
+            _similarity_crawl_progress_message(
+                processed=min(total, completed_for_progress),
+                total=total,
+                analyzed=summary.analyzed,
+                skipped=summary.skipped,
+                pending=summary.pending,
+                segments=summary.segments_detected,
+                errors=summary.errors,
+            ),
         )
     if summary.pending:
         status = "partial" if status == "completed" else status

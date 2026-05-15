@@ -18,6 +18,32 @@ from sfxworkbench.utils import fmt_bytes
 
 console = Console()
 ProgressCallback = Callable[[str, int, int | None, str], None]
+_PROGRESS_MAX_INTERVAL = 100
+
+
+def _clean_walk_message(visited: int, junk_files: int, junk_dirs: int) -> str:
+    total_junk = junk_files + junk_dirs
+    return (
+        f"Walked {visited:,} item(s); found {total_junk:,} junk item(s) "
+        f"({junk_files:,} files, {junk_dirs:,} dirs)"
+    )
+
+
+def _clean_apply_message(
+    *,
+    completed: int,
+    total: int,
+    removed_files: int,
+    removed_dirs: int,
+    errors: int,
+    bytes_freed: int,
+    current: Path | None = None,
+) -> str:
+    message = (
+        f"Processed {completed:,}/{total:,}; removed {removed_files:,} file(s), "
+        f"{removed_dirs:,} dir(s), errors {errors:,}, freed {fmt_bytes(bytes_freed)}"
+    )
+    return f"{message}; current {current.name}" if current is not None else message
 
 
 def find_junk(
@@ -42,7 +68,7 @@ def find_junk(
     def maybe_report(progress=None, task=None) -> None:
         if visited % 500 != 0:
             return
-        message = f"Walked {visited:,} item(s), found {len(junk_files) + len(junk_dirs):,} junk item(s)"
+        message = _clean_walk_message(visited, len(junk_files), len(junk_dirs))
         if progress_callback is not None:
             progress_callback("walking", visited, None, message)
         if progress is not None and task is not None:
@@ -91,7 +117,7 @@ def find_junk(
                 "walking",
                 visited,
                 visited,
-                f"Found {len(junk_files) + len(junk_dirs):,} junk item(s)",
+                _clean_walk_message(visited, len(junk_files), len(junk_dirs)),
             )
         return junk_files, junk_dirs
 
@@ -109,7 +135,7 @@ def find_junk(
             "walking",
             visited,
             visited,
-            f"Found {len(junk_files) + len(junk_dirs):,} junk item(s)",
+            _clean_walk_message(visited, len(junk_files), len(junk_dirs)),
         )
     return junk_files, junk_dirs
 
@@ -203,23 +229,38 @@ def clean_library(
         )
 
     cancelled = False
+    completed = 0
+    remove_errors = 0
     if not dry_run:
         from sfxworkbench.utils import progress_interval
 
         total = len(junk_files) + len(junk_dirs)
-        report_every = progress_interval(total)
-        completed = 0
+        report_every = min(progress_interval(total), _PROGRESS_MAX_INTERVAL)
         for f, size in junk_files:
             try:
                 f.unlink()
                 result.removed_files.append(str(f))
                 result.bytes_freed += size
             except OSError as e:
+                remove_errors += 1
                 if not quiet:
                     console.print(f"[red]Error removing {f}: {e}[/red]")
             completed += 1
             if progress_callback is not None and (completed % report_every == 0 or completed == total):
-                progress_callback("cleaning", completed, total, f"Removed {f.name}")
+                progress_callback(
+                    "cleaning",
+                    completed,
+                    total,
+                    _clean_apply_message(
+                        completed=completed,
+                        total=total,
+                        removed_files=len(result.removed_files),
+                        removed_dirs=len(result.removed_dirs),
+                        errors=remove_errors,
+                        bytes_freed=result.bytes_freed,
+                        current=f,
+                    ),
+                )
             # Cancellation poll: every 50 file deletes (cheap individually)
             # so a tens-of-thousands-of-DS_Store-siblings cleanup is responsive.
             if completed % 50 == 0 and cancel_requested is not None and cancel_requested():
@@ -232,11 +273,25 @@ def clean_library(
                     result.removed_dirs.append(str(d))
                     result.bytes_freed += size
                 except OSError as e:
+                    remove_errors += 1
                     if not quiet:
                         console.print(f"[red]Error removing {d}: {e}[/red]")
                 completed += 1
                 if progress_callback is not None and (completed % report_every == 0 or completed == total):
-                    progress_callback("cleaning", completed, total, f"Removed {d.name}")
+                    progress_callback(
+                        "cleaning",
+                        completed,
+                        total,
+                        _clean_apply_message(
+                            completed=completed,
+                            total=total,
+                            removed_files=len(result.removed_files),
+                            removed_dirs=len(result.removed_dirs),
+                            errors=remove_errors,
+                            bytes_freed=result.bytes_freed,
+                            current=d,
+                        ),
+                    )
                 if completed % 50 == 0 and cancel_requested is not None and cancel_requested():
                     cancelled = True
                     break
@@ -247,10 +302,31 @@ def clean_library(
             )
     elif progress_callback is not None:
         total = len(junk_files) + len(junk_dirs)
-        progress_callback("preview", total, total, f"Previewed {total:,} junk item(s)")
+        progress_callback(
+            "preview",
+            total,
+            total,
+            f"Previewed {total:,} junk item(s) ({len(junk_files):,} files, {len(junk_dirs):,} dirs, {fmt_bytes(planned_bytes)})",
+        )
         if not quiet:
             console.print("[green]Done.[/green]")
     result.cancelled = cancelled
+    if progress_callback is not None and not dry_run:
+        total = len(junk_files) + len(junk_dirs)
+        completed_items = min(completed, total) if cancelled else total
+        progress_callback(
+            "cancelled" if cancelled else "complete",
+            completed_items,
+            total,
+            _clean_apply_message(
+                completed=completed_items,
+                total=total,
+                removed_files=len(result.removed_files),
+                removed_dirs=len(result.removed_dirs),
+                errors=remove_errors,
+                bytes_freed=result.bytes_freed,
+            ),
+        )
 
     if log_path is not None:
         log_data = {

@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +23,10 @@ console = Console()
 
 # Commit every N files to balance throughput vs. crash-recovery granularity.
 _COMMIT_BATCH = 500
+_COLLECT_REPORT_INTERVAL_S = 0.75
+_COLLECT_REPORT_DIRS = 250
+_COLLECT_REPORT_CANDIDATES = 2_000
+_SCAN_REPORT_MAX_INTERVAL = 100
 
 ProgressCallback = Callable[[str, int, int | None, str], None]
 CancelCallback = Callable[[], bool]
@@ -55,15 +60,74 @@ def _md5(path: Path, block: int = 65536, cancel_requested: CancelCallback | None
         return None
 
 
-def _collect_audio_files(root: Path, cancel_requested: CancelCallback | None = None) -> list[Path]:
+def _collection_message(*, dirs: int, files: int, candidates: int, current: Path | None = None) -> str:
+    location = f"; now {current}" if current is not None else ""
+    return (
+        f"Walked {dirs:,} dir(s), inspected {files:,} file(s), "
+        f"found {candidates:,} audio candidate(s){location}"
+    )
+
+
+def _scan_progress_message(
+    *,
+    processed: int,
+    total: int,
+    scanned: int,
+    skipped: int,
+    errors: int,
+    current: Path | str | None = None,
+) -> str:
+    prefix = (
+        f"Processed {processed:,}/{total:,}; indexed {scanned:,}, "
+        f"skipped {skipped:,}, errors {errors:,}"
+    )
+    if current is None:
+        return prefix
+    name = current.name if isinstance(current, Path) else str(current)
+    return f"{prefix}; current {name}"
+
+
+def _collect_audio_files(
+    root: Path,
+    cancel_requested: CancelCallback | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> list[Path]:
     """Return indexable audio files while pruning known junk directory trees."""
     if junk.is_inside_junk_dir(root):
         return []
 
     all_files: list[Path] = []
+    dirs_seen = 0
+    files_seen = 0
+    last_report_at = time.monotonic()
+    last_report_dirs = 0
+    last_report_candidates = 0
+
+    def report(current: Path | None = None, *, force: bool = False) -> None:
+        nonlocal last_report_at, last_report_dirs, last_report_candidates
+        if progress_callback is None:
+            return
+        now = time.monotonic()
+        enough_time = now - last_report_at >= _COLLECT_REPORT_INTERVAL_S
+        enough_dirs = dirs_seen - last_report_dirs >= _COLLECT_REPORT_DIRS
+        enough_candidates = len(all_files) - last_report_candidates >= _COLLECT_REPORT_CANDIDATES
+        if not force and not (enough_time or enough_dirs or enough_candidates):
+            return
+        last_report_at = now
+        last_report_dirs = dirs_seen
+        last_report_candidates = len(all_files)
+        progress_callback(
+            "collecting",
+            len(all_files),
+            None,
+            _collection_message(dirs=dirs_seen, files=files_seen, candidates=len(all_files), current=current),
+        )
+
     for dirpath, dirnames, filenames in os.walk(root):
         if _should_cancel(cancel_requested):
             break
+        dirs_seen += 1
+        files_seen += len(filenames)
         dirnames[:] = [dirname for dirname in dirnames if dirname not in junk.JUNK_DIR_NAMES]
         parent = Path(dirpath)
         for filename in filenames:
@@ -78,6 +142,8 @@ def _collect_audio_files(root: Path, cancel_requested: CancelCallback | None = N
             if not f.is_file():
                 continue
             all_files.append(f)
+        report(parent)
+    report(root, force=True)
     return all_files
 
 
@@ -100,14 +166,21 @@ def scan_library(
         console.print(f"[cyan]Collecting files under {root}...[/cyan]")
     if progress_callback is not None:
         progress_callback("collecting", 0, None, f"Collecting files under {root}")
-    all_files = _collect_audio_files(root, cancel_requested=cancel_requested)
+    all_files = _collect_audio_files(root, cancel_requested=cancel_requested, progress_callback=progress_callback)
 
     total = len(all_files)
     if not quiet:
         console.print(f"Found [yellow]{total:,}[/yellow] audio files.")
     if progress_callback is not None:
-        progress_callback("scanning", 0, total, f"Found {total:,} audio files")
-    report_every = progress_interval(total)
+        progress_callback(
+            "scanning",
+            0,
+            total,
+            _scan_progress_message(processed=0, total=total, scanned=0, skipped=0, errors=0),
+        )
+    # A 500k-file library would otherwise update only every 5k files. Keep
+    # large scans visibly alive while still bounding UI/job-progress churn.
+    report_every = min(progress_interval(total), _SCAN_REPORT_MAX_INTERVAL)
 
     result = ScanResult(total=total)
     now_str = datetime.now(UTC).isoformat()
@@ -246,10 +319,25 @@ def scan_library(
                 break
             processed += 1
             if progress_callback is not None and (processed % report_every == 0 or processed == total):
-                progress_callback("scanning", processed, total, f.name)
+                progress_callback(
+                    "scanning",
+                    processed,
+                    total,
+                    _scan_progress_message(
+                        processed=processed,
+                        total=total,
+                        scanned=result.scanned,
+                        skipped=result.skipped,
+                        errors=result.errors,
+                        current=f,
+                    ),
+                )
     else:
         with progress:
-            task = progress.add_task("Scanning...", total=total)
+            task = progress.add_task(
+                _scan_progress_message(processed=0, total=total, scanned=0, skipped=0, errors=0),
+                total=total,
+            )
             for f in all_files:
                 if _should_cancel(cancel_requested):
                     cancelled = True
@@ -261,8 +349,18 @@ def scan_library(
                     break
                 progress.advance(task)
                 processed += 1
+                description = _scan_progress_message(
+                    processed=processed,
+                    total=total,
+                    scanned=result.scanned,
+                    skipped=result.skipped,
+                    errors=result.errors,
+                    current=f,
+                )
+                if processed % report_every == 0 or processed == total:
+                    progress.update(task, description=description)
                 if progress_callback is not None and (processed % report_every == 0 or processed == total):
-                    progress_callback("scanning", processed, total, f.name)
+                    progress_callback("scanning", processed, total, description)
 
     # Final flush + scan_meta update
     conn.execute(
@@ -278,7 +376,14 @@ def scan_library(
 
     if progress_callback is not None:
         phase = "cancelled" if cancelled else "complete"
-        progress_callback(phase, processed, total, "Scan cancelled" if cancelled else "Scan complete")
+        final_message = _scan_progress_message(
+            processed=processed,
+            total=total,
+            scanned=result.scanned,
+            skipped=result.skipped,
+            errors=result.errors,
+        )
+        progress_callback(phase, processed, total, f"{'Scan cancelled' if cancelled else 'Scan complete'}: {final_message}")
     if not quiet:
         state = "[yellow]Scan cancelled.[/yellow]" if cancelled else "[green]Scan complete.[/green]"
         console.print(

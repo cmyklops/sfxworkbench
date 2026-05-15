@@ -60,6 +60,24 @@ _CONFIDENCE_FILENAME_TAKE = _DEFAULT_CONFIDENCE.filename_take
 _CONFIDENCE_FILENAME_DESCRIPTION = _DEFAULT_CONFIDENCE.filename_description
 _CONFIDENCE_PATH = _DEFAULT_CONFIDENCE.path
 _CONFIDENCE_SYNONYM = _DEFAULT_CONFIDENCE.synonym
+_PROGRESS_MAX_INTERVAL = 100
+
+
+def _tag_suggest_progress_message(
+    *,
+    processed: int,
+    total: int,
+    files_with_suggestions: int,
+    suggestions: int,
+    current: str | None = None,
+) -> str:
+    message = (
+        f"Processed {processed:,}/{total:,}; files with suggestions "
+        f"{files_with_suggestions:,}, suggestions {suggestions:,}"
+    )
+    if current:
+        return f"{message}; current {current}"
+    return message
 
 # Common SFX abbreviations. Conservative list — only expand when the token is
 # unambiguous. Falls back to the original token if not in the dict.
@@ -1498,9 +1516,19 @@ def build_tag_suggestion_report(
     from sfxworkbench.utils import progress_interval
 
     total_rows = len(rows)
-    report_every = min(progress_interval(total_rows), 250)
+    report_every = min(progress_interval(total_rows), _PROGRESS_MAX_INTERVAL)
     if progress_callback is not None:
-        progress_callback("suggesting", 0, total_rows, f"Processing {total_rows:,} indexed file(s)...")
+        progress_callback(
+            "suggesting",
+            0,
+            total_rows,
+            _tag_suggest_progress_message(
+                processed=0,
+                total=total_rows,
+                files_with_suggestions=0,
+                suggestions=0,
+            ),
+        )
 
     for row_index, row in enumerate(rows):
         if cancel_requested is not None and row_index % 100 == 0 and cancel_requested():
@@ -1528,9 +1556,11 @@ def build_tag_suggestion_report(
         if min_confidence > 0:
             all_suggestions = [s for s in all_suggestions if s.confidence >= min_confidence]
         all_suggestions = filter_suggestions(all_suggestions, sources=source_filters, fields=field_filters)
-        # Report at the log-scaled interval so a 1M-file suggestion run
-        # doesn't fire 20k status updates. Always report the final row so
-        # the bar lands at 100%, even when this file yields no suggestions.
+        if all_suggestions:
+            files_with_suggestions += 1
+            total_suggestions += len(all_suggestions)
+        # Emit frequent detailed progress; the TUI coalesces redraws/persisted
+        # job progress so million-file suggestion runs stay smooth.
         if progress_callback is not None and (
             row_index == 0 or (row_index + 1) % report_every == 0 or row_index + 1 == total_rows
         ):
@@ -1538,13 +1568,17 @@ def build_tag_suggestion_report(
                 "suggesting",
                 row_index + 1,
                 total_rows,
-                f"{row['filename']}",
+                _tag_suggest_progress_message(
+                    processed=row_index + 1,
+                    total=total_rows,
+                    files_with_suggestions=files_with_suggestions,
+                    suggestions=total_suggestions,
+                    current=row["filename"],
+                ),
             )
         if not all_suggestions:
             continue
 
-        files_with_suggestions += 1
-        total_suggestions += len(all_suggestions)
         for suggestion in all_suggestions:
             by_source[suggestion.source] = by_source.get(suggestion.source, 0) + 1
             by_field[suggestion.field] = by_field.get(suggestion.field, 0) + 1
@@ -1561,6 +1595,18 @@ def build_tag_suggestion_report(
                 md5=row["md5"],
                 suggestions=all_suggestions,
             )
+        )
+    if progress_callback is not None:
+        progress_callback(
+            "complete",
+            total_rows,
+            total_rows,
+            _tag_suggest_progress_message(
+                processed=total_rows,
+                total=total_rows,
+                files_with_suggestions=files_with_suggestions,
+                suggestions=total_suggestions,
+            ),
         )
     selected = entries if limit == 0 else entries[:limit]
 

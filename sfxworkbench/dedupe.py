@@ -25,6 +25,28 @@ from sfxworkbench.utils import fmt_bytes
 console = Console()
 
 PLAN_SCHEMA_VERSION = 1
+_PROGRESS_MAX_INTERVAL = 100
+
+
+def _dedupe_apply_progress_message(
+    *,
+    processed: int,
+    total: int,
+    removed: int,
+    quarantined: int,
+    skipped: int,
+    errors: int,
+    bytes_freed: int,
+    current: str | None = None,
+) -> str:
+    message = (
+        f"Processed {processed:,}/{total:,}; removed {removed:,}, "
+        f"quarantined {quarantined:,}, skipped {skipped:,}, "
+        f"errors {errors:,}, freed {fmt_bytes(bytes_freed)}"
+    )
+    if current:
+        return f"{message}; current {Path(current).name}"
+    return message
 
 
 def _now_stamp() -> str:
@@ -313,9 +335,22 @@ def apply_dedupe_plan(
         1 for group in plan.get("groups", []) for entry in group if entry.get("action") == "remove"
     )
     processed_entries = 0
-    report_every = progress_interval(total_remove_entries)
+    report_every = min(progress_interval(total_remove_entries), _PROGRESS_MAX_INTERVAL)
     if progress_callback is not None:
-        progress_callback("applying", 0, total_remove_entries, f"Quarantining {total_remove_entries:,} duplicate(s)...")
+        progress_callback(
+            "applying",
+            0,
+            total_remove_entries,
+            _dedupe_apply_progress_message(
+                processed=0,
+                total=total_remove_entries,
+                removed=0,
+                quarantined=0,
+                skipped=0,
+                errors=0,
+                bytes_freed=0,
+            ),
+        )
     rules = build_preservation_rules(
         config_path=config_path,
         safe_folders=[Path(folder) for folder in plan.get("safe_folders", [])] + list(safe_folders or []),
@@ -343,14 +378,28 @@ def apply_dedupe_plan(
             if entry["action"] != "remove":
                 continue
             # Cancel polled every 50 entries (cheap, sub-second response).
-            # Progress reported at the log-scaled interval so a 100k-entry
-            # quarantine doesn't fire 2k status updates.
+            # Progress is emitted frequently; the TUI throttles redraws and
+            # job-progress writes so six-figure plans stay responsive.
             if processed_entries > 0 and processed_entries % 50 == 0:
                 if cancel_requested is not None and cancel_requested():
                     cancelled = True
                     break
             if progress_callback is not None and processed_entries > 0 and processed_entries % report_every == 0:
-                progress_callback("applying", processed_entries, total_remove_entries, entry.get("path", ""))
+                progress_callback(
+                    "applying",
+                    processed_entries,
+                    total_remove_entries,
+                    _dedupe_apply_progress_message(
+                        processed=processed_entries,
+                        total=total_remove_entries,
+                        removed=result.removed,
+                        quarantined=result.quarantined,
+                        skipped=result.skipped,
+                        errors=len(result.errors),
+                        bytes_freed=result.bytes_freed,
+                        current=entry.get("path", ""),
+                    ),
+                )
             processed_entries += 1
             if selection is not None and entry["path"] not in selection:
                 # Mirror the other Tier 3.8 executors: count selection-skipped
@@ -436,6 +485,21 @@ def apply_dedupe_plan(
             console.print(f"Removed [cyan]{len(affected_paths):,}[/cyan] row(s) from index.")
 
     result.cancelled = cancelled
+    if progress_callback is not None:
+        progress_callback(
+            "cancelled" if cancelled else "complete",
+            processed_entries,
+            total_remove_entries,
+            _dedupe_apply_progress_message(
+                processed=processed_entries,
+                total=total_remove_entries,
+                removed=result.removed,
+                quarantined=result.quarantined,
+                skipped=result.skipped,
+                errors=len(result.errors),
+                bytes_freed=result.bytes_freed,
+            ),
+        )
     if not dry_run and log_entries:
         if log_path is None:
             log_path = _default_dedupe_log_path(plan_path)

@@ -35,6 +35,7 @@ _PORTABLE_UNDERSCORE_CHARS_RE = re.compile(r"[:*?\"<>|;\\!]+")
 _SEPARATOR_RE = re.compile(r"[\s\-]+")
 _UNDERSCORE_RE = re.compile(r"_+")
 _PORTABLE_MAX_PATH_BYTES = 240
+_PROGRESS_MAX_INTERVAL = 100
 _PORTABLE_TRANSLATION = str.maketrans(
     {
         "&": " and ",
@@ -53,6 +54,24 @@ _PORTABLE_TRANSLATION = str.maketrans(
         "\u0441": "c",
     }
 )
+
+
+def _rename_progress_message(
+    *,
+    processed: int,
+    total: int,
+    renamed: int,
+    skipped: int,
+    errors: int,
+    current: str | None = None,
+) -> str:
+    message = (
+        f"Processed {processed:,}/{total:,}; renamed {renamed:,}, "
+        f"skipped {skipped:,}, errors {errors:,}"
+    )
+    if current:
+        return f"{message}; current {Path(current).name}"
+    return message
 
 
 def _now_iso() -> str:
@@ -428,9 +447,20 @@ def apply_rename_plan(
     from sfxworkbench.utils import progress_interval
 
     total_entries = len(plan.entries)
-    report_every = progress_interval(total_entries)
+    report_every = min(progress_interval(total_entries), _PROGRESS_MAX_INTERVAL)
     if progress_callback is not None:
-        progress_callback("renaming", 0, total_entries, f"Renaming {total_entries:,} file(s)...")
+        progress_callback(
+            "renaming",
+            0,
+            total_entries,
+            _rename_progress_message(
+                processed=0,
+                total=total_entries,
+                renamed=0,
+                skipped=0,
+                errors=0,
+            ),
+        )
     cancelled = False
     for entry_index, entry in enumerate(plan.entries):
         if entry_index > 0 and entry_index % 50 == 0:
@@ -438,7 +468,19 @@ def apply_rename_plan(
                 cancelled = True
                 break
         if progress_callback is not None and entry_index > 0 and entry_index % report_every == 0:
-            progress_callback("renaming", entry_index, total_entries, entry.old_path)
+            progress_callback(
+                "renaming",
+                entry_index,
+                total_entries,
+                _rename_progress_message(
+                    processed=entry_index,
+                    total=total_entries,
+                    renamed=result.renamed,
+                    skipped=result.skipped,
+                    errors=len(result.errors),
+                    current=entry.old_path,
+                ),
+            )
         if selection is not None and entry.old_path not in selection:
             result.skipped += 1
             continue
@@ -490,6 +532,21 @@ def apply_rename_plan(
         conn.close()
 
     result.cancelled = cancelled
+    if progress_callback is not None:
+        processed_entries = result.renamed + result.skipped + len(result.errors)
+        completed_entries = min(processed_entries, total_entries) if cancelled else total_entries
+        progress_callback(
+            "cancelled" if cancelled else "complete",
+            completed_entries,
+            total_entries,
+            _rename_progress_message(
+                processed=completed_entries,
+                total=total_entries,
+                renamed=result.renamed,
+                skipped=result.skipped,
+                errors=len(result.errors),
+            ),
+        )
     log_plan = plan.model_copy(update={"entries": applied})
     write_rename_log(log_plan, log_path)
     result.log_path = str(log_path)

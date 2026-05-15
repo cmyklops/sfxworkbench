@@ -153,6 +153,8 @@ _CONTEXT_BUTTON_IDS = _ACTION_BUTTON_IDS | {
     "metadata-review-open",
 }
 
+_PROGRESS_THROTTLE_S = 0.25
+
 _desktop_open_command = desktop_open_command
 _process_is_running = process_is_running
 _TuiInstanceLock = TuiInstanceLock
@@ -216,6 +218,46 @@ def _fmt(value: object) -> str:
     if value is None:
         return ""
     return str(value)
+
+
+def _progress_phase_label(phase: str) -> str:
+    text = phase.replace("_", " ").strip()
+    return text.title() if text else "Progress"
+
+
+def _progress_unit(phase: str) -> str:
+    return "files" if phase in {"collecting", "scanning", "crawling"} else "items"
+
+
+def _format_duration(seconds: float) -> str:
+    seconds_int = max(0, int(seconds))
+    if seconds_int < 60:
+        return f"{seconds_int}s"
+    minutes, seconds_int = divmod(seconds_int, 60)
+    if minutes < 60:
+        return f"{minutes}m {seconds_int:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m"
+
+
+def _progress_rate_label(completed: int, elapsed_s: float, *, unit: str = "items") -> str:
+    if completed <= 0 or elapsed_s <= 0:
+        return ""
+    rate = completed / elapsed_s
+    if rate >= 10:
+        value = f"{rate:,.0f}"
+    else:
+        value = f"{rate:,.1f}"
+    return f"{value} {unit}/s"
+
+
+def _progress_eta_label(completed: int, total: int, elapsed_s: float) -> str:
+    if completed <= 0 or total <= completed or elapsed_s <= 0:
+        return ""
+    rate = completed / elapsed_s
+    if rate <= 0:
+        return ""
+    return f"ETA {_format_duration((total - completed) / rate)}"
 
 
 def _clip_middle(value: str, *, width: int = 88) -> str:
@@ -791,6 +833,10 @@ def run_tui(
             self._progress_completed = 0
             self._progress_total: int | None = None
             self._progress_message = ""
+            self._progress_phase_started_at = time.monotonic()
+            self._progress_last_emit_at = 0.0
+            self._progress_last_emit_phase = ""
+            self._progress_last_emit_percent: int | None = None
             self._file_rows = []
             self._history_rows = []
             self._history_query = ""
@@ -1761,8 +1807,29 @@ def run_tui(
             self._progress_completed = 0
             self._progress_total = None
             self._progress_message = ""
+            self._progress_phase_started_at = time.monotonic()
+            self._progress_last_emit_at = 0.0
+            self._progress_last_emit_phase = ""
+            self._progress_last_emit_percent = None
+
+        def _should_emit_progress(self, phase: str, completed: int, total: int | None) -> bool:
+            now = time.monotonic()
+            terminal = phase in {"complete", "cancelled", "error", "preview"}
+            phase_changed = phase != self._progress_last_emit_phase
+            complete = total is not None and total >= 0 and completed >= total
+            percent = int((completed / total) * 100) if total and total > 0 else None
+            percent_changed = percent is not None and percent != self._progress_last_emit_percent
+            due = now - self._progress_last_emit_at >= _PROGRESS_THROTTLE_S
+            if not (terminal or phase_changed or complete or percent_changed or due):
+                return False
+            self._progress_last_emit_at = now
+            self._progress_last_emit_phase = phase
+            self._progress_last_emit_percent = percent
+            return True
 
         def _threadsafe_progress_callback(self, phase: str, completed: int, total: int | None, message: str) -> None:
+            if not self._should_emit_progress(phase, completed, total):
+                return
             try:
                 update_job_progress(
                     db_path,
@@ -1780,6 +1847,8 @@ def run_tui(
                 pass
 
         def _update_action_progress(self, phase: str, completed: int, total: int | None, message: str) -> None:
+            if phase != self._progress_phase:
+                self._progress_phase_started_at = time.monotonic()
             self._progress_phase = phase
             self._progress_completed = completed
             self._progress_total = total
@@ -2271,9 +2340,23 @@ def run_tui(
             self.query_one("#operation-strip", Static).update(message)
 
         def _progress_line(self) -> Text:
+            phase = _progress_phase_label(self._progress_phase)
+            elapsed = max(0.0, time.monotonic() - self._progress_phase_started_at)
+            unit = _progress_unit(self._progress_phase)
+            rate_label = _progress_rate_label(max(0, self._progress_completed), elapsed, unit=unit)
             if self._progress_total is None:
                 message = self._progress_message or "Preparing..."
-                return Text(f"Progress: {message}", style="dim")
+                count_label = f"{self._progress_completed:,} {unit}" if self._progress_completed > 0 else ""
+                return Text.assemble(
+                    ("Progress: ", "bold"),
+                    (phase, "yellow"),
+                    (" "),
+                    (count_label, "yellow"),
+                    ("  " if count_label else ""),
+                    (rate_label, "dim"),
+                    ("  " if rate_label else ""),
+                    (_clip_middle(message, width=96 if not self._compact else 42), "dim"),
+                )
             total = max(0, self._progress_total)
             completed = min(max(0, self._progress_completed), total)
             width = 28 if not self._compact else 16
@@ -2281,15 +2364,22 @@ def run_tui(
             bar = "#" * filled + "-" * (width - filled)
             percent = 100 if total == 0 else int(100 * completed / total)
             percent_label = "<1%" if total > 0 and completed > 0 and percent == 0 else f"{percent:3d}%"
-            detail = _clip_middle(self._progress_message, width=48 if not self._compact else 24)
+            detail = _clip_middle(self._progress_message, width=96 if not self._compact else 42)
+            eta_label = _progress_eta_label(completed, total, elapsed)
             return Text.assemble(
                 ("Progress: ", "bold"),
+                (phase, "yellow"),
+                (" "),
                 (f"[{bar}]", "green"),
                 (" "),
                 (f"{completed:,}/{total:,}", "yellow"),
                 (" "),
                 (percent_label, "yellow"),
                 ("  "),
+                (rate_label, "dim"),
+                ("  " if rate_label else ""),
+                (eta_label, "dim"),
+                ("  " if eta_label else ""),
                 (detail, "dim"),
             )
 

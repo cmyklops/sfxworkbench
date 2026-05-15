@@ -13,8 +13,13 @@ from sfxworkbench.tui_app import (
     _button_lock_state,
     _desktop_open_command,
     _finding_status,
+    _format_duration,
     _latest_metadata_tag_plan,
     _latest_quarantine_dir_from_reports,
+    _progress_eta_label,
+    _progress_phase_label,
+    _progress_rate_label,
+    _progress_unit,
     _state_token,
     _tag_text,
     _TuiInstanceLock,
@@ -59,6 +64,16 @@ def test_tui_operation_buttons_are_registered_for_running_state() -> None:
     }
 
     assert expected == _ACTION_BUTTON_IDS
+
+
+def test_progress_helpers_show_phase_rate_and_eta() -> None:
+    assert _progress_phase_label("scanning") == "Scanning"
+    assert _progress_phase_label("metadata_write") == "Metadata Write"
+    assert _progress_unit("scanning") == "files"
+    assert _progress_unit("applying") == "items"
+    assert _format_duration(75) == "1m 15s"
+    assert _progress_rate_label(500, 10, unit="files") == "50 files/s"
+    assert _progress_eta_label(500, 1000, 10) == "ETA 10s"
 
 
 def test_tui_button_locks_apply_until_required_plan_exists(tmp_path: Path, tmp_db: Path) -> None:

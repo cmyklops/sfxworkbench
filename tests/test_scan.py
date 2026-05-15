@@ -85,6 +85,32 @@ def test_scan_can_cancel_between_files(tmp_library: Path, tmp_db: Path) -> None:
     assert events[-1][0] == "cancelled"
 
 
+def test_scan_progress_reports_collection_and_scan_counts(tmp_library: Path, tmp_db: Path) -> None:
+    events: list[tuple[str, int, int | None, str]] = []
+
+    result = scan_library(
+        tmp_library,
+        tmp_db,
+        skip_hash=True,
+        quiet=True,
+        progress_callback=lambda phase, completed, total, message: events.append(
+            (phase, completed, total, message)
+        ),
+    )
+
+    assert result.scanned == result.total
+    assert any(
+        phase == "collecting" and "Walked" in message and "audio candidate" in message
+        for phase, _completed, _total, message in events
+    )
+    assert any(
+        phase == "scanning" and "indexed" in message and "skipped" in message and "errors" in message
+        for phase, _completed, _total, message in events
+    )
+    assert events[-1][0] == "complete"
+    assert "Scan complete" in events[-1][3]
+
+
 def test_scan_force_rescan(tmp_library: Path, tmp_db: Path) -> None:
     """--force re-scans even unchanged files."""
     scan_library(tmp_library, tmp_db, skip_hash=True)

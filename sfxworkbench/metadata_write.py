@@ -46,6 +46,46 @@ console = Console()
 
 PLAN_SCHEMA_VERSION = 1
 _VALID_REVIEW_STATES = {"approved", "rejected", "pending"}
+_PROGRESS_MAX_INTERVAL = 100
+
+
+def _metadata_plan_progress_message(
+    *,
+    processed: int,
+    total: int,
+    supported: int,
+    unsupported: int,
+    current: str | None = None,
+) -> str:
+    message = (
+        f"Processed {processed:,}/{total:,}; supported {supported:,}, "
+        f"unsupported {unsupported:,}"
+    )
+    if current:
+        return f"{message}; current {Path(current).name}"
+    return message
+
+
+def _metadata_apply_progress_message(
+    *,
+    processed: int,
+    total: int,
+    applied: int,
+    files_written: int,
+    files_backed_up: int,
+    files_verified: int,
+    skipped: int,
+    errors: int,
+    current: str | None = None,
+) -> str:
+    message = (
+        f"Processed {processed:,}/{total:,}; applied {applied:,} field(s), "
+        f"wrote {files_written:,} file(s), backed up {files_backed_up:,}, "
+        f"verified {files_verified:,}, skipped {skipped:,}, errors {errors:,}"
+    )
+    if current:
+        return f"{message}; current {Path(current).name}"
+    return message
 
 # Conservative first-pass mapping. These are the only accepted tag fields this
 # slice is willing to route toward BWF MetaEdit. Everything else remains visible
@@ -687,9 +727,21 @@ def build_metadata_write_plan(
 
     entries: list[MetadataWritePlanEntry] = []
     total_rows = len(rows)
-    plan_report_every = progress_interval(total_rows)
+    plan_report_every = min(progress_interval(total_rows), _PROGRESS_MAX_INTERVAL)
+    supported_count = 0
+    unsupported_count = 0
     if progress_callback is not None:
-        progress_callback("probing", 0, total_rows, f"Probing {total_rows:,} accepted-tag row(s)...")
+        progress_callback(
+            "probing",
+            0,
+            total_rows,
+            _metadata_plan_progress_message(
+                processed=0,
+                total=total_rows,
+                supported=0,
+                unsupported=0,
+            ),
+        )
     for entry_id, row in enumerate(rows, start=1):
         # Per-row work: a Mutagen open + namespace lookup. Cheap-but-not-free.
         # Cancel polled every 50 for sub-second response; progress reported
@@ -697,8 +749,6 @@ def build_metadata_write_plan(
         if entry_id > 1 and entry_id % 50 == 0:
             if cancel_requested is not None and cancel_requested():
                 break
-        if progress_callback is not None and entry_id > 1 and entry_id % plan_report_every == 0:
-            progress_callback("probing", entry_id, total_rows, row["path"])
         entry_backend, target_namespace, target_key, action, supported = _target_for_row(
             row["field"], row["extension"] or "", backend
         )
@@ -736,8 +786,40 @@ def build_metadata_write_plan(
                 supported=supported,
             )
         )
+        if supported:
+            supported_count += 1
+        else:
+            unsupported_count += 1
+        if progress_callback is not None and (entry_id % plan_report_every == 0 or entry_id == total_rows):
+            progress_callback(
+                "probing",
+                entry_id,
+                total_rows,
+                _metadata_plan_progress_message(
+                    processed=entry_id,
+                    total=total_rows,
+                    supported=supported_count,
+                    unsupported=unsupported_count,
+                    current=row["path"],
+                ),
+            )
 
     errors = _mark_single_value_conflicts(entries)
+    if progress_callback is not None and errors:
+        progress_callback(
+            "probing",
+            total_rows,
+            total_rows,
+            (
+                _metadata_plan_progress_message(
+                    processed=total_rows,
+                    total=total_rows,
+                    supported=supported_count,
+                    unsupported=unsupported_count,
+                )
+                + f"; conflicts {len(errors):,}"
+            ),
+        )
 
     plan = MetadataWritePlan(
         generated_at=_now_iso(),
@@ -752,6 +834,21 @@ def build_metadata_write_plan(
         errors=errors,
     )
     plan.summary = _summarize_plan(plan)
+    if progress_callback is not None:
+        progress_callback(
+            "complete",
+            total_rows,
+            total_rows,
+            (
+                _metadata_plan_progress_message(
+                    processed=total_rows,
+                    total=total_rows,
+                    supported=plan.summary.supported_entries,
+                    unsupported=plan.summary.unsupported_entries,
+                )
+                + f"; conflicts {len(errors):,}"
+            ),
+        )
     return plan
 
 
@@ -1170,22 +1267,50 @@ def apply_metadata_write_plan(
     selection: frozenset[str] | None = frozenset(target_paths) if target_paths is not None else None
     conn = get_connection(effective_db) if not dry_run else None
     total_commands = len(preview.commands)
-    report_every = progress_interval(total_commands)
+    report_every = min(progress_interval(total_commands), _PROGRESS_MAX_INTERVAL)
     if progress_callback is not None:
-        progress_callback("writing", 0, total_commands, f"Writing metadata for {total_commands:,} file(s)...")
+        progress_callback(
+            "writing",
+            0,
+            total_commands,
+            _metadata_apply_progress_message(
+                processed=0,
+                total=total_commands,
+                applied=0,
+                files_written=0,
+                files_backed_up=0,
+                files_verified=0,
+                skipped=0,
+                errors=0,
+            ),
+        )
     cancelled = False
     try:
         for command_index, command in enumerate(preview.commands):
             # Each metadata write is expensive (MD5, copy backup, mutagen
             # write, readback verify). Cancel polled every 10 commands for
-            # sub-second response; progress reported at the log-scaled
-            # interval to avoid spamming the UI on six-figure plans.
+            # sub-second response; the TUI throttles frequent progress emits.
             if command_index > 0 and command_index % 10 == 0:
                 if cancel_requested is not None and cancel_requested():
                     cancelled = True
                     break
             if progress_callback is not None and command_index > 0 and command_index % report_every == 0:
-                progress_callback("writing", command_index, total_commands, command.path)
+                progress_callback(
+                    "writing",
+                    command_index,
+                    total_commands,
+                    _metadata_apply_progress_message(
+                        processed=command_index,
+                        total=total_commands,
+                        applied=result.applied,
+                        files_written=result.files_written,
+                        files_backed_up=result.files_backed_up,
+                        files_verified=result.files_verified,
+                        skipped=result.skipped,
+                        errors=len(result.errors),
+                        current=command.path,
+                    ),
+                )
             if selection is not None and command.path not in selection:
                 # Tier 3.8: count selection-filtered commands toward
                 # ``result.skipped`` so the apply diagnostic balances —
@@ -1291,6 +1416,26 @@ def apply_metadata_write_plan(
             conn.close()
 
     result.cancelled = cancelled
+    if progress_callback is not None:
+        processed_commands = total_commands if not cancelled else min(
+            result.files_written + result.skipped + len(result.errors),
+            total_commands,
+        )
+        progress_callback(
+            "cancelled" if cancelled else "complete",
+            processed_commands,
+            total_commands,
+            _metadata_apply_progress_message(
+                processed=processed_commands,
+                total=total_commands,
+                applied=result.applied,
+                files_written=result.files_written,
+                files_backed_up=result.files_backed_up,
+                files_verified=result.files_verified,
+                skipped=result.skipped,
+                errors=len(result.errors),
+            ),
+        )
     if log_path is None and not dry_run:
         log_path = _default_apply_log_path(plan_path)
     if log_path is not None:

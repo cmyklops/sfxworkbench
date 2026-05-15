@@ -75,6 +75,25 @@ _COMMIT_CHUNK_SIZE = 1000
 # slow disks before auto-checkpoint catches up. 10 chunks = every 10k
 # entries = at most ~100 checkpoints on a 1M-entry apply.
 _WAL_CHECKPOINT_EVERY_N_CHUNKS = 10
+_PROGRESS_MAX_INTERVAL = 100
+
+
+def _tag_apply_progress_message(
+    *,
+    processed: int,
+    total: int,
+    applied: int,
+    skipped: int,
+    errors: int,
+    current: str | None = None,
+) -> str:
+    message = (
+        f"Processed {processed:,}/{total:,}; applied {applied:,}, "
+        f"skipped {skipped:,}, errors {errors:,}"
+    )
+    if current:
+        return f"{message}; current {Path(current).name}"
+    return message
 
 
 def _now_iso() -> str:
@@ -754,14 +773,37 @@ def apply_tag_plan(
     from sfxworkbench.utils import progress_interval
 
     total_entries = len(plan.entries)
-    report_every = progress_interval(total_entries)
+    report_every = min(progress_interval(total_entries), _PROGRESS_MAX_INTERVAL)
     if progress_callback is not None:
-        progress_callback("applying", 0, total_entries, f"Applying {total_entries:,} tag plan entrie(s)...")
+        progress_callback(
+            "applying",
+            0,
+            total_entries,
+            _tag_apply_progress_message(
+                processed=0,
+                total=total_entries,
+                applied=0,
+                skipped=0,
+                errors=0,
+            ),
+        )
     chunks_since_checkpoint = 0
     with connection(effective_db) as conn:
         for entry_index, entry in enumerate(plan.entries):
             if progress_callback is not None and (entry_index % report_every == 0 or entry_index + 1 == total_entries):
-                progress_callback("applying", entry_index, total_entries, entry.path)
+                progress_callback(
+                    "applying",
+                    entry_index,
+                    total_entries,
+                    _tag_apply_progress_message(
+                        processed=entry_index,
+                        total=total_entries,
+                        applied=result.applied,
+                        skipped=result.skipped,
+                        errors=len(result.errors),
+                        current=entry.path,
+                    ),
+                )
             # Periodic checkpoint: commit pending work, optionally truncate
             # the WAL, and check cancel. Cheap when nothing's pending; keeps
             # WAL size + cancel latency bounded on million-entry applies.
@@ -863,6 +905,24 @@ def apply_tag_plan(
                 ),
             )
             conn.commit()
+    if progress_callback is not None:
+        completed_entries = (
+            min(result.applied + result.skipped + len(result.errors), total_entries)
+            if result.cancelled
+            else total_entries
+        )
+        progress_callback(
+            "cancelled" if result.cancelled else "complete",
+            completed_entries,
+            total_entries,
+            _tag_apply_progress_message(
+                processed=completed_entries,
+                total=total_entries,
+                applied=result.applied,
+                skipped=result.skipped,
+                errors=len(result.errors),
+            ),
+        )
     if log_path is not None and log_payload is not None:
         atomic_write_json(log_path, log_payload)
     if not quiet:
