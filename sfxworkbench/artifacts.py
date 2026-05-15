@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from sfxworkbench.db import DEFAULT_DB_PATH, get_connection
+from sfxworkbench.platform_paths import canonical_path_key, is_scoped_path
 
 APPLY_LOG_DIR_NAME = "apply_logs"
 ACTION_HISTORY_DIR_NAME = "action_history"
@@ -670,11 +671,9 @@ def _artifact_candidates(paths: list[Path]) -> list[Path]:
 
 
 def _path_under(candidate: Path, root: Path) -> bool:
-    candidate_text = str(candidate.expanduser())
-    root_text = str(root.expanduser())
     if root.is_file():
-        return candidate_text == root_text
-    return candidate_text == root_text or candidate_text.startswith(root_text.rstrip("/") + "/")
+        return canonical_path_key(candidate.expanduser()) == canonical_path_key(root.expanduser())
+    return is_scoped_path(candidate.expanduser(), root.expanduser())
 
 
 def sync_artifacts_from_paths(

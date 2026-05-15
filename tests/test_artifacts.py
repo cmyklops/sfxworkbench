@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 from sfxworkbench.artifacts import (
@@ -233,3 +234,74 @@ def test_maintenance_artifacts_sync_cli_rebuilds_registry(tmp_path: Path, tmp_db
     assert payload["command"] == "maintenance_artifacts_sync"
     assert payload["result"]["registered"] == 1
     assert list_artifacts(tmp_db)[0].kind == "metadata_audit"
+
+
+def test_artifact_sync_handles_portable_path_characters(tmp_path: Path, tmp_db: Path) -> None:
+    names = [
+        "space name_rename_plan.json",
+        "100%_rename_plan.json",
+        "under_score_rename_plan.json",
+        "C:\\Reports\\rename_plan.json",
+        "drive_C:_rename_plan.json",
+    ]
+    for name in names:
+        (tmp_path / name).write_text(json.dumps({"pattern": "portable", "entries": [{"old_path": name}]}))
+
+    result = sync_artifacts_from_paths(tmp_db, [tmp_path])
+    registered = {Path(row.path).name for row in list_artifacts(tmp_db, limit=20)}
+
+    assert result.registered == len(names)
+    assert set(names) <= registered
+    assert [Path(row.path).name for row in list_artifacts(tmp_db, query="%", limit=20)] == ["100%_rename_plan.json"]
+    assert {Path(row.path).name for row in list_artifacts(tmp_db, query="_", limit=20)} == {
+        "drive_C:_rename_plan.json",
+        "under_score_rename_plan.json",
+        "100%_rename_plan.json",
+        "space name_rename_plan.json",
+        "C:\\Reports\\rename_plan.json",
+    }
+
+
+def test_artifact_sync_marks_windows_style_stored_paths_missing_on_posix(tmp_db: Path) -> None:
+    conn = get_connection(tmp_db)
+    try:
+        conn.execute(
+            """
+            INSERT INTO artifacts (
+                path, kind, feature, category, created_at, mtime, size, summary_json, entry_count, error_count, status
+            ) VALUES (?, 'dedupe_plan', 'dedupe', 'Plan', '2026-05-15T00:00:00+00:00', 1, 1, '{}', 0, 0, 'ok')
+            """,
+            (r"C:\Reports\Old Plans\100%_dedupe_plan.json",),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = sync_artifacts_from_paths(tmp_db, [Path(r"C:\Reports\Old Plans")])
+    rows = list_artifacts(tmp_db, limit=10)
+
+    assert result.scanned == 0
+    assert result.missing == 1
+    assert rows[0].status == "missing"
+
+
+def test_artifact_schema_migration_adds_registry_to_old_db(tmp_path: Path) -> None:
+    db_path = tmp_path / "old-index.db"
+    with sqlite3.connect(db_path) as legacy:
+        legacy.execute("CREATE TABLE legacy_marker (id INTEGER PRIMARY KEY, value TEXT)")
+        legacy.execute("INSERT INTO legacy_marker (value) VALUES ('kept')")
+
+    conn = get_connection(db_path)
+    try:
+        tables = {
+            row["name"]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('artifacts', 'jobs', 'legacy_marker')"
+            )
+        }
+        marker = conn.execute("SELECT value FROM legacy_marker").fetchone()["value"]
+    finally:
+        conn.close()
+
+    assert tables == {"artifacts", "jobs", "legacy_marker"}
+    assert marker == "kept"

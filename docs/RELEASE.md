@@ -42,6 +42,7 @@ CI must pass on the claimed Python versions:
 - metadata extra smoke tests
 
 For a public release, run the same wheel install smoke test on macOS and Linux.
+Linux must also pass the full local suite with `uv run --extra dev poe check`.
 If either platform is not validated, say so in the release notes.
 
 ## Publishing

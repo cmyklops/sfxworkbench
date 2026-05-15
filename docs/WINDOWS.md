@@ -11,7 +11,7 @@ uv sync --extra dev
 uv run poe test-windows-smoke
 ```
 
-The smoke task covers path-scope helpers, filename health checks, related groups, pack audit scoping, tag suggestions, and UCS validation. It is intentionally narrow while Windows support is being hardened. Linux `poe check` remains the required full-suite signal.
+The smoke task covers path-scope helpers, the artifact/job registry, filename health checks, related groups, pack audit scoping, tag suggestions, and UCS validation. It is intentionally narrow while Windows support is being hardened. Linux `poe check` remains the required full-suite signal.
 
 ## Known Exclusions
 

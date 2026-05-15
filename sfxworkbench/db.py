@@ -6,10 +6,37 @@ import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 
+from sfxworkbench.platform_paths import (
+    canonical_path_key,
+    is_scoped_path,
+    is_windows_path_like,
+    path_sort_key,
+    resolve_scope_root,
+    scoped_relative_parts,
+    scoped_relative_path,
+    windows_collision_name_key,
+    windows_collision_path_key,
+)
+
+__all__ = [
+    "DEFAULT_DB_PATH",
+    "canonical_path_key",
+    "get_connection",
+    "is_scoped_path",
+    "is_windows_path_like",
+    "path_scope_filter",
+    "path_scope_params",
+    "path_sort_key",
+    "resolve_scope_root",
+    "scoped_relative_parts",
+    "scoped_relative_path",
+    "windows_collision_name_key",
+    "windows_collision_path_key",
+]
+
 DEFAULT_DB_PATH = Path.home() / ".sfxworkbench" / "index.db"
 _SQL_COLUMN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
 _LIKE_ESCAPE = "\\"
-_WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS files (
@@ -362,65 +389,6 @@ def escape_like_pattern(value: str) -> str:
     )
 
 
-def _normalized_path_text(path: Path | str | None) -> str:
-    if path is None:
-        return ""
-    raw = str(path)
-    if raw == "":
-        return ""
-
-    text = raw.replace("\\", "/")
-    is_unc = text.startswith("//")
-    is_drive = bool(_WINDOWS_DRIVE_RE.match(text))
-
-    if is_unc:
-        remainder = re.sub(r"/+", "/", text[2:])
-        text = f"//{remainder}"
-    else:
-        text = re.sub(r"/+", "/", text)
-
-    if text != "/":
-        text = text.rstrip("/")
-    if is_drive and text.endswith(":"):
-        text = f"{text}/"
-    if is_drive and text.endswith(":/"):
-        text = text[:-1]
-
-    return text or "/"
-
-
-def canonical_path_key(path: Path | str | None) -> str:
-    """Return a lexical path key for cross-platform scope comparisons.
-
-    Stored DB paths are intentionally left untouched. This helper normalizes
-    only for comparison: separators become ``/``, repeated separators collapse,
-    trailing separators are removed except for roots, and Windows-like paths
-    (drive-letter or UNC) compare case-insensitively.
-    """
-    text = _normalized_path_text(path)
-    is_unc = text.startswith("//")
-    is_drive = bool(_WINDOWS_DRIVE_RE.match(text))
-    if is_drive or is_unc:
-        text = text.casefold()
-    return text
-
-
-def is_windows_path_like(path: Path | str | None) -> bool:
-    """Return whether *path* has Windows drive or UNC syntax lexically."""
-    if path is None:
-        return False
-    text = str(path).replace("\\", "/")
-    return bool(_WINDOWS_DRIVE_RE.match(text)) or text.startswith("//")
-
-
-def resolve_scope_root(root: Path | str) -> Path:
-    """Resolve POSIX roots while preserving Windows-style lexical test roots."""
-    path = Path(root).expanduser()
-    if is_windows_path_like(root):
-        return path
-    return path.resolve()
-
-
 def _sql_canonical_path_key(path: str | None) -> str:
     return canonical_path_key(path)
 
@@ -442,59 +410,6 @@ def path_scope_params(root: Path | str) -> tuple[str, str]:
     """Return parameters for :func:`path_scope_filter`."""
     root_key = canonical_path_key(root)
     return root_key, escape_like_pattern(root_key) + "/%"
-
-
-def is_scoped_path(candidate: Path | str, root: Path | str) -> bool:
-    """Return whether *candidate* is *root* or a lexical descendant of it."""
-    candidate_key = canonical_path_key(candidate)
-    root_key = canonical_path_key(root)
-    return candidate_key == root_key or candidate_key.startswith(root_key.rstrip("/") + "/")
-
-
-def scoped_relative_path(candidate: Path | str, root: Path | str) -> str | None:
-    """Return a slash-separated relative path if *candidate* is within *root*."""
-    candidate_key = canonical_path_key(candidate)
-    root_key = canonical_path_key(root)
-    if candidate_key == root_key:
-        return ""
-    prefix = root_key.rstrip("/") + "/"
-    if candidate_key.startswith(prefix):
-        candidate_text = _normalized_path_text(candidate)
-        root_text = _normalized_path_text(root)
-        return candidate_text[len(root_text.rstrip("/") + "/") :]
-    return None
-
-
-def scoped_relative_parts(candidate: Path | str, root: Path | str) -> tuple[str, ...] | None:
-    """Return lexical relative path parts if *candidate* is within *root*."""
-    relative = scoped_relative_path(candidate, root)
-    if relative is None:
-        return None
-    if not relative:
-        return ()
-    return tuple(part for part in relative.split("/") if part)
-
-
-def path_sort_key(path: Path | str) -> str:
-    """Return a stable lexical key for sorting paths across separator styles."""
-    return canonical_path_key(path)
-
-
-def windows_collision_path_key(path: Path | str) -> str:
-    """Return a Windows-style case-insensitive path key for target collision checks."""
-    key = canonical_path_key(path)
-    parts = []
-    for part in key.split("/"):
-        if part in {"", "."}:
-            parts.append(part)
-        else:
-            parts.append(part.rstrip(" .").casefold())
-    return "/".join(parts)
-
-
-def windows_collision_name_key(name: str) -> str:
-    """Return a Windows-style comparison key for one path component."""
-    return name.rstrip(" .").casefold()
 
 
 def apply_schema(conn: sqlite3.Connection) -> None:
