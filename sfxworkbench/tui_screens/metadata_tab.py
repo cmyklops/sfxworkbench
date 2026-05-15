@@ -16,10 +16,7 @@ if TYPE_CHECKING:
 KEY = "metadata"
 TITLE = "Metadata"
 NOTE = (
-    "Audit metadata coverage, generate UCS/keyword suggestions, and apply tags. "
-    '"Apply Tags & Plan Embedded" commits suggestions to the index and prepares '
-    'the embedded write plan in one step; "Apply Embedded Metadata" then writes '
-    "those entries into audio files."
+    "Find reviewable tags, accept the good ones into the index, then write accepted metadata to files."
 )
 
 
@@ -30,16 +27,16 @@ def compose(app) -> ComposeResult:
     yield DataTable(id="metadata-findings-table")
     yield from app._button_row(
         ("Metadata Audit", "metadata-audit"),
-        ("Generate Suggestions", "metadata-plan"),
-        ("Apply Tags & Plan Embedded", "metadata-apply", "warning"),
+        ("Find Tags", "metadata-plan"),
+        ("Review Tags", "metadata-review-open"),
+        ("Accept Tags & Prepare Write", "metadata-apply", "warning"),
+    )
+    yield from app._button_row(
+        ("Write Metadata to Files", "metadata-write-apply", "warning"),
+        ("Undo File Writes", "metadata-write-undo"),
         ("Save Tags File", "metadata-sidecar"),
     )
     yield from app._button_row(
-        ("Apply Embedded Metadata", "metadata-write-apply", "warning"),
-        ("Undo Embedded Metadata", "metadata-write-undo"),
-    )
-    yield from app._button_row(
-        ("Review Tags", "metadata-review-open"),
         ("Previous 500", "metadata-page-prev"),
         ("Next 500", "metadata-page-next"),
         ("Random Pending", "metadata-page-random"),

@@ -23,6 +23,7 @@ from sfxworkbench.metadata_fields import (
     values_equal_for_dedup,
 )
 from sfxworkbench.preservation import build_preservation_rules
+from sfxworkbench.tag_suggest import clean_tag_suggestion_text, is_technical_metadata_blob
 from sfxworkbench.tui_perf import record_phase as _perf_record_phase
 from sfxworkbench.tui_perf import timed as _perf_timed
 
@@ -368,6 +369,15 @@ def _clean_tag_value(value: object) -> str:
     text = re.sub(r"\s+([.!?:])", r"\1", text)
     text = re.sub(r"([.!?]){2,}", r"\1", text)
     return text.strip(" ,;")
+
+
+def _clean_search_metadata_value(value: object) -> str:
+    text = _clean_tag_value(value)
+    if not text or is_technical_metadata_blob(text):
+        return ""
+    if "=" in text:
+        text = _clean_tag_value(clean_tag_suggestion_text(text))
+    return text
 
 
 def _combined_tags_summary(items: tuple[TagDisplayItem, ...]) -> str:
@@ -1077,7 +1087,7 @@ def _metadata_plan_state_from_rows(
         if status in {"pending", "approved", "rejected"}:
             state[status] = int(state[status]) + 1
         field = str(entry["field"] or "").strip()
-        proposed = _clean_tag_value(entry["proposed_value"])
+        proposed = _clean_search_metadata_value(entry["proposed_value"])
         if field and proposed:
             source = str(entry["source"] or "").strip()
             source_suffix = f" [{source}]" if source else ""
@@ -1292,15 +1302,17 @@ def metadata_workbench_rows(
                 """
             ):
                 file_id = int(item["file_id"])
-                raw_value = str(item["value"] or "").replace("\n", " ").replace("\r", " ")
+                display_value = _clean_search_metadata_value(item["value"])
+                if not display_value:
+                    continue
                 embedded_summary_by_id.setdefault(file_id, []).append(
-                    f"{_metadata_summary_label(str(item['key']))}: {raw_value[:80]}"
+                    f"{_metadata_summary_label(str(item['key']))}: {display_value[:80]}"
                 )
                 embedded_items_by_id.setdefault(int(item["file_id"]), []).append(
                     TagDisplayItem(
                         source="file",
                         field=str(item["key"]),
-                        value=_clean_tag_value(item["value"]),
+                        value=display_value,
                     )
                 )
             for item in conn.execute(
@@ -1326,15 +1338,17 @@ def metadata_workbench_rows(
                 """
             ):
                 file_id = int(item["file_id"])
-                raw_value = str(item["value"] or "").replace("\n", " ").replace("\r", " ")
+                display_value = _clean_search_metadata_value(item["value"])
+                if not display_value:
+                    continue
                 accepted_summary_by_id.setdefault(file_id, []).append(
-                    f"{_tag_label(str(item['field']))}: {raw_value[:80]}"
+                    f"{_tag_label(str(item['field']))}: {display_value[:80]}"
                 )
                 accepted_items_by_id.setdefault(file_id).append(
                     TagDisplayItem(
                         source="db",
                         field=str(item["field"]),
-                        value=_clean_tag_value(item["value"]),
+                        value=display_value,
                         evidence_source=str(item["source"] or ""),
                     )
                 )
@@ -1753,11 +1767,14 @@ def metadata_tag_change_rows(
                           )
                         """
                     ):
+                        display_value = _clean_search_metadata_value(item["value"])
+                        if not display_value:
+                            continue
                         existing_lists.setdefault(path_by_id[int(item["file_id"])], []).append(
                             TagDisplayItem(
                                 source="file",
                                 field=str(item["key"]),
-                                value=_clean_tag_value(item["value"]),
+                                value=display_value,
                             )
                         )
                     for item in conn.execute(
@@ -1768,11 +1785,14 @@ def metadata_tag_change_rows(
                         WHERE t.value IS NOT NULL AND TRIM(t.value) != ''
                         """
                     ):
+                        display_value = _clean_search_metadata_value(item["value"])
+                        if not display_value:
+                            continue
                         existing_lists.setdefault(path_by_id[int(item["file_id"])], []).append(
                             TagDisplayItem(
                                 source="db",
                                 field=str(item["field"]),
-                                value=_clean_tag_value(item["value"]),
+                                value=display_value,
                                 evidence_source=str(item["source"] or ""),
                             )
                         )
@@ -1788,7 +1808,7 @@ def metadata_tag_change_rows(
         path = str(entry.get("path", "")).strip()
         filename = str(entry.get("filename", "")).strip() or (Path(path).name if path else "")
         field = str(entry.get("field", "")).strip()
-        value = _clean_tag_value(entry.get("proposed_value", ""))
+        value = _clean_search_metadata_value(entry.get("proposed_value", ""))
         status = str(entry.get("review_status", "pending")).strip() or "pending"
         source = str(entry.get("source", "")).strip()
         if not field or not value:
@@ -2653,10 +2673,11 @@ def file_detail(
     search_embedded_rows = tuple(
         (
             _metadata_label(str(field["namespace"]), str(field["key"])),
-            f"{field['value']} [{field['source']}]",
+            f"{_clean_search_metadata_value(field['value'])} [{field['source']}]",
         )
         for field in sorted_embedded_fields
         if _metadata_key_rank(str(field["namespace"]), str(field["key"])) < 50
+        and _clean_search_metadata_value(field["value"])
     )
     context_embedded_rows = tuple(
         (

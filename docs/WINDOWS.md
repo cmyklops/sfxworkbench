@@ -24,6 +24,59 @@ The Windows smoke job does not yet prove:
 
 Run apply/undo workflows only against a disposable copy until the Windows smoke job is promoted from non-blocking to required.
 
+## Local TUI Test Handoff
+
+Use Windows Terminal or PowerShell against a disposable copy of a sound library. Do not point first-run testing at a production library.
+
+Clone the Windows hardening branch and install the optional TUI dependencies:
+
+```powershell
+git clone https://github.com/cmyklops/sfxworkbench.git
+cd .\sfxworkbench
+git switch codex/windows-trustworthiness
+uv sync --extra dev --extra metadata --extra tui
+```
+
+Launch the TUI:
+
+```powershell
+$env:PYTHONUTF8 = "1"
+.\.venv\Scripts\sfx.exe tui --db .\win_test.db --report .\reports
+```
+
+Inside the TUI:
+
+- Set the library path to the disposable test library.
+- Run `Scan Library` first. The first scan can be slow on Windows because it reads audio metadata and hashes files; later scans skip unchanged files by `mtime + size`.
+- Exercise the feature tabs: Scan, Cleanup, Dedupe, Metadata, Files, and History.
+- For cleanup/dedupe/delete/metadata-write actions, use preview/review steps first and keep the test library disposable.
+- In Metadata, the simplified flow is `Find Tags`, `Review Tags`, `Accept Tags & Prepare Write`, then `Write Metadata to Files`.
+
+Useful output paths:
+
+- `.\reports\action_history\*.json` - completed TUI action summaries.
+- `.\reports\apply_logs\*.json` - apply/undo logs when an action writes one.
+- `.\reports\metadata_tag_plan.json` - current generated tag-review plan.
+- `.\reports\metadata_write_plan.json` - current embedded metadata write plan.
+
+The TUI creates a DB-specific lock such as `win_test.db.tui.lock` so two instances do not open the same SQLite index. If launch reports another TUI is already running, close the existing TUI. Remove the lock file only after confirming no `sfx.exe tui` process is still running.
+
+For a quick non-interactive signal:
+
+```powershell
+$env:PYTHONUTF8 = "1"
+.\.venv\Scripts\python.exe -X utf8 -m pytest tests/test_tui_app.py tests/test_tui_data.py tests/test_tui_command_palette_pilot.py -q --basetemp C:\tmp\sfxworkbench-pytest
+uv run poe test-windows-smoke
+```
+
+When reporting feedback, include:
+
+- Windows version and terminal app.
+- The exact TUI action that was running.
+- Any screenshot of the TUI state.
+- Relevant files from `.\reports\action_history`.
+- Whether the issue happened on a first scan or a repeated scan.
+
 ## Local PowerShell Smoke
 
 Use a small copied test library, not a production library:

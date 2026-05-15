@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
 from sfxworkbench.tui_app import (
     _ACTION_BUTTON_IDS,
     _desktop_open_command,
@@ -13,6 +14,7 @@ from sfxworkbench.tui_app import (
     _latest_quarantine_dir_from_reports,
     _state_token,
     _tag_text,
+    _TuiInstanceLock,
 )
 from sfxworkbench.tui_screens._tabs import TAB_REGISTRY
 
@@ -54,6 +56,35 @@ def test_tui_operation_buttons_are_registered_for_running_state() -> None:
     }
 
     assert expected == _ACTION_BUTTON_IDS
+
+
+def test_tui_instance_lock_blocks_second_instance(tmp_path: Path) -> None:
+    db_path = tmp_path / "index.db"
+    db_path.touch()
+    lock = _TuiInstanceLock(db_path)
+    lock.acquire()
+    try:
+        with pytest.raises(RuntimeError, match="already running"):
+            _TuiInstanceLock(db_path).acquire()
+    finally:
+        lock.release()
+
+    assert not lock.lock_path.exists()
+
+
+def test_tui_instance_lock_recovers_stale_lock(tmp_path: Path) -> None:
+    db_path = tmp_path / "index.db"
+    db_path.touch()
+    lock = _TuiInstanceLock(db_path)
+    lock.lock_path.write_text("\ufeffpid=99999999\n", encoding="utf-8")
+
+    lock.acquire()
+    try:
+        assert f"pid={os.getpid()}" in lock.lock_path.read_text(encoding="utf-8")
+    finally:
+        lock.release()
+
+    assert not lock.lock_path.exists()
 
 
 def test_tui_tab_registry_places_files_between_metadata_and_history() -> None:
@@ -171,10 +202,12 @@ def test_advanced_actions_moved_to_metadata_and_files_tabs() -> None:
     files_text = (repo_root / "sfxworkbench" / "tui_screens" / "files_tab.py").read_text()
     registry_text = (repo_root / "sfxworkbench" / "tui_screens" / "_tabs.py").read_text()
 
-    # ``metadata-apply`` now covers what was the old DB apply + the standalone
-    # Plan Embedded Metadata button (chained into one click).
+    # ``metadata-apply`` accepts DB tags and prepares the embedded write plan;
+    # the actual file-write remains a separate confirmed action.
     assert "metadata-apply" in metadata_text
+    assert "Accept Tags & Prepare Write" in metadata_text
     assert "metadata-write-apply" in metadata_text
+    assert "Write Metadata to Files" in metadata_text
     assert "delete-plan" in files_text
     assert "delete-apply" in files_text
     assert "advanced_tab" not in registry_text

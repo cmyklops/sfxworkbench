@@ -7,6 +7,9 @@ build/
 venv/
 .ruff_cache/
 .pytest_cache/
+/reports/
+/win_test.db
+*.tui.lock
 audit_*.json
 audit_*.md
 dedupe_plan_*.json

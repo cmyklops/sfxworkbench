@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -296,6 +297,101 @@ def _sort_number(value: object) -> float:
         return 0.0
 
 
+def _tui_lock_path(db_path: Path) -> Path:
+    db = Path(db_path).expanduser().resolve()
+    return db.with_name(f"{db.name}.tui.lock")
+
+
+def _lock_file_pid(path: Path) -> int | None:
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        line = line.lstrip("\ufeff")
+        if not line.startswith("pid="):
+            continue
+        try:
+            return int(line.partition("=")[2])
+        except ValueError:
+            return None
+    return None
+
+
+def _process_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if pid == os.getpid():
+        return True
+    if sys.platform == "win32":
+        import ctypes
+
+        synchronize = 0x00100000
+        query_limited = 0x1000
+        wait_timeout = 0x00000102
+        handle = ctypes.windll.kernel32.OpenProcess(synchronize | query_limited, False, pid)
+        if not handle:
+            return False
+        try:
+            return ctypes.windll.kernel32.WaitForSingleObject(handle, 0) == wait_timeout
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+class _TuiInstanceLock:
+    """Atomic, stale-aware single-instance guard for one TUI database."""
+
+    def __init__(self, db_path: Path) -> None:
+        self.db_path = Path(db_path).expanduser().resolve()
+        self.lock_path = _tui_lock_path(self.db_path)
+        self._fd: int | None = None
+
+    def acquire(self) -> None:
+        payload = f"pid={os.getpid()}\ndb={self.db_path}\n"
+        for attempt in range(2):
+            try:
+                self._fd = os.open(str(self.lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                owner_pid = _lock_file_pid(self.lock_path)
+                if owner_pid is not None and _process_is_running(owner_pid):
+                    raise RuntimeError(
+                        "Another sfxworkbench TUI is already running for "
+                        f"{self.db_path} (pid {owner_pid}). Close it before starting a new one."
+                    ) from None
+                if attempt:
+                    raise RuntimeError(
+                        f"Another sfxworkbench TUI lock exists at {self.lock_path}. "
+                        "Remove it if no TUI is running."
+                    ) from None
+                try:
+                    self.lock_path.unlink()
+                except OSError as exc:
+                    raise RuntimeError(f"Could not remove stale TUI lock {self.lock_path}: {exc}") from exc
+                continue
+            os.write(self._fd, payload.encode("utf-8"))
+            return
+        raise RuntimeError(f"Could not acquire TUI lock at {self.lock_path}.")
+
+    def release(self) -> None:
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
+        if _lock_file_pid(self.lock_path) == os.getpid():
+            try:
+                self.lock_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def run_tui(
     *,
     db_path: Path = DEFAULT_DB_PATH,
@@ -303,7 +399,6 @@ def run_tui(
     report_paths: list[Path] | None = None,
 ) -> None:
     """Run the Textual app, importing Textual only for this optional command."""
-    initial_library_path = preferred_library_path(db_path)
     try:
         from textual import events
         from textual.app import App, ComposeResult
@@ -319,6 +414,14 @@ def run_tui(
             from textual.drivers.linux_driver import LinuxDriver
     except ImportError as e:
         raise RuntimeError("Textual is not installed. Install with: uv sync --extra tui --extra dev") from e
+
+    instance_lock = _TuiInstanceLock(db_path)
+    instance_lock.acquire()
+    try:
+        initial_library_path = preferred_library_path(db_path)
+    except Exception:
+        instance_lock.release()
+        raise
 
     if LinuxDriver is None:
         SfxworkbenchDriver = None
@@ -911,7 +1014,7 @@ def run_tui(
                 self._last_action = ActionResult(
                     action="open_metadata_review",
                     status="warning",
-                    message=(f"No metadata tag plan found under {self._report_dir}. Run Generate Suggestions first."),
+                    message=(f"No metadata tag plan found under {self._report_dir}. Run Find Tags first."),
                 )
                 self._fill_status_strip()
                 self._fill_operation_strip()
@@ -1229,7 +1332,7 @@ def run_tui(
                 root = self._root_path()
                 _start(
                     "metadata_plan",
-                    "Generate Suggestions",
+                    "Find Tags",
                     lambda: tag_plan_action(
                         root,
                         db_path,
@@ -1246,8 +1349,8 @@ def run_tui(
                 root = self._root_path()
                 _confirm(
                     "metadata_apply",
-                    "Apply Tags & Plan Embedded",
-                    "This writes tag decisions into the SQLite index and then builds the embedded-metadata write plan (probes every accepted-tag file). Required first: Generate Suggestions. Any pending entries are auto-approved at apply time; rejections from the Review screen are preserved.",
+                    "Accept Tags & Prepare Write",
+                    "This accepts pending tag suggestions into the SQLite index, preserves Review-screen rejections, and prepares the embedded-metadata write plan. Required first: Find Tags.",
                     lambda: apply_tag_plan_and_build_embedded_plan_action(
                         db_path,
                         self._report_dir,
@@ -1275,8 +1378,8 @@ def run_tui(
             # already-built plan into audio files.
             handlers["metadata-write-apply"] = lambda: _confirm(
                 "metadata_write_apply",
-                "Apply Embedded Metadata",
-                "This writes embedded metadata entries into audio files, backs up originals, and verifies readback. Required first: Plan Embedded Metadata. Any pending entries are auto-approved at apply time.",
+                "Write Metadata to Files",
+                "This writes prepared metadata entries into audio files, backs up originals, and verifies readback. Required first: Accept Tags & Prepare Write.",
                 lambda: apply_embedded_metadata_action(
                     db_path,
                     self._report_dir,
@@ -1287,7 +1390,7 @@ def run_tui(
             )
             handlers["metadata-write-undo"] = lambda: _start(
                 "metadata_write_undo",
-                "Undo Embedded Metadata",
+                "Undo File Writes",
                 lambda: undo_embedded_metadata_action(db_path, self._report_dir),
             )
 
@@ -1830,7 +1933,7 @@ def run_tui(
                 # discover it by trial. Three apply actions read
                 # ``_selection_tuple()`` — list them inline.
                 status.append("  scoped applies: ", style="dim")
-                status.append("Apply DB Tags · Apply Dedupe · Apply Embedded Metadata", style="dim cyan")
+                status.append("Accept Tags · Apply Dedupe · Write Metadata", style="dim cyan")
             self.query_one("#status-strip", Static).update(status)
 
         def _fill_operation_strip(self) -> None:
@@ -2390,4 +2493,7 @@ def run_tui(
             if result.errors:
                 table.add_row("Errors", "; ".join(result.errors[:6]))
 
-    SfxworkbenchTui().run()
+    try:
+        SfxworkbenchTui().run()
+    finally:
+        instance_lock.release()

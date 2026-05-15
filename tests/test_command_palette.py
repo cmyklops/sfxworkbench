@@ -7,7 +7,7 @@ from sfxworkbench.tui_screens.command_palette import filter_commands, label_for
 
 def test_label_for_uses_lookup_first() -> None:
     assert label_for("scan-run") == "Scan library"
-    assert label_for("metadata-write-apply") == "Apply embedded metadata write"
+    assert label_for("metadata-write-apply") == "Write metadata to files"
 
 
 def test_label_for_falls_back_to_title_case() -> None:

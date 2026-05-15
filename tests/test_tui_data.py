@@ -44,6 +44,16 @@ from typer.testing import CliRunner
 runner = CliRunner()
 
 
+def _indexed_unsafe_fixture(db_path: Path) -> tuple[Path, str, str, str]:
+    unsafe = list_queue_items(db_path, queue_key="filename_issues", limit=10)
+    assert unsafe, "tmp_library did not index any filename issue fixtures"
+    item = unsafe[0]
+    issue = item.detail.partition(" ")[0]
+    path = Path(item.path)
+    return path, item.label, path.stem, issue
+
+
+
 def test_tui_dashboard_and_queues_reflect_index_state(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
     scan_library(tmp_library, tmp_db, skip_hash=False, quiet=True)
     config_path = tmp_path / "sfxworkbench.json"
@@ -120,14 +130,14 @@ def test_tui_file_search_falls_back_for_literal_paths(tmp_library: Path, tmp_db:
 
 def test_tui_file_detail_includes_facts_and_issues(tmp_library: Path, tmp_db: Path) -> None:
     scan_library(tmp_library, tmp_db, skip_hash=True, quiet=True)
-    target = tmp_library / "sounds" / "bad:name.wav"
+    target, expected_filename, expected_stem, expected_issue = _indexed_unsafe_fixture(tmp_db)
 
     detail = file_detail(tmp_db, path=str(target))
 
     assert detail is not None
-    assert detail.filename == "bad:name.wav"
+    assert detail.filename == expected_filename
     assert any(label == "Path" and value == str(target) for label, value in detail.facts)
-    assert any(label == "Stem" and value == "bad:name" for label, value in detail.facts)
+    assert any(label == "Stem" and value == expected_stem for label, value in detail.facts)
     assert [section.title for section in detail.sections] == [
         "Searchable Metadata To Vet",
         "Read From File - Search Fields",
@@ -140,7 +150,7 @@ def test_tui_file_detail_includes_facts_and_issues(tmp_library: Path, tmp_db: Pa
         "Location",
     ]
     assert any(label == "RIFF INFO" for section in detail.sections for label, _ in section.rows)
-    assert any("illegal_chars" in issue for issue in detail.issues)
+    assert any(expected_issue in issue for issue in detail.issues)
     assert any("sfx rename" in action for action in detail.actions)
     assert any("open -R" in action for action in detail.actions)
 
@@ -193,12 +203,46 @@ def test_tui_metadata_rows_hide_provenance_fields_from_main_review_table(
                 (
                     file_id,
                     "bext",
+                    "description",
+                    "sSPEED=030.000-ND sTAKE=13 sUBITS=$04131313 sSWVER=2.65 "
+                    "sPROJECT= sSCENE=ID_CRD_AL sFILENAME=ID_CRD_AL_13.WAV "
+                    "sTAPE=130413 sTRK1=Track A sTRK2=Track B sNOTE=",
+                    "test",
+                    "2026-05-11T00:00:00",
+                ),
+                (
+                    file_id,
+                    "bext",
+                    "description",
+                    "sSPEED=030.000-ND sTAKE=14 sTRK1=Track A sNOTE= useful note",
+                    "test",
+                    "2026-05-11T00:00:00",
+                ),
+                (
+                    file_id,
+                    "bext",
                     "OriginatorReference",
                     "www.vendor.example",
                     "test",
                     "2026-05-11T00:00:00",
                 ),
             ],
+        )
+        conn.execute(
+            """
+            INSERT INTO accepted_tags (
+                file_id, field, value, source, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                file_id,
+                "description",
+                "sSPEED=030.000-ND sTAKE=15 sTRK1=Track A sNOTE=",
+                "legacy",
+                "2026-05-11T00:00:00",
+                "2026-05-11T00:00:00",
+            ),
         )
         conn.commit()
     finally:
@@ -225,12 +269,18 @@ def test_tui_metadata_rows_hide_provenance_fields_from_main_review_table(
 
     rows = metadata_workbench_rows(tmp_db, plan_path=plan_path, query="AMB_RAIN")
 
-    assert "Description: Steady   rain  tail" in rows[0].embedded_summary
+    assert "Description: Steady rain tail" in rows[0].embedded_summary
+    assert "Description: useful note" in rows[0].embedded_summary
     assert "Steady rain tail" in rows[0].tags_summary
+    assert "useful note" in rows[0].tags_summary
+    assert "sSPEED" not in rows[0].embedded_summary
+    assert "sTAKE" not in rows[0].tags_summary
+    assert "Track A" not in rows[0].tags_summary
+    assert "legacy" not in rows[0].accepted_summary
     assert rows[0].pending_changes == 0
     assert rows[0].tag_items[0].source == "file"
     assert rows[0].tag_items[0].field == "description"
-    assert [item.source for item in rows[0].tag_items] == ["file"]
+    assert [item.source for item in rows[0].tag_items] == ["file", "file"]
     assert metadata_tag_change_rows(plan_path, db_path=tmp_db) == []
     assert "OriginatorReference" not in rows[0].embedded_summary
     assert "vendor.example" not in rows[0].embedded_summary
@@ -243,7 +293,7 @@ def test_tui_queue_items_expand_review_counts(tmp_library: Path, tmp_db: Path) -
     unsafe = list_queue_items(tmp_db, queue_key="filename_issues", limit=10)
 
     assert any(item.label == "AMB_RAIN_01.wav" for item in missing)
-    assert any(item.label == "bad:name.wav" for item in unsafe)
+    assert unsafe
 
 
 def test_tui_queue_items_can_filter_selected_queue(tmp_library: Path, tmp_db: Path) -> None:

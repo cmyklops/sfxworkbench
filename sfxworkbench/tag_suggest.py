@@ -145,11 +145,14 @@ _AUDIO_FORMAT_SEQUENCE_RES: tuple[re.Pattern[str], ...] = (
 _TECHNICAL_METADATA_KEYS: frozenset[str] = frozenset(
     {
         "stake",
+        "sspeed",
+        "subits",
         "sswver",
         "sproject",
         "sscene",
         "sfilename",
         "stape",
+        "scircled",
         "snote",
     }
 )
