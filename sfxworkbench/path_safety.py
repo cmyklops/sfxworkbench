@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sfxworkbench.db import windows_collision_name_key, windows_collision_path_key
+from sfxworkbench.platform_paths import windows_collision_name_key, windows_collision_path_key
 
 WINDOWS_RESERVED_BASENAMES: frozenset[str] = frozenset(
     {

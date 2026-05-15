@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
 import sqlite3
-import subprocess
 import sys
 import threading
 import time
@@ -25,6 +22,7 @@ from sfxworkbench.artifacts import (
     sync_artifacts_from_paths,
 )
 from sfxworkbench.db import DEFAULT_DB_PATH
+from sfxworkbench.desktop import DesktopIntegration, desktop_open_command
 from sfxworkbench.jobs import finish_job, start_job, update_job_progress
 from sfxworkbench.tui_actions import (
     ActionResult,
@@ -74,6 +72,7 @@ from sfxworkbench.tui_data import (
 from sfxworkbench.tui_data import (
     file_signature as _data_file_signature,
 )
+from sfxworkbench.tui_lock import TuiInstanceLock, process_is_running
 from sfxworkbench.tui_perf import begin_trace as _perf_begin_trace
 from sfxworkbench.tui_perf import snapshot_trace as _perf_snapshot_trace
 from sfxworkbench.tui_perf import timed as _perf_timed
@@ -154,6 +153,10 @@ _CONTEXT_BUTTON_IDS = _ACTION_BUTTON_IDS | {
     "metadata-review-open",
 }
 
+_desktop_open_command = desktop_open_command
+_process_is_running = process_is_running
+_TuiInstanceLock = TuiInstanceLock
+
 
 @dataclass(frozen=True)
 class ButtonLockState:
@@ -230,55 +233,6 @@ def _short_path(path: str | Path, *, width: int = 64) -> str:
     elif text.startswith(home + "/"):
         text = "~/" + text[len(home) + 1 :]
     return _clip_middle(text, width=width)
-
-
-def _desktop_open_command(
-    target: Path,
-    *,
-    reveal: bool = False,
-    platform: str = sys.platform,
-    which: Callable[[str], str | None] = shutil.which,
-) -> list[str]:
-    """Return a desktop command — Reveal-in-Finder/Explorer or Audition.
-
-    Reveal uses the OS file browser (``open -R`` / ``explorer /select`` /
-    ``xdg-open`` on the parent folder). Audition (``reveal=False``) plays
-    the file via a built-in audio CLI to avoid the LaunchServices route
-    that bounces ``.wav`` to Music.app on macOS:
-
-    - **macOS**: ``afplay`` — built-in, plays inline, no GUI app launches.
-    - **Linux**: prefer ``paplay`` → fall back to ``aplay`` → ``play`` (sox).
-      Probed at call time via ``shutil.which`` so we degrade gracefully.
-    - **Windows**: ``powershell -c (New-Object Media.SoundPlayer ...).PlaySync()``.
-
-    Returns ``[]`` if no playback tool is available on Linux — the caller
-    surfaces this as an action error.
-    """
-    if reveal:
-        if platform == "darwin":
-            return ["open", "-R", str(target)]
-        if platform == "win32":
-            return ["explorer", f"/select,{target}"]
-        opener = which("xdg-open")
-        if opener is None:
-            return []
-        return [opener, str(target.parent)]
-
-    # Audition path — play the audio without launching a GUI app.
-    if platform == "darwin":
-        return ["afplay", str(target)]
-    if platform == "win32":
-        return [
-            "powershell",
-            "-NoProfile",
-            "-Command",
-            f"(New-Object Media.SoundPlayer '{target}').PlaySync()",
-        ]
-    for tool in ("paplay", "aplay", "play"):
-        path = which(tool)
-        if path is not None:
-            return [path, str(target)]
-    return []
 
 
 def _state_token(state: str) -> Text:
@@ -570,100 +524,6 @@ def _sort_number(value: object) -> float:
         return 0.0
 
 
-def _tui_lock_path(db_path: Path) -> Path:
-    db = Path(db_path).expanduser().resolve()
-    return db.with_name(f"{db.name}.tui.lock")
-
-
-def _lock_file_pid(path: Path) -> int | None:
-    try:
-        text = path.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return None
-    for line in text.splitlines():
-        line = line.lstrip("\ufeff")
-        if not line.startswith("pid="):
-            continue
-        try:
-            return int(line.partition("=")[2])
-        except ValueError:
-            return None
-    return None
-
-
-def _process_is_running(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    if pid == os.getpid():
-        return True
-    if sys.platform == "win32":
-        import ctypes
-
-        synchronize = 0x00100000
-        query_limited = 0x1000
-        wait_timeout = 0x00000102
-        handle = ctypes.windll.kernel32.OpenProcess(synchronize | query_limited, False, pid)
-        if not handle:
-            return False
-        try:
-            return ctypes.windll.kernel32.WaitForSingleObject(handle, 0) == wait_timeout
-        finally:
-            ctypes.windll.kernel32.CloseHandle(handle)
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
-
-
-class _TuiInstanceLock:
-    """Atomic, stale-aware single-instance guard for one TUI database."""
-
-    def __init__(self, db_path: Path) -> None:
-        self.db_path = Path(db_path).expanduser().resolve()
-        self.lock_path = _tui_lock_path(self.db_path)
-        self._fd: int | None = None
-
-    def acquire(self) -> None:
-        payload = f"pid={os.getpid()}\ndb={self.db_path}\n"
-        for attempt in range(2):
-            try:
-                self._fd = os.open(str(self.lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
-                owner_pid = _lock_file_pid(self.lock_path)
-                if owner_pid is not None and _process_is_running(owner_pid):
-                    raise RuntimeError(
-                        "Another sfxworkbench TUI is already running for "
-                        f"{self.db_path} (pid {owner_pid}). Close it before starting a new one."
-                    ) from None
-                if attempt:
-                    raise RuntimeError(
-                        f"Another sfxworkbench TUI lock exists at {self.lock_path}. Remove it if no TUI is running."
-                    ) from None
-                try:
-                    self.lock_path.unlink()
-                except OSError as exc:
-                    raise RuntimeError(f"Could not remove stale TUI lock {self.lock_path}: {exc}") from exc
-                continue
-            os.write(self._fd, payload.encode("utf-8"))
-            return
-        raise RuntimeError(f"Could not acquire TUI lock at {self.lock_path}.")
-
-    def release(self) -> None:
-        if self._fd is not None:
-            os.close(self._fd)
-            self._fd = None
-        if _lock_file_pid(self.lock_path) == os.getpid():
-            try:
-                self.lock_path.unlink()
-            except FileNotFoundError:
-                pass
-
-
 def run_tui(
     *,
     db_path: Path = DEFAULT_DB_PATH,
@@ -911,6 +771,7 @@ def run_tui(
             self.db_path = db_path
             self.config_path = config_path
             self.report_paths = report_paths
+            self._desktop = DesktopIntegration()
             self._library_path = initial_library_path
             self._resolved_report_paths = list(report_paths or [])
             self._report_paths_resolved = bool(report_paths)
@@ -2014,25 +1875,22 @@ def run_tui(
                 self._fill_action_result()
                 return
 
-            command = _desktop_open_command(selected, reveal=reveal)
-
-            if not command:
+            try:
+                command = self._desktop.open(selected, reveal=reveal)
+            except OSError as exc:
                 self._last_action = ActionResult(
                     action=action,
                     status="error",
-                    message="No desktop file opener is available.",
-                    errors=("No desktop file opener is available.",),
+                    message=str(exc),
+                    errors=(str(exc),),
                 )
             else:
-                try:
-                    # Detach the OS opener's output from the Textual terminal.
-                    subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                except OSError as exc:
+                if not command:
                     self._last_action = ActionResult(
                         action=action,
                         status="error",
-                        message=str(exc),
-                        errors=(str(exc),),
+                        message="No desktop file opener is available.",
+                        errors=("No desktop file opener is available.",),
                     )
                 else:
                     verb = "Revealed" if reveal else "Opened"
@@ -2067,24 +1925,22 @@ def run_tui(
                     message="No quarantine folder found in the active report paths.",
                 )
             else:
-                command = _desktop_open_command(selected)
-                if not command:
+                try:
+                    command = self._desktop.open(selected)
+                except OSError as exc:
                     self._last_action = ActionResult(
                         action="quarantine_reveal",
                         status="error",
-                        message="No desktop file opener is available.",
-                        errors=("No desktop file opener is available.",),
+                        message=str(exc),
+                        errors=(str(exc),),
                     )
                 else:
-                    try:
-                        # Detach the OS opener's output from the Textual terminal.
-                        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    except OSError as exc:
+                    if not command:
                         self._last_action = ActionResult(
                             action="quarantine_reveal",
                             status="error",
-                            message=str(exc),
-                            errors=(str(exc),),
+                            message="No desktop file opener is available.",
+                            errors=("No desktop file opener is available.",),
                         )
                     else:
                         self._last_action = ActionResult(

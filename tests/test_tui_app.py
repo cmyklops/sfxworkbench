@@ -19,6 +19,7 @@ from sfxworkbench.tui_app import (
     _tag_text,
     _TuiInstanceLock,
 )
+from sfxworkbench.tui_lock import process_is_running
 from sfxworkbench.tui_screens._tabs import TAB_REGISTRY
 
 
@@ -202,6 +203,40 @@ def test_tui_instance_lock_recovers_stale_lock(tmp_path: Path) -> None:
         lock.release()
 
     assert not lock.lock_path.exists()
+
+
+def test_tui_instance_lock_uses_injected_process_checker(tmp_path: Path) -> None:
+    db_path = tmp_path / "index.db"
+    db_path.touch()
+    lock = _TuiInstanceLock(db_path, process_checker=lambda pid: pid == 1234)
+    lock.lock_path.write_text("pid=1234\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="pid 1234"):
+        lock.acquire()
+
+
+def test_windows_process_check_uses_kernel_wait_state() -> None:
+    class Kernel32:
+        def __init__(self, wait_result: int) -> None:
+            self.wait_result = wait_result
+            self.closed: list[int] = []
+
+        def OpenProcess(self, _access: int, _inherit: bool, pid: int) -> int:
+            return pid
+
+        def WaitForSingleObject(self, _handle: int, _timeout: int) -> int:
+            return self.wait_result
+
+        def CloseHandle(self, handle: int) -> None:
+            self.closed.append(handle)
+
+    running = Kernel32(0x00000102)
+    stopped = Kernel32(0)
+
+    assert process_is_running(4242, platform="win32", kernel32=running)
+    assert running.closed == [4242]
+    assert not process_is_running(4242, platform="win32", kernel32=stopped)
+    assert stopped.closed == [4242]
 
 
 def test_tui_tab_registry_places_files_between_metadata_and_history() -> None:
@@ -512,6 +547,14 @@ def test_desktop_open_command_reveals_via_windows_explorer() -> None:
     assert _desktop_open_command(target, reveal=True, platform="win32") == ["explorer", f"/select,{target}"]
 
 
+def test_desktop_open_command_reveals_windows_paths_with_spaces_apostrophes_and_unc() -> None:
+    quoted = Path("C:/Users/Matt/Sound Libraries/Matt's Hits/hit one.wav")
+    unc = Path("//Studio NAS/SFX Share/Impacts/hit one.wav")
+
+    assert _desktop_open_command(quoted, reveal=True, platform="win32") == ["explorer", f"/select,{quoted}"]
+    assert _desktop_open_command(unc, reveal=True, platform="win32") == ["explorer", f"/select,{unc}"]
+
+
 def test_desktop_open_command_reveals_via_macos_open() -> None:
     target = Path("/Users/matt/Sounds/hit.wav")
 
@@ -546,12 +589,13 @@ def test_audition_uses_afplay_on_macos() -> None:
 
 
 def test_audition_uses_powershell_soundplayer_on_windows() -> None:
-    target = Path("C:/Users/Matt/Sounds/hit.wav")
+    target = Path("C:/Users/Matt/Sound Libraries/Matt's hit.wav")
 
     command = _desktop_open_command(target, platform="win32")
     assert command[0] == "powershell"
     assert "-Command" in command
-    assert str(target) in command[-1]
+    assert "Matt''s hit.wav" in command[-1]
+    assert str(target) not in command[-1]
 
 
 def test_audition_prefers_paplay_then_aplay_then_sox_play_on_linux() -> None:
