@@ -60,6 +60,16 @@ When in doubt, run the preview command and inspect the report before applying.
 
 ## Install
 
+Fast TUI setup for internal testers:
+
+```powershell
+irm https://raw.githubusercontent.com/cmyklops/sfxworkbench/main/scripts/install-windows-tui.ps1 | iex
+```
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cmyklops/sfxworkbench/main/scripts/install-macos-tui.sh | bash
+```
+
 Recommended beta install from a tagged GitHub release wheel:
 
 ```bash

@@ -36,6 +36,12 @@ irm https://raw.githubusercontent.com/cmyklops/sfxworkbench/main/scripts/install
 
 The script installs missing prerequisites, clones or updates the repo in your user folder, installs dependencies, and launches the TUI.
 
+For macOS Terminal, use the companion installer instead:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cmyklops/sfxworkbench/main/scripts/install-macos-tui.sh | bash
+```
+
 Manual fallback:
 
 Install the command-line prerequisites first. If either installer says it changed `PATH`, close every PowerShell tab and open a new one before continuing.
