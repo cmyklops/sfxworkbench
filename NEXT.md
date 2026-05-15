@@ -65,6 +65,16 @@ checklist. Current priorities:
 - `docs/APP_UI_DIRECTION.md` - visual and interaction direction for the app.
 - `docs/METADATA_TAGGING.md` - metadata/tagging product rules and workflows.
 
+## Agent Cost Controls
+
+- Start from this file and the named docs above before broad repo orientation.
+- Use `git status`, `git diff --stat`, and `git diff --name-only` before reading
+  whole modules or running wide searches.
+- Avoid real-library scans, large metadata-plan reads, and filesystem-changing
+  commands unless the task explicitly requires them.
+- Keep command output caps modest; prefer targeted `rg` and short `sed` windows
+  when investigating reviews, performance issues, or planning questions.
+
 ## Validation Notes
 
 Most recent full local validation:
