@@ -28,12 +28,27 @@ Run apply/undo workflows only against a disposable copy until the Windows smoke 
 
 Use Windows Terminal or PowerShell against a disposable copy of a sound library. Do not point first-run testing at a production library.
 
-Clone the Windows hardening branch and install the optional TUI dependencies:
+Install the command-line prerequisites first. If either installer says it changed `PATH`, close every PowerShell tab and open a new one before continuing.
+
+```powershell
+winget install --id Git.Git --exact --source winget
+winget install --id astral-sh.uv --exact --source winget
+```
+
+In the new PowerShell session, verify both commands are visible:
+
+```powershell
+git --version
+uv --version
+```
+
+If either command is still not found, restart PowerShell again. Do not run the clone/install block until both commands work.
+
+Clone the repo and install the optional TUI dependencies:
 
 ```powershell
 git clone https://github.com/cmyklops/sfxworkbench.git
 cd .\sfxworkbench
-git switch codex/windows-trustworthiness
 uv sync --extra dev --extra metadata --extra tui
 ```
 
