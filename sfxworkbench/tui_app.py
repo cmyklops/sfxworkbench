@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from rich.text import Text
@@ -45,9 +48,7 @@ from sfxworkbench.tui_actions import (
     write_action_history,
 )
 from sfxworkbench.tui_data import (
-    adapter_cache_get as _data_cache_get,
-)
-from sfxworkbench.tui_data import (
+    APPLY_LOG_DIR_NAME,
     clear_adapter_cache,
     discover_plan_files,
     feature_pages,
@@ -61,6 +62,9 @@ from sfxworkbench.tui_data import (
     preferred_library_path,
     report_search_paths,
     save_library_path,
+)
+from sfxworkbench.tui_data import (
+    adapter_cache_get as _data_cache_get,
 )
 from sfxworkbench.tui_data import (
     file_signature as _data_file_signature,
@@ -110,7 +114,6 @@ _PAGE_HEADERS = {
 
 _ACTION_BUTTON_IDS = {
     "scan-run",
-    "files-scan-library",
     "scan-full-audit",
     "clean-preview",
     "clean-apply",
@@ -140,7 +143,61 @@ _ACTION_BUTTON_IDS = {
     "delete-apply",
 }
 
-_FOOTER_TEXT = "q Quit  r Refresh  s Search  R Review tags  c Cancel  p Commands  space Select  ctrl+a Select all"
+_CONTEXT_BUTTON_IDS = _ACTION_BUTTON_IDS | {
+    "files-open-file",
+    "files-reveal-file",
+    "metadata-review-open",
+}
+
+
+@dataclass(frozen=True)
+class ButtonLockState:
+    locked: bool = False
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class ButtonLockSnapshot:
+    has_library: bool
+    has_indexed_files: bool
+    accepted_tag_count: int
+    has_dedupe_plan: bool
+    has_pack_report: bool
+    has_pack_plan: bool
+    has_rename_plan: bool
+    has_rename_log: bool
+    has_organize_report: bool
+    has_organize_log: bool
+    has_nesting_report: bool
+    has_nesting_plan: bool
+    has_nesting_log: bool
+    has_metadata_tag_plan: bool
+    has_metadata_write_plan: bool
+    has_metadata_write_log: bool
+    has_quarantine: bool
+    has_delete_plan: bool
+
+
+ButtonSpec = tuple[str, str] | tuple[str, str, str]
+
+
+def _button_spec_width(spec: ButtonSpec) -> int:
+    label = spec[0]
+    return max(9, len(label) + 4) + 1
+
+
+def _button_flow_rows(specs: tuple[ButtonSpec, ...], available_width: int) -> list[tuple[ButtonSpec, ...]]:
+    rows: list[list[ButtonSpec]] = [[]]
+    used = 0
+    max_width = max(40, available_width)
+    for spec in specs:
+        width = _button_spec_width(spec)
+        if rows[-1] and used + width > max_width:
+            rows.append([])
+            used = 0
+        rows[-1].append(spec)
+        used += width
+    return [tuple(row) for row in rows if row]
 
 
 def _fmt(value: object) -> str:
@@ -250,6 +307,217 @@ def _finding_status(status: str, count: object) -> str:
     if isinstance(count, int) and count == 0:
         return "clear"
     return status
+
+
+def _valid_library_path(path: str | Path | None) -> bool:
+    if path is None:
+        return False
+    text = str(path).strip()
+    if not text or text == "PATH":
+        return False
+    return Path(text).expanduser().is_dir()
+
+
+def _db_count(db_path: Path, sql: str) -> int:
+    if not db_path.exists():
+        return 0
+    try:
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(sql).fetchone()
+    except sqlite3.Error:
+        return 0
+    return int(row[0] or 0) if row else 0
+
+
+def _indexed_file_count(db_path: Path) -> int:
+    return _db_count(db_path, "SELECT COUNT(*) FROM files")
+
+
+def _accepted_tag_count(db_path: Path) -> int:
+    return _db_count(db_path, "SELECT COUNT(*) FROM accepted_tags")
+
+
+def _latest_json(path: Path, *patterns: str) -> Path | None:
+    matches: list[Path] = []
+    for pattern in patterns:
+        matches.extend(candidate for candidate in path.glob(pattern) if candidate.is_file())
+    if not matches:
+        return None
+    return sorted(matches, key=lambda candidate: candidate.stat().st_mtime, reverse=True)[0]
+
+
+def _json_has_work(
+    path: Path, *, list_keys: tuple[str, ...] = ("entries",), summary_keys: tuple[str, ...] = ()
+) -> bool:
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    for key in list_keys:
+        value = payload.get(key)
+        if isinstance(value, list) and len(value) > 0:
+            return True
+    summary = payload.get("summary")
+    if isinstance(summary, dict):
+        for key in summary_keys:
+            value = summary.get(key)
+            if isinstance(value, int | float) and value > 0:
+                return True
+    return False
+
+
+def _latest_log_has_work(report_dir: Path, *patterns: str) -> bool:
+    log_dir = report_dir / APPLY_LOG_DIR_NAME
+    return _latest_json(log_dir, *patterns) is not None or _latest_json(report_dir, *patterns) is not None
+
+
+def _quarantine_available(report_dir: Path) -> bool:
+    if not report_dir.exists():
+        return False
+    for directory in (report_dir, report_dir / APPLY_LOG_DIR_NAME):
+        if not directory.exists():
+            continue
+        for candidate in directory.glob("*.json"):
+            try:
+                payload = json.loads(candidate.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            entries = payload.get("entries") if isinstance(payload, dict) else None
+            if isinstance(entries, list) and any(
+                isinstance(entry, dict) and entry.get("quarantine_path") for entry in entries
+            ):
+                return True
+    return any(
+        candidate.is_dir()
+        for pattern in ("sfxworkbench*_quarantine_*", "wavwarden*_quarantine_*")
+        for candidate in report_dir.glob(pattern)
+    )
+
+
+def _button_lock_snapshot(
+    *,
+    library_path: str | Path | None,
+    report_dir: Path,
+    db_path: Path,
+) -> ButtonLockSnapshot:
+    indexed_files = _indexed_file_count(db_path)
+    return ButtonLockSnapshot(
+        has_library=_valid_library_path(library_path),
+        has_indexed_files=indexed_files > 0,
+        accepted_tag_count=_accepted_tag_count(db_path),
+        has_dedupe_plan=_json_has_work(report_dir / "dedupe_plan.json", list_keys=("groups",)),
+        has_pack_report=_json_has_work(
+            report_dir / "pack_overlap_report.json",
+            list_keys=("exact_duplicate_groups", "overlap_candidates", "candidates", "groups"),
+            summary_keys=("exact_duplicate_groups", "overlap_candidates"),
+        ),
+        has_pack_plan=_json_has_work(
+            report_dir / "pack_consolidation_plan.json",
+            list_keys=("entries", "groups"),
+            summary_keys=("candidate_entries", "planned", "planned_files"),
+        ),
+        has_rename_plan=_json_has_work(report_dir / "portable_rename_plan.json"),
+        has_rename_log=_latest_log_has_work(report_dir, "rename_log_*.json"),
+        has_organize_report=_json_has_work(report_dir / "organize_report.json", summary_keys=("planned",)),
+        has_organize_log=_latest_log_has_work(report_dir, "organize_log_*.json"),
+        has_nesting_report=_json_has_work(
+            report_dir / "redundant_nesting_report.json",
+            list_keys=("candidates", "entries"),
+            summary_keys=("candidates", "planned"),
+        ),
+        has_nesting_plan=_json_has_work(report_dir / "nesting_plan.json", summary_keys=("planned",)),
+        has_nesting_log=_latest_log_has_work(report_dir, "nesting_log_*.json"),
+        has_metadata_tag_plan=_json_has_work(
+            report_dir / "metadata_tag_plan.json",
+            summary_keys=("add_entries", "planned"),
+        ),
+        has_metadata_write_plan=_json_has_work(
+            report_dir / "metadata_write_plan.json",
+            summary_keys=("supported_entries", "planned"),
+        ),
+        has_metadata_write_log=_latest_log_has_work(report_dir, "metadata_write_apply_log_*.json"),
+        has_quarantine=_quarantine_available(report_dir),
+        has_delete_plan=_json_has_work(
+            report_dir / "delete_plan.json",
+            summary_keys=("files_planned", "directory_entries", "planned"),
+        ),
+    )
+
+
+def _button_lock_state(
+    button_id: str,
+    *,
+    library_path: str | Path | None,
+    report_dir: Path,
+    db_path: Path,
+    metadata_offset: int = 0,
+    selected_file_available: bool = False,
+    snapshot: ButtonLockSnapshot | None = None,
+) -> ButtonLockState:
+    state = snapshot or _button_lock_snapshot(library_path=library_path, report_dir=report_dir, db_path=db_path)
+
+    library_required = {
+        "scan-run",
+        "scan-full-audit",
+        "clean-preview",
+        "clean-apply",
+        "pack-audit",
+        "organize-rename-preview",
+        "organize-audit",
+        "organize-nesting-audit",
+        "metadata-plan",
+    }
+    index_required = {
+        "dedupe-build",
+        "pack-audit",
+        "metadata-audit",
+        "metadata-plan",
+        "metadata-sidecar",
+    }
+    if button_id in library_required and not state.has_library:
+        return ButtonLockState(True, "Set an existing library folder first.")
+    if button_id in index_required and not state.has_indexed_files:
+        return ButtonLockState(True, "Scan a library before using this action.")
+
+    if button_id in {"files-open-file", "files-reveal-file"} and not selected_file_available:
+        return ButtonLockState(True, "Select an indexed file first.")
+    if button_id == "dedupe-apply" and not state.has_dedupe_plan:
+        return ButtonLockState(True, "Build a dedupe plan first.")
+    if button_id == "pack-plan" and not state.has_pack_report:
+        return ButtonLockState(True, "Run Pack Audit with overlap findings first.")
+    if button_id == "pack-apply" and not state.has_pack_plan:
+        return ButtonLockState(True, "Build a pack plan first.")
+    if button_id == "organize-rename-apply" and not state.has_rename_plan:
+        return ButtonLockState(True, "Preview name cleanup first.")
+    if button_id == "organize-rename-undo" and not state.has_rename_log:
+        return ButtonLockState(True, "No name-cleanup undo log was found.")
+    if button_id == "organize-apply" and not state.has_organize_report:
+        return ButtonLockState(True, "Preview folder cleanup first.")
+    if button_id == "organize-undo" and not state.has_organize_log:
+        return ButtonLockState(True, "No folder-cleanup undo log was found.")
+    if button_id == "organize-nesting-plan" and not state.has_nesting_report:
+        return ButtonLockState(True, "Find nested folders first.")
+    if button_id == "organize-nesting-apply" and not state.has_nesting_plan:
+        return ButtonLockState(True, "Build a nesting plan first.")
+    if button_id == "organize-nesting-undo" and not state.has_nesting_log:
+        return ButtonLockState(True, "No nesting undo log was found.")
+    if button_id in {"metadata-review-open", "metadata-apply"} and not state.has_metadata_tag_plan:
+        return ButtonLockState(True, "Find tags first.")
+    if button_id == "metadata-sidecar" and state.accepted_tag_count == 0:
+        return ButtonLockState(True, "Accept tags before saving a tag sidecar.")
+    if button_id == "metadata-write-apply" and not state.has_metadata_write_plan:
+        return ButtonLockState(True, "Accept tags and prepare a write plan first.")
+    if button_id == "metadata-write-undo" and not state.has_metadata_write_log:
+        return ButtonLockState(True, "No embedded metadata undo log was found.")
+    if button_id == "quarantine-reveal" and not state.has_quarantine:
+        return ButtonLockState(True, "No quarantine folder or log was found.")
+    if button_id == "delete-plan" and not state.has_quarantine:
+        return ButtonLockState(True, "Apply a quarantine workflow before planning permanent delete.")
+    if button_id == "delete-apply" and not state.has_delete_plan:
+        return ButtonLockState(True, "Plan permanent delete first.")
+    return ButtonLockState()
 
 
 def _latest_metadata_tag_plan(report_dir: Path) -> Path | None:
@@ -369,8 +637,7 @@ class _TuiInstanceLock:
                     ) from None
                 if attempt:
                     raise RuntimeError(
-                        f"Another sfxworkbench TUI lock exists at {self.lock_path}. "
-                        "Remove it if no TUI is running."
+                        f"Another sfxworkbench TUI lock exists at {self.lock_path}. Remove it if no TUI is running."
                     ) from None
                 try:
                     self.lock_path.unlink()
@@ -464,6 +731,13 @@ def run_tui(
             padding: 0 1;
             background: #111a23;
         }
+        #library-controls .control-label {
+            width: auto;
+            padding: 0 1 0 0;
+            content-align: center middle;
+            text-style: bold;
+            color: #d7dee7;
+        }
         #library-status-buffer {
             height: 1;
             background: #111a23;
@@ -514,6 +788,36 @@ def run_tui(
             height: auto;
             margin-bottom: 1;
         }
+        .button-flow {
+            height: auto;
+            margin-bottom: 1;
+        }
+        .button-flow .button-row {
+            margin-bottom: 0;
+        }
+        .cleanup-workflow-row {
+            height: auto;
+            margin-bottom: 1;
+            padding: 0 0 1 0;
+        }
+        .cleanup-workflow-label {
+            width: 30;
+            padding-right: 2;
+        }
+        .cleanup-workflow-title {
+            text-style: bold;
+            color: #f8fafc;
+        }
+        .cleanup-workflow-note {
+            color: #9fb0c1;
+        }
+        .cleanup-workflow-actions {
+            width: 1fr;
+            height: auto;
+        }
+        .cleanup-workflow-actions Button {
+            min-width: 24;
+        }
         Button {
             margin-right: 1;
             min-width: 9;
@@ -526,8 +830,14 @@ def run_tui(
             margin-bottom: 1;
             border: solid #263647;
         }
-        #files-table, #dedupe-groups-table {
+        #dedupe-groups-table {
             height: 16;
+        }
+        #clean-items-table,
+        #files-table,
+        #metadata-rows-table {
+            height: 1fr;
+            min-height: 18;
         }
         #scan-findings-table,
         #clean-findings-table,
@@ -537,7 +847,6 @@ def run_tui(
             height: 6;
         }
         #metadata-rows-table {
-            height: 1fr;
             min-height: 24;
         }
         .pane-title {
@@ -553,12 +862,6 @@ def run_tui(
             border: solid #263647;
             padding: 1;
             color: #d7dee7;
-        }
-        #mini-footer {
-            height: 1;
-            padding: 0 1;
-            background: #111a23;
-            color: #9fb0c1;
         }
         /* Tier post-feedback: history list + detail render side-by-side
            rather than stacked. Each pane gets half the row width. */
@@ -631,6 +934,8 @@ def run_tui(
             self._sort_state: dict[str, tuple[str, bool]] = {}
             self._last_compact = False
             self._session_started_at = time.time()
+            self._button_lock_cache_key: tuple[object, ...] | None = None
+            self._button_lock_snapshot_cache: ButtonLockSnapshot | None = None
             # Tier 5.13: handle to the pending file-search debounce timer, so a
             # second keystroke cancels the first scheduled refill.
             self._file_search_debounce = None
@@ -683,23 +988,22 @@ def run_tui(
         def compose(self) -> ComposeResult:
             with Vertical(id="meta-status-group"):
                 with Horizontal(id="library-controls"):
+                    yield Static("Library", classes="control-label")
                     yield Input(
                         value="" if self._library_path == "PATH" else self._library_path,
-                        placeholder="Library path",
+                        placeholder="Paste or drag a folder path, then press Enter",
                         id="library-path-input",
                     )
-                    yield Button("Set Library", id="set-library-path")
-                    yield Button("Use Indexed Root", id="use-indexed-root")
+                    yield Button("Use Last Scan", id="use-indexed-root")
                     yield Button("Refresh", id="refresh-all")
                 yield Static("", id="library-status-buffer")
                 yield Static("", id="status-strip")
             yield Tabs(*(Tab(label, id=key) for key, label in _FEATURES), active="scan", id="feature-tabs")
             with Horizontal(id="operation-row"):
                 yield Static("", id="operation-strip")
-                yield Button("Request Cancel", id="cancel-action", disabled=True)
+                yield Button("Cancel", id="cancel-action", disabled=True)
             with ContentSwitcher(initial="scan-page", id="feature-pages"):
                 yield self._page_widget("scan", self._scan_page)
-            yield Static(_FOOTER_TEXT, id="mini-footer")
 
         def _page_widget(self, key: str, factory) -> VerticalScroll:
             class FeaturePage(VerticalScroll):
@@ -740,7 +1044,23 @@ def run_tui(
         # scratch with identical boilerplate. The helpers below capture the
         # shared shapes so each page becomes a declarative sequence of yields.
 
-        def _button_row(self, *specs: tuple[str, str] | tuple[str, str, str]) -> ComposeResult:
+        def _button_from_spec(self, spec: ButtonSpec) -> Button:
+            if len(spec) == 2:
+                label, button_id = spec
+                variant = None
+            else:
+                label, button_id, variant = spec
+            lock = self._button_lock_state(button_id)
+            button = (
+                Button(label, id=button_id, disabled=lock.locked)
+                if variant is None
+                else Button(label, id=button_id, variant=variant, disabled=lock.locked)
+            )
+            if lock.reason:
+                button.tooltip = lock.reason
+            return button
+
+        def _button_row(self, *specs: ButtonSpec) -> ComposeResult:
             """Yield a horizontal row of buttons.
 
             Each spec is ``(label, id)`` or ``(label, id, variant)`` where variant
@@ -750,12 +1070,13 @@ def run_tui(
             """
             with Horizontal(classes="button-row"):
                 for spec in specs:
-                    if len(spec) == 2:
-                        label, button_id = spec
-                        yield Button(label, id=button_id)
-                    else:
-                        label, button_id, variant = spec
-                        yield Button(label, id=button_id, variant=variant)
+                    yield self._button_from_spec(spec)
+
+        def _button_flow(self, *specs: ButtonSpec) -> ComposeResult:
+            width = max(40, int(getattr(self.size, "width", 0) or 120) - 4)
+            with Vertical(classes="button-flow"):
+                for row in _button_flow_rows(tuple(specs), width):
+                    yield from self._button_row(*row)
 
         def _titled_table(self, title: str, table_id: str) -> ComposeResult:
             """Yield a ``Static`` pane-title followed by an empty ``DataTable``."""
@@ -827,6 +1148,7 @@ def run_tui(
             self._fill_status_strip(use_cache=True)
             self._fill_operation_strip()
             self._fill_scan_from_rows(scan_findings_rows)
+            self._update_button_locks()
             self.query_one("#feature-tabs", Tabs).focus()
 
         def on_resize(self, event: events.Resize) -> None:
@@ -1026,16 +1348,19 @@ def run_tui(
             self._metadata_random_pending = False
             self._metadata_offset = max(0, self._metadata_offset - self._metadata_page_size)
             self._fill_metadata()
+            self._update_button_locks()
 
         def _metadata_next_page(self) -> None:
             self._metadata_random_pending = False
             self._metadata_offset += self._metadata_page_size
             self._fill_metadata()
+            self._update_button_locks()
 
         def _metadata_random_page(self) -> None:
             self._metadata_random_pending = True
             self._metadata_offset = 0
             self._fill_metadata()
+            self._update_button_locks()
 
         def _metadata_warm_key(self, plan_path: Path, *, random_pending: bool) -> tuple[object, ...]:
             return (
@@ -1132,21 +1457,14 @@ def run_tui(
             handlers: dict[str, Callable[[], None]] = {}
 
             # -- Direct UI handlers (no worker action) ---------------------
-            handlers["set-library-path"] = lambda: self._set_library_path(
-                self.query_one("#library-path-input", Input).value
-            )
             handlers["use-indexed-root"] = lambda: self._set_library_path(library_root(db_path))
             handlers["cancel-action"] = self._cancel_running_action
-            for refresh_id in ("refresh-all", "scan-refresh", "clean-refresh"):
-                handlers[refresh_id] = self._refresh
+            handlers["refresh-all"] = self._refresh
             handlers["files-clear-search"] = self._clear_file_search_input
             handlers["files-open-file"] = lambda: self._open_selected_file(reveal=False)
             handlers["files-reveal-file"] = lambda: self._open_selected_file(reveal=True)
             handlers["quarantine-reveal"] = self._reveal_latest_quarantine
             handlers["metadata-review-open"] = self.action_open_metadata_review
-            handlers["metadata-page-prev"] = self._metadata_previous_page
-            handlers["metadata-page-next"] = self._metadata_next_page
-            handlers["metadata-page-random"] = self._metadata_random_page
 
             # -- Worker actions: build factories closing over current state -
             pcb = self._threadsafe_progress_callback
@@ -1168,7 +1486,6 @@ def run_tui(
                 )
 
             handlers["scan-run"] = _h_scan
-            handlers["files-scan-library"] = _h_scan
 
             def _h_full_audit() -> None:
                 root = self._root_path()
@@ -1427,7 +1744,20 @@ def run_tui(
             self._fill_files()
 
         def on_button_pressed(self, event: Button.Pressed) -> None:
-            handler = self._button_handlers.get(event.button.id or "")
+            button_id = event.button.id or ""
+            lock = self._button_lock_state(button_id)
+            if lock.locked:
+                self._last_action = ActionResult(
+                    action=button_id.replace("-", "_"),
+                    status="warning",
+                    message=lock.reason,
+                )
+                self._update_button_locks()
+                self._fill_status_strip()
+                self._fill_operation_strip()
+                self._fill_action_result()
+                return
+            handler = self._button_handlers.get(button_id)
             if handler is not None:
                 handler()
 
@@ -1493,6 +1823,7 @@ def run_tui(
             # Different library = different DB and report dir; every cached
             # adapter result is now stale.
             clear_adapter_cache()
+            self._clear_button_lock_cache()
             self._refresh()
 
         def _start_action(self, action: str, label: str, run: Callable[[], ActionResult]) -> None:
@@ -1575,6 +1906,67 @@ def run_tui(
             for button in self.query(Button):
                 if button.id in _ACTION_BUTTON_IDS:
                     button.disabled = disabled
+
+        def _button_lock_snapshot_key(self) -> tuple[object, ...]:
+            report_dir = self._report_dir
+            return (
+                self._library_path,
+                _data_file_signature(db_path),
+                _data_file_signature(report_dir),
+                _data_file_signature(report_dir / APPLY_LOG_DIR_NAME),
+                _data_file_signature(report_dir / "dedupe_plan.json"),
+                _data_file_signature(report_dir / "pack_overlap_report.json"),
+                _data_file_signature(report_dir / "pack_consolidation_plan.json"),
+                _data_file_signature(report_dir / "portable_rename_plan.json"),
+                _data_file_signature(report_dir / "organize_report.json"),
+                _data_file_signature(report_dir / "redundant_nesting_report.json"),
+                _data_file_signature(report_dir / "nesting_plan.json"),
+                _data_file_signature(report_dir / "metadata_tag_plan.json"),
+                _data_file_signature(report_dir / "metadata_write_plan.json"),
+                _data_file_signature(report_dir / "delete_plan.json"),
+            )
+
+        def _button_lock_snapshot(self) -> ButtonLockSnapshot:
+            key = self._button_lock_snapshot_key()
+            if self._button_lock_cache_key == key and self._button_lock_snapshot_cache is not None:
+                return self._button_lock_snapshot_cache
+            snapshot = _button_lock_snapshot(
+                library_path=self._library_path,
+                report_dir=self._report_dir,
+                db_path=db_path,
+            )
+            self._button_lock_cache_key = key
+            self._button_lock_snapshot_cache = snapshot
+            return snapshot
+
+        def _clear_button_lock_cache(self) -> None:
+            self._button_lock_cache_key = None
+            self._button_lock_snapshot_cache = None
+
+        def _button_lock_state(self, button_id: str | None) -> ButtonLockState:
+            if not button_id or button_id not in _CONTEXT_BUTTON_IDS:
+                return ButtonLockState()
+            return _button_lock_state(
+                button_id,
+                library_path=self._library_path,
+                report_dir=self._report_dir,
+                db_path=db_path,
+                metadata_offset=getattr(self, "_metadata_offset", 0),
+                selected_file_available=bool(getattr(self, "_file_rows", ())),
+                snapshot=self._button_lock_snapshot(),
+            )
+
+        def _update_button_locks(self) -> None:
+            running = self._running_worker is not None and not self._running_worker.is_finished
+            for button in self.query(Button):
+                button_id = button.id or ""
+                if button_id == "cancel-action":
+                    continue
+                if button_id not in _CONTEXT_BUTTON_IDS:
+                    continue
+                lock = self._button_lock_state(button_id)
+                button.disabled = (running and button_id in _ACTION_BUTTON_IDS) or lock.locked
+                button.tooltip = lock.reason or None
 
         def _selected_file_path(self) -> Path | None:
             if not self._file_rows:
@@ -1778,6 +2170,7 @@ def run_tui(
             # need to bust cached findings/rows. Resize and the manual ``r``
             # refresh leave the cache intact so they stay snappy.
             clear_adapter_cache()
+            self._clear_button_lock_cache()
             self._refresh(dirty)
             self._fill_action_result()
 
@@ -1808,6 +2201,7 @@ def run_tui(
                 self._invalidate_tabs(dirty)
             active = self._active_feature()
             self._ensure_tab_filled(active)
+            self._update_button_locks()
 
         def _active_feature(self) -> str:
             active = self.query_one("#feature-tabs", Tabs).active
@@ -1849,8 +2243,10 @@ def run_tui(
             flag. Already-clean tabs are a no-op.
             """
             if key not in self._dirty_tabs:
+                self._update_button_locks()
                 return
             self._fill_tab(key)
+            self._update_button_locks()
 
         def _fill_tab(self, key: str) -> None:
             """Dispatch to the right ``_fill_<key>()`` method.
@@ -1907,33 +2303,25 @@ def run_tui(
                 self._status_pages_cache = pages
                 self._status_indexed_gb_cache = indexed_gb
             status = Text()
+            metric_labels = {
+                "scan": "files",
+                "clean": "issues",
+                "dedupe": "groups",
+                "metadata": "gaps",
+                "files": "indexed",
+                "history": "items",
+            }
             for index, page in enumerate(pages):
                 if index:
                     status.append("  ")
-                status.append(page.label, style="bold")
-                status.append(": ")
+                status.append(f"{page.label} {metric_labels.get(page.key, 'count')}: ", style="bold")
                 status.append(
                     str(page.primary_count), style="yellow" if page.status in {"review", "warning"} else "green"
                 )
-            status.append("  reports: ", style="bold")
+            status.append("  reports dir: ", style="bold")
             status.append(_short_path(self._report_dir, width=52 if not self._compact else 26), style="cyan")
-            status.append("  size: ", style="bold")
+            status.append("  indexed size: ", style="bold")
             status.append(f"{indexed_gb:,.1f} GB", style="yellow")
-            if self._last_action is not None:
-                status.append("  last: ", style="bold")
-                status.append(self._last_action.message, style="green" if self._last_action.ok else "red")
-            if self._running_worker is not None and not self._running_worker.is_finished:
-                status.append("  running: ", style="bold yellow")
-                status.append(self._running_label, style="yellow")
-            if self._selected_paths:
-                status.append("  selected: ", style="bold")
-                status.append(f"{len(self._selected_paths)} file(s)", style="magenta")
-                # Tier post-feedback discoverability: surface what the
-                # selection can be applied to so the user doesn't have to
-                # discover it by trial. Three apply actions read
-                # ``_selection_tuple()`` — list them inline.
-                status.append("  scoped applies: ", style="dim")
-                status.append("Accept Tags · Apply Dedupe · Write Metadata", style="dim cyan")
             self.query_one("#status-strip", Static).update(status)
 
         def _fill_operation_strip(self) -> None:
@@ -1965,6 +2353,13 @@ def run_tui(
                 )
             else:
                 message = Text("No action is running.", style="dim")
+            if self._running_worker is None or self._running_worker.is_finished:
+                if self._selected_paths:
+                    message.append("\n")
+                    message.append("Selected files: ", style="bold")
+                    message.append(f"{len(self._selected_paths)} file(s)", style="magenta")
+                    message.append("  scoped applies: ", style="dim")
+                    message.append("Accept Tags · Apply Dedupe · Write Metadata", style="dim cyan")
             self.query_one("#operation-strip", Static).update(message)
 
         def _progress_line(self) -> Text:
@@ -2175,6 +2570,7 @@ def run_tui(
             start = time.perf_counter()
             metadata_tab.fill(self)
             self._dirty_tabs.discard("metadata")
+            self._update_button_locks()
             _perf_write_trace(perf_trace, extra_phases={"post_warm_fill": time.perf_counter() - start})
 
         def _fill_history(self) -> None:
@@ -2248,6 +2644,7 @@ def run_tui(
                 self.query_one("#file-detail", Static).update(
                     "No files indexed yet. Use Scan Library to populate this view."
                 )
+                self._update_button_locks()
                 return
             # Build every row up-front and submit them in one ``add_rows`` call
             # so Textual's reactive system fires one batch update instead of

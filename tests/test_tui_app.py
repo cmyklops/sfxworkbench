@@ -8,6 +8,9 @@ from pathlib import Path
 import pytest
 from sfxworkbench.tui_app import (
     _ACTION_BUTTON_IDS,
+    ButtonLockSnapshot,
+    _button_flow_rows,
+    _button_lock_state,
     _desktop_open_command,
     _finding_status,
     _latest_metadata_tag_plan,
@@ -25,7 +28,6 @@ def test_tui_operation_buttons_are_registered_for_running_state() -> None:
     # so the dedicated Approve handlers are no longer wired up.
     expected = {
         "scan-run",
-        "files-scan-library",
         "scan-full-audit",
         "clean-preview",
         "clean-apply",
@@ -56,6 +58,121 @@ def test_tui_operation_buttons_are_registered_for_running_state() -> None:
     }
 
     assert expected == _ACTION_BUTTON_IDS
+
+
+def test_tui_button_locks_apply_until_required_plan_exists(tmp_path: Path, tmp_db: Path) -> None:
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+
+    locked = _button_lock_state(
+        "dedupe-apply",
+        library_path=tmp_path,
+        report_dir=report_dir,
+        db_path=tmp_db,
+    )
+    assert locked.locked
+    assert "dedupe plan" in locked.reason
+
+    (report_dir / "dedupe_plan.json").write_text('{"groups": [{"id": 1}]}', encoding="utf-8")
+
+    unlocked = _button_lock_state(
+        "dedupe-apply",
+        library_path=tmp_path,
+        report_dir=report_dir,
+        db_path=tmp_db,
+    )
+    assert not unlocked.locked
+
+
+def test_tui_button_locks_file_actions_when_empty(tmp_path: Path, tmp_db: Path) -> None:
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+
+    file_lock = _button_lock_state(
+        "files-open-file",
+        library_path=tmp_path,
+        report_dir=report_dir,
+        db_path=tmp_db,
+        selected_file_available=False,
+    )
+
+    assert file_lock.locked
+    assert "indexed file" in file_lock.reason
+
+
+def test_tui_button_locks_permanent_delete_until_quarantine_exists(tmp_path: Path, tmp_db: Path) -> None:
+    report_dir = tmp_path / "reports"
+    log_dir = report_dir / "apply_logs"
+    log_dir.mkdir(parents=True)
+
+    locked = _button_lock_state(
+        "delete-plan",
+        library_path=tmp_path,
+        report_dir=report_dir,
+        db_path=tmp_db,
+    )
+    assert locked.locked
+
+    (log_dir / "dedupe_quarantine_log_20260515_120000.json").write_text(
+        '{"entries": [{"path": "/old.wav", "quarantine_path": "/quarantine/old.wav"}]}',
+        encoding="utf-8",
+    )
+
+    unlocked = _button_lock_state(
+        "delete-plan",
+        library_path=tmp_path,
+        report_dir=report_dir,
+        db_path=tmp_db,
+    )
+    assert not unlocked.locked
+
+
+def test_tui_button_flow_wraps_by_available_width() -> None:
+    specs = (
+        ("Preview Junk", "clean-preview"),
+        ("Apply Junk Cleanup", "clean-apply", "warning"),
+        ("Preview Name Cleanup", "organize-rename-preview"),
+        ("Apply Name Cleanup", "organize-rename-apply", "warning"),
+    )
+
+    narrow = _button_flow_rows(specs, available_width=45)
+    wide = _button_flow_rows(specs, available_width=160)
+
+    assert len(narrow) > 1
+    assert wide == [specs]
+
+
+def test_tui_button_locks_can_use_precomputed_snapshot(tmp_path: Path, tmp_db: Path) -> None:
+    snapshot = ButtonLockSnapshot(
+        has_library=True,
+        has_indexed_files=True,
+        accepted_tag_count=0,
+        has_dedupe_plan=True,
+        has_pack_report=False,
+        has_pack_plan=False,
+        has_rename_plan=False,
+        has_rename_log=False,
+        has_organize_report=False,
+        has_organize_log=False,
+        has_nesting_report=False,
+        has_nesting_plan=False,
+        has_nesting_log=False,
+        has_metadata_tag_plan=False,
+        has_metadata_write_plan=False,
+        has_metadata_write_log=False,
+        has_quarantine=False,
+        has_delete_plan=False,
+    )
+
+    lock = _button_lock_state(
+        "dedupe-apply",
+        library_path=tmp_path / "missing",
+        report_dir=tmp_path / "missing-reports",
+        db_path=tmp_db,
+        snapshot=snapshot,
+    )
+
+    assert not lock.locked
 
 
 def test_tui_instance_lock_blocks_second_instance(tmp_path: Path) -> None:
@@ -122,20 +239,27 @@ def test_top_meta_group_precedes_tabs() -> None:
         "yield Tabs(*(Tab(label, id=key) for key, label in _FEATURES)"
     )
     assert app_source.index('id="library-path-input"') < app_source.index('id="status-strip"')
+    assert 'yield Static("Library", classes="control-label")' in app_source
+    assert "Paste or drag a folder path" in app_source
+    assert 'yield Button("Use Path", id="set-library-path")' not in app_source
+    assert 'yield Button("Use Last Scan", id="use-indexed-root")' in app_source
+    assert 'yield Button("Cancel", id="cancel-action", disabled=True)' in app_source
     assert app_source.index("yield Tabs(*(Tab(label, id=key) for key, label in _FEATURES)") < app_source.index(
         'id="operation-row"'
     )
     assert 'yield Static(title, classes="page-title")' not in app_source
     assert '("library: ", "bold")' not in app_source
-    assert '"  reports: "' in app_source
+    assert '"  reports dir: "' in app_source
+    assert '"  indexed size: "' in app_source
+    assert "metric_labels" in app_source
 
     status_strip = app_source[
         app_source.index("def _fill_status_strip") : app_source.index("def _fill_operation_strip")
     ]
-    assert status_strip.index("for index, page in enumerate(pages):") < status_strip.index('"  reports: "')
+    assert status_strip.index("for index, page in enumerate(pages):") < status_strip.index('"  reports dir: "')
 
 
-def test_static_mini_footer_replaces_textual_footer_on_startup() -> None:
+def test_keybind_footer_is_hidden_on_startup() -> None:
     app_source = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
 
     textual_import = app_source[
@@ -143,8 +267,8 @@ def test_static_mini_footer_replaces_textual_footer_on_startup() -> None:
     ]
     assert "Footer" not in textual_import
     assert "yield Footer()" not in app_source
-    assert 'yield Static(_FOOTER_TEXT, id="mini-footer")' in app_source
-    assert "_FOOTER_TEXT" in app_source
+    assert 'id="mini-footer"' not in app_source
+    assert "_FOOTER_TEXT" not in app_source
 
 
 def test_tab_hotkeys_are_hidden_from_binding_discovery() -> None:
@@ -208,24 +332,61 @@ def test_advanced_actions_moved_to_metadata_and_files_tabs() -> None:
     assert "Accept Tags & Prepare Write" in metadata_text
     assert "metadata-write-apply" in metadata_text
     assert "Write Metadata to Files" in metadata_text
+    assert '("Undo File Writes", "metadata-write-undo", "primary")' in metadata_text
+    assert '("Save Tags", "metadata-sidecar")' not in metadata_text
+    assert "metadata-page-prev" not in metadata_text
+    assert "metadata-page-next" not in metadata_text
+    assert "metadata-page-random" not in metadata_text
     assert "delete-plan" in files_text
     assert "delete-apply" in files_text
     assert "advanced_tab" not in registry_text
 
 
+def test_undo_buttons_use_primary_variant() -> None:
+    repo_root = Path(__file__).parents[1]
+    clean_text = (repo_root / "sfxworkbench" / "tui_screens" / "clean_tab.py").read_text()
+    metadata_text = (repo_root / "sfxworkbench" / "tui_screens" / "metadata_tab.py").read_text()
+
+    for button_id in (
+        "organize-rename-undo",
+        "organize-undo",
+        "organize-nesting-undo",
+    ):
+        assert f'"{button_id}", "primary"' in clean_text
+    assert '"metadata-write-undo", "primary"' in metadata_text
+
+
+def test_metadata_paging_buttons_live_only_in_review_screen() -> None:
+    repo_root = Path(__file__).parents[1]
+    app_text = (repo_root / "sfxworkbench" / "tui_app.py").read_text()
+    metadata_text = (repo_root / "sfxworkbench" / "tui_screens" / "metadata_tab.py").read_text()
+    review_text = (repo_root / "sfxworkbench" / "tui_screens" / "metadata_review.py").read_text()
+
+    assert "metadata-page-prev" not in app_text
+    assert "metadata-page-next" not in app_text
+    assert "metadata-page-random" not in app_text
+    assert "metadata-page-prev" not in metadata_text
+    assert "metadata-page-next" not in metadata_text
+    assert "metadata-page-random" not in metadata_text
+    assert "review-page-prev" in review_text
+    assert "review-page-next" in review_text
+    assert "review-page-random" in review_text
+
+
 def test_metadata_review_navigation_buttons_are_visible() -> None:
     repo_root = Path(__file__).parents[1]
     metadata_text = (repo_root / "sfxworkbench" / "tui_screens" / "metadata_tab.py").read_text()
-    app_text = (repo_root / "sfxworkbench" / "tui_app.py").read_text()
+    review_text = (repo_root / "sfxworkbench" / "tui_screens" / "metadata_review.py").read_text()
 
-    for button_id in ("metadata-review-open", "metadata-page-prev", "metadata-page-next", "metadata-page-random"):
+    for button_id in ("metadata-review-open",):
         assert button_id in metadata_text
-        assert button_id in app_text
+    for button_id in ("review-page-prev", "review-page-next", "review-page-random"):
+        assert button_id in review_text
 
-    # The redundant filter Input was retired; the review/paging buttons now
-    # sit directly above the prioritized-files table.
+    # The redundant filter Input and paging buttons stay out of the main
+    # Metadata tab; page navigation belongs to the dedicated review screen.
     assert 'id="metadata-search"' not in metadata_text
-    assert metadata_text.index('"metadata-page-random"') < metadata_text.index('"metadata-rows-table"')
+    assert "metadata-page-" not in metadata_text
     assert "Source symbols: # filename" in metadata_text
 
 
@@ -294,7 +455,24 @@ def test_feature_findings_render_before_action_buttons() -> None:
     for tab_name, finding_id in tab_to_finding.items():
         text = (repo_root / "sfxworkbench" / "tui_screens" / tab_name).read_text()
         assert text.index("_page_header(KEY)") < text.index(f'id="{finding_id}"')
-        assert text.index(f'id="{finding_id}"') < text.index("_button_row(")
+        finding_index = text.index(f'id="{finding_id}"')
+        candidates = [
+            text.find("_button_flow(", finding_index),
+            text.find("_button_row(", finding_index),
+            text.find("workflow_row(", finding_index),
+        ]
+        button_index = min(index for index in candidates if index >= 0)
+        assert finding_index < button_index
+
+
+def test_large_workbench_tables_get_flexible_height() -> None:
+    app_text = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
+
+    for table_id in ("#clean-items-table", "#files-table", "#metadata-rows-table"):
+        assert table_id in app_text
+    flexible_block = app_text[app_text.index("#clean-items-table,") : app_text.index("#scan-findings-table,")]
+    assert "height: 1fr;" in flexible_block
+    assert "min-height: 18;" in flexible_block
 
 
 def test_tui_cancelled_state_has_visible_token() -> None:

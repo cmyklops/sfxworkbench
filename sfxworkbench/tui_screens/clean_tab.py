@@ -22,28 +22,47 @@ NOTE = (
 
 
 def compose(app) -> ComposeResult:
-    from textual.widgets import DataTable
+    from textual.containers import Horizontal, Vertical
+    from textual.widgets import DataTable, Static
+
+    def workflow_row(title: str, note: str, *buttons) -> ComposeResult:
+        with Horizontal(classes="cleanup-workflow-row"):
+            with Vertical(classes="cleanup-workflow-label"):
+                yield Static(title, classes="cleanup-workflow-title")
+                yield Static(note, classes="cleanup-workflow-note")
+            with Horizontal(classes="cleanup-workflow-actions"):
+                for spec in buttons:
+                    yield app._button_from_spec(spec)
 
     yield from app._page_header(KEY)
     yield DataTable(id="clean-findings-table")
-    yield from app._button_row(
+    yield from workflow_row(
+        "Junk",
+        "Known removable files and folders.",
         ("Preview Junk", "clean-preview"),
         ("Apply Junk Cleanup", "clean-apply", "warning"),
+    )
+    yield from workflow_row(
+        "Names",
+        "Portable filename normalization.",
         ("Preview Name Cleanup", "organize-rename-preview"),
         ("Apply Name Cleanup", "organize-rename-apply", "warning"),
-        ("Undo Name Cleanup", "organize-rename-undo"),
-        ("Refresh", "clean-refresh"),
+        ("Undo Name Cleanup", "organize-rename-undo", "primary"),
     )
-    yield from app._button_row(
+    yield from workflow_row(
+        "Folders",
+        "Top-level folder cleanup plans.",
         ("Preview Folder Cleanup", "organize-audit"),
         ("Apply Folder Cleanup", "organize-apply", "warning"),
-        ("Undo Folder Cleanup", "organize-undo"),
+        ("Undo Folder Cleanup", "organize-undo", "primary"),
     )
-    yield from app._button_row(
+    yield from workflow_row(
+        "Nesting",
+        "Flatten redundant nested folders.",
         ("Find Nested Folders", "organize-nesting-audit"),
         ("Build Nesting Plan", "organize-nesting-plan"),
         ("Apply Nesting", "organize-nesting-apply", "warning"),
-        ("Undo Nesting", "organize-nesting-undo"),
+        ("Undo Nesting", "organize-nesting-undo", "primary"),
     )
     yield from app._titled_table("Previewed Junk", "clean-items-table")
 

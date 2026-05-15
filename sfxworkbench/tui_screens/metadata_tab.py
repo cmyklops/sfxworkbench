@@ -15,9 +15,7 @@ if TYPE_CHECKING:
 
 KEY = "metadata"
 TITLE = "Metadata"
-NOTE = (
-    "Find reviewable tags, accept the good ones into the index, then write accepted metadata to files."
-)
+NOTE = "Find reviewable tags, accept the good ones into the index, then write accepted metadata to files."
 
 
 def compose(app) -> ComposeResult:
@@ -25,21 +23,13 @@ def compose(app) -> ComposeResult:
 
     yield from app._page_header(KEY)
     yield DataTable(id="metadata-findings-table")
-    yield from app._button_row(
+    yield from app._button_flow(
         ("Metadata Audit", "metadata-audit"),
         ("Find Tags", "metadata-plan"),
         ("Review Tags", "metadata-review-open"),
         ("Accept Tags & Prepare Write", "metadata-apply", "warning"),
-    )
-    yield from app._button_row(
         ("Write Metadata to Files", "metadata-write-apply", "warning"),
-        ("Undo File Writes", "metadata-write-undo"),
-        ("Save Tags File", "metadata-sidecar"),
-    )
-    yield from app._button_row(
-        ("Previous 500", "metadata-page-prev"),
-        ("Next 500", "metadata-page-next"),
-        ("Random Pending", "metadata-page-random"),
+        ("Undo File Writes", "metadata-write-undo", "primary"),
     )
     yield Static("Source symbols: # filename  / path  ~ group  ^ UCS catalog/stem  * synonym", classes="note")
     yield from app._titled_table("Metadata Values - First 500 Prioritized Files", "metadata-rows-table")

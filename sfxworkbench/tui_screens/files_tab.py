@@ -25,13 +25,10 @@ def compose(app) -> ComposeResult:
     from textual.widgets import DataTable, Input, Static
 
     yield from app._page_header(KEY)
-    yield from app._button_row(
+    yield from app._button_flow(
         ("Clear Search", "files-clear-search"),
-        ("Scan Library", "files-scan-library"),
         ("Audition", "files-open-file"),
         ("Reveal in Files", "files-reveal-file"),
-    )
-    yield from app._button_row(
         ("Reveal Quarantine", "quarantine-reveal"),
         ("Plan Permanent Delete", "delete-plan"),
         ("Apply Permanent Delete", "delete-apply", "error"),

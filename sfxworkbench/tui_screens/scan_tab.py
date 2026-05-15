@@ -42,7 +42,6 @@ def compose(app) -> ComposeResult:
     yield from app._button_row(
         ("Scan Library", "scan-run"),
         ("Full Audit", "scan-full-audit"),
-        ("Refresh", "scan-refresh"),
     )
 
 

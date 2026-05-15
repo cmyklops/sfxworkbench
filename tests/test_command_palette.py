@@ -15,10 +15,10 @@ def test_label_for_falls_back_to_title_case() -> None:
 
 
 def test_filter_commands_substring_match_is_case_insensitive() -> None:
-    matches = filter_commands("scan", ["scan-run", "dedupe-build", "files-scan-library"])
+    matches = filter_commands("scan", ["scan-run", "dedupe-build", "scan-full-audit"])
     paths = [pair[0] for pair in matches]
     assert "scan-run" in paths
-    assert "files-scan-library" in paths
+    assert "scan-full-audit" in paths
     assert "dedupe-build" not in paths
 
 
