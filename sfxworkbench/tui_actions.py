@@ -413,10 +413,8 @@ def metadata_audit_action(
     cancel_requested: Callable[[], bool] | None = None,
 ) -> ActionResult:
     from sfxworkbench.metadata_audit import build_metadata_audit_report, write_metadata_audit_report
-    from sfxworkbench.scan import ensure_metadata_info
 
     try:
-        ensure_metadata_info(db_path, root, progress_callback=progress_callback, cancel_requested=cancel_requested)
         report = build_metadata_audit_report(db_path)
         output = _ensure_report_dir(report_dir) / "metadata_audit.json"
         write_metadata_audit_report(report, output, quiet=True)

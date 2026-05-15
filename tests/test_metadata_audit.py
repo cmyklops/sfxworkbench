@@ -81,6 +81,22 @@ def test_metadata_audit_limit_controls_reported_rows(tmp_db: Path, tmp_path: Pat
     assert len(unlimited.missing_metadata) == 2
 
 
+def test_metadata_audit_does_not_backfill_embedded_metadata(monkeypatch, tmp_db: Path, tmp_path: Path) -> None:
+    audio = tmp_path / "slow.flac"
+    audio.write_bytes(b"fLaC")
+    _insert_file(tmp_db, audio, metadata_sources=None)
+
+    def fail_read_audio_info(path: Path):
+        raise AssertionError(f"metadata audit should use indexed rows only: {path}")
+
+    monkeypatch.setattr("sfxworkbench.scan.audio_mod.read_audio_info", fail_read_audio_info)
+
+    report = build_metadata_audit_report(tmp_db)
+
+    assert report.summary.total_files == 1
+    assert report.summary.missing_metadata == 1
+
+
 def test_write_metadata_audit_report(tmp_db: Path, tmp_path: Path) -> None:
     _insert_file(tmp_db, tmp_path / "plain.wav")
     report = build_metadata_audit_report(tmp_db)
