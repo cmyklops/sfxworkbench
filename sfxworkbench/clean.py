@@ -23,10 +23,7 @@ _PROGRESS_MAX_INTERVAL = 100
 
 def _clean_walk_message(visited: int, junk_files: int, junk_dirs: int) -> str:
     total_junk = junk_files + junk_dirs
-    return (
-        f"Walked {visited:,} item(s); found {total_junk:,} junk item(s) "
-        f"({junk_files:,} files, {junk_dirs:,} dirs)"
-    )
+    return f"Walked {visited:,} item(s); found {total_junk:,} junk item(s) ({junk_files:,} files, {junk_dirs:,} dirs)"
 
 
 def _clean_apply_message(

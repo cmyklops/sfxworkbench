@@ -65,10 +65,7 @@ def _rename_progress_message(
     errors: int,
     current: str | None = None,
 ) -> str:
-    message = (
-        f"Processed {processed:,}/{total:,}; renamed {renamed:,}, "
-        f"skipped {skipped:,}, errors {errors:,}"
-    )
+    message = f"Processed {processed:,}/{total:,}; renamed {renamed:,}, skipped {skipped:,}, errors {errors:,}"
     if current:
         return f"{message}; current {Path(current).name}"
     return message

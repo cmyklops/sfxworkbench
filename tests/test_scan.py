@@ -175,9 +175,7 @@ def test_scan_progress_reports_collection_and_scan_counts(tmp_library: Path, tmp
         tmp_db,
         skip_hash=True,
         quiet=True,
-        progress_callback=lambda phase, completed, total, message: events.append(
-            (phase, completed, total, message)
-        ),
+        progress_callback=lambda phase, completed, total, message: events.append((phase, completed, total, message)),
     )
 
     assert result.scanned == result.total

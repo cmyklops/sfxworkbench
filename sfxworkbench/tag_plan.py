@@ -87,10 +87,7 @@ def _tag_apply_progress_message(
     errors: int,
     current: str | None = None,
 ) -> str:
-    message = (
-        f"Processed {processed:,}/{total:,}; applied {applied:,}, "
-        f"skipped {skipped:,}, errors {errors:,}"
-    )
+    message = f"Processed {processed:,}/{total:,}; applied {applied:,}, skipped {skipped:,}, errors {errors:,}"
     if current:
         return f"{message}; current {Path(current).name}"
     return message

@@ -79,6 +79,7 @@ def _tag_suggest_progress_message(
         return f"{message}; current {current}"
     return message
 
+
 # Common SFX abbreviations. Conservative list — only expand when the token is
 # unambiguous. Falls back to the original token if not in the dict.
 _ABBREVIATIONS: dict[str, str] = {

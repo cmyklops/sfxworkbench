@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -11,9 +12,11 @@ from sfxworkbench.tui_app import (
     ButtonLockSnapshot,
     _button_flow_rows,
     _button_lock_state,
+    _clean_preview_table_rows,
     _desktop_open_command,
     _finding_status,
     _format_duration,
+    _latest_clean_preview_details,
     _latest_metadata_tag_plan,
     _latest_quarantine_dir_from_reports,
     _progress_eta_label,
@@ -172,6 +175,35 @@ def test_tui_button_flow_wraps_by_available_width() -> None:
 
     assert len(narrow) > 1
     assert wide == [specs]
+
+
+def test_clean_preview_table_rows_show_only_kind_and_relative_path(tmp_path: Path) -> None:
+    library = tmp_path / "library"
+    details = {
+        "removed_files": [str(library / "Pack" / "._Hit.wav")],
+        "removed_dirs": [str(library / "Pack" / "_wfCache")],
+    }
+
+    rows, remaining = _clean_preview_table_rows(details, library_path=library)
+
+    assert rows == [("file", str(Path("Pack") / "._Hit.wav")), ("folder", f"{Path('Pack') / '_wfCache'}/")]
+    assert remaining == 0
+
+
+def test_latest_clean_preview_ignores_preview_after_newer_apply(tmp_path: Path) -> None:
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    preview = report_dir / "clean_preview_20260515_120000.json"
+    apply = report_dir / "clean_apply_20260515_120100.json"
+    preview.write_text(json.dumps({"dry_run": True, "removed_files": ["._Hit.wav"]}), encoding="utf-8")
+    apply.write_text(json.dumps({"dry_run": False, "removed_files": ["._Hit.wav"]}), encoding="utf-8")
+    os.utime(preview, (100.0, 100.0))
+    os.utime(apply, (200.0, 200.0))
+
+    details, stale = _latest_clean_preview_details([report_dir])
+
+    assert details is None
+    assert stale is True
 
 
 def test_tui_button_locks_can_use_precomputed_snapshot(tmp_path: Path, tmp_db: Path) -> None:

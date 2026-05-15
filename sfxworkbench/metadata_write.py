@@ -57,10 +57,7 @@ def _metadata_plan_progress_message(
     unsupported: int,
     current: str | None = None,
 ) -> str:
-    message = (
-        f"Processed {processed:,}/{total:,}; supported {supported:,}, "
-        f"unsupported {unsupported:,}"
-    )
+    message = f"Processed {processed:,}/{total:,}; supported {supported:,}, unsupported {unsupported:,}"
     if current:
         return f"{message}; current {Path(current).name}"
     return message
@@ -86,6 +83,7 @@ def _metadata_apply_progress_message(
     if current:
         return f"{message}; current {Path(current).name}"
     return message
+
 
 # Conservative first-pass mapping. These are the only accepted tag fields this
 # slice is willing to route toward BWF MetaEdit. Everything else remains visible
@@ -1420,9 +1418,13 @@ def apply_metadata_write_plan(
 
     result.cancelled = cancelled
     if progress_callback is not None:
-        processed_commands = total_commands if not cancelled else min(
-            result.files_written + result.skipped + len(result.errors),
-            total_commands,
+        processed_commands = (
+            total_commands
+            if not cancelled
+            else min(
+                result.files_written + result.skipped + len(result.errors),
+                total_commands,
+            )
         )
         progress_callback(
             "cancelled" if cancelled else "complete",

@@ -352,6 +352,58 @@ def _latest_json(path: Path, *patterns: str) -> Path | None:
     return sorted(matches, key=lambda candidate: candidate.stat().st_mtime, reverse=True)[0]
 
 
+def _latest_json_across(paths: list[Path], *patterns: str) -> Path | None:
+    matches = [_latest_json(path, *patterns) for path in paths if path.exists()]
+    matches = [match for match in matches if match is not None]
+    if not matches:
+        return None
+    return sorted(matches, key=lambda candidate: candidate.stat().st_mtime, reverse=True)[0]
+
+
+def _latest_clean_preview_details(report_paths: list[Path]) -> tuple[dict | None, bool]:
+    preview = _latest_json_across(report_paths, "clean_preview_*.json")
+    if preview is None:
+        return None, False
+    apply_log = _latest_json_across(report_paths, "clean_apply_*.json")
+    if apply_log is not None and apply_log.stat().st_mtime > preview.stat().st_mtime:
+        return None, True
+    try:
+        payload = json.loads(preview.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, False
+    if not isinstance(payload, dict) or not bool(payload.get("dry_run")):
+        return None, False
+    return payload, False
+
+
+def _clean_preview_table_rows(
+    details: dict,
+    *,
+    library_path: str | Path,
+    per_type_limit: int = 100,
+) -> tuple[list[tuple[str, str]], int]:
+    root_path = Path(library_path).expanduser()
+
+    def paths(key: str) -> list[str]:
+        value = details.get(key, [])
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if str(item).strip()]
+
+    def display(path: str) -> str:
+        try:
+            return str(Path(path).relative_to(root_path))
+        except ValueError:
+            return _short_path(path)
+
+    files = paths("removed_files")
+    dirs = paths("removed_dirs")
+    rows = [("file", display(path)) for path in files[:per_type_limit]]
+    rows.extend(("folder", display(path) + "/") for path in dirs[:per_type_limit])
+    shown = min(len(files), per_type_limit) + min(len(dirs), per_type_limit)
+    return rows, max(0, len(files) + len(dirs) - shown)
+
+
 def _json_has_work(
     path: Path, *, list_keys: tuple[str, ...] = ("entries",), summary_keys: tuple[str, ...] = ()
 ) -> bool:
@@ -2523,32 +2575,29 @@ def run_tui(
 
         def _fill_clean_items(self) -> None:
             table = self._reset_table("clean-items-table", ("Type", "Path"))
-            if self._last_action is None or self._last_action.action not in {"clean_preview", "clean_apply"}:
-                table.add_row("none", "Run Preview Junk to list the files and folders that cleanup would touch.")
-                return
-            if self._last_action.action == "clean_apply":
+            details: dict | None = None
+            preview_stale = False
+            if self._last_action is not None and self._last_action.action == "clean_preview":
+                details = self._last_action.details or {}
+            elif self._last_action is not None and self._last_action.action == "clean_apply":
+                preview_stale = True
+            else:
+                details, preview_stale = _latest_clean_preview_details(self._history_report_paths())
+
+            if preview_stale:
                 table.add_row("applied", "Cleanup was applied; preview list cleared. Run Preview Junk to refresh.")
                 return
-            details = self._last_action.details or {}
-            files = list(details.get("removed_files", []))
-            dirs = list(details.get("removed_dirs", []))
-            if not files and not dirs:
+            if details is None:
+                table.add_row("none", "Run Preview Junk to list the files and folders that cleanup would touch.")
+                return
+
+            rows, remaining = _clean_preview_table_rows(details, library_path=self._library_path)
+            if not rows:
                 table.add_row("clear", "No junk files or folders were found.")
                 return
-            root_path = Path(self._library_path).expanduser()
 
-            def display(path: object) -> str:
-                text = str(path)
-                try:
-                    return str(Path(text).relative_to(root_path))
-                except ValueError:
-                    return _short_path(text)
-
-            for path in files[:100]:
-                table.add_row("file", display(path))
-            for path in dirs[:100]:
-                table.add_row("folder", display(path) + "/")
-            remaining = max(0, len(files) + len(dirs) - 200)
+            for kind, path in rows:
+                table.add_row(kind, path)
             if remaining:
                 table.add_row("more", f"{remaining:,} additional item(s) in the generated cleanup log.")
 

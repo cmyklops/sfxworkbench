@@ -165,10 +165,7 @@ def _clear_derived_columns(conn, file_id: int) -> None:
 
 def _collection_message(*, dirs: int, files: int, candidates: int, current: Path | None = None) -> str:
     location = f"; now {current}" if current is not None else ""
-    return (
-        f"Walked {dirs:,} dir(s), inspected {files:,} file(s), "
-        f"found {candidates:,} audio candidate(s){location}"
-    )
+    return f"Walked {dirs:,} dir(s), inspected {files:,} file(s), found {candidates:,} audio candidate(s){location}"
 
 
 def _scan_progress_message(
@@ -180,10 +177,7 @@ def _scan_progress_message(
     errors: int,
     current: Path | str | None = None,
 ) -> str:
-    prefix = (
-        f"Processed {processed:,}/{total:,}; indexed {scanned:,}, "
-        f"skipped {skipped:,}, errors {errors:,}"
-    )
+    prefix = f"Processed {processed:,}/{total:,}; indexed {scanned:,}, skipped {skipped:,}, errors {errors:,}"
     if current is None:
         return prefix
     name = current.name if isinstance(current, Path) else str(current)
@@ -528,7 +522,9 @@ def scan_library(
             skipped=result.skipped,
             errors=result.errors,
         )
-        progress_callback(phase, processed, total, f"{'Scan cancelled' if cancelled else 'Scan complete'}: {final_message}")
+        progress_callback(
+            phase, processed, total, f"{'Scan cancelled' if cancelled else 'Scan complete'}: {final_message}"
+        )
     if not quiet:
         state = "[yellow]Scan cancelled.[/yellow]" if cancelled else "[green]Scan complete.[/green]"
         console.print(
