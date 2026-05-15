@@ -199,6 +199,33 @@ def test_build_review_queue_preserves_status_from_plan(tmp_path: Path, tmp_db: P
     assert statuses == {"description": "approved", "keyword": "rejected"}
 
 
+def test_metadata_review_screen_falls_back_to_reviewed_entries(tmp_path: Path, tmp_db: Path) -> None:
+    import importlib.util
+
+    if importlib.util.find_spec("textual") is None:
+        import pytest
+
+        pytest.skip("Textual is not installed; install the `tui` extra to exercise this test.")
+
+    from sfxworkbench.tui_screens.metadata_review import build_metadata_review_screen
+
+    plan_path = tmp_path / "plan.json"
+    _write_plan(
+        plan_path,
+        [
+            _entry(path="/lib/a.wav", filename="a.wav", proposed_value="Rain", review_status="approved"),
+            _entry(path="/lib/b.wav", filename="b.wav", proposed_value="Boom", review_status="rejected"),
+        ],
+    )
+
+    screen = build_metadata_review_screen(plan_path, db_path=tmp_db)
+    screen._load_page()
+
+    assert screen._showing_reviewed_entries
+    assert [item.filename for item in screen.items] == ["a.wav", "b.wav"]
+    assert screen._review_mode_note().startswith("No pending suggestions remain")
+
+
 def test_build_metadata_context_shows_embedded_accepted_and_technical_rows(tmp_library: Path, tmp_db: Path) -> None:
     import sqlite3
 

@@ -51,10 +51,12 @@ def _import_registry() -> tuple[TabSpec, ...]:
         history_tab,
         metadata_tab,
         scan_tab,
+        start_tab,
     )
 
     # Order here matches the visible tab order in ``sfx tui``.
     return (
+        TabSpec(key=start_tab.KEY, label="Start", module=start_tab),
         TabSpec(key=scan_tab.KEY, label="Scan", module=scan_tab),
         TabSpec(key=clean_tab.KEY, label="Cleanup", module=clean_tab),
         TabSpec(key=dedupe_tab.KEY, label="Dedupe", module=dedupe_tab),

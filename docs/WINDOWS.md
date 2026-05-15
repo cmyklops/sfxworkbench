@@ -88,7 +88,7 @@ $env:PYTHONUTF8 = "1"
 Inside the TUI:
 
 - Set the library path to the disposable test library.
-- Run `Scan Library` first. The first scan can be slow on Windows because it reads audio metadata and hashes files; later scans skip unchanged files by `mtime + size`.
+- Start on the Start tab, then run `Quick Index` first. A full audit can be slow on Windows because it reads audio metadata and hashes files; later scans skip unchanged files by `mtime + size`.
 - Exercise the feature tabs: Scan, Cleanup, Dedupe, Metadata, Files, and History.
 - For cleanup/dedupe/delete/metadata-write actions, use preview/review steps first and keep the test library disposable.
 - In Metadata, the simplified flow is `Find Tags`, `Review Tags`, `Accept Tags & Prepare Write`, then `Write Metadata to Files`.

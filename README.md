@@ -111,13 +111,14 @@ uv sync --extra tui --extra dev
 uv run --extra tui --extra dev sfx tui --db ~/.sfxworkbench/index.db --report ~/reports
 ```
 
-The TUI opens as a feature-oriented operations workbench: Scan, Files, Clean,
-Dedupe, Organize, Metadata, Similarity, and Advanced. Buttons run the same safe
-workflow functions as the CLI: scan/full audit, junk preview/apply, dedupe and
+The TUI opens as a feature-oriented operations workbench: Start, Scan, Cleanup,
+Dedupe, Metadata, Files, and History. Buttons run the same safe workflow
+functions as the CLI: quick index/full audit, junk preview/apply, dedupe and
 pack plans, rename previews/applies/undo, DB-only metadata tag review/apply,
 sidecar export, and similarity crawl. Guarded workflows such as embedded audio
-metadata writes and permanent deletion stay in Advanced. The normal UI shows the
-library path and status; the SQLite index path is treated as an advanced cache.
+metadata writes and permanent deletion stay behind explicit confirmation. The
+normal UI shows the library path and status; the SQLite index path is treated as
+an advanced cache.
 If `--report` is omitted, the workbench looks for JSON reports beside the
 validation DB, near the last scanned library root, and in `~/reports`.
 
@@ -131,6 +132,13 @@ sfx --help
 ## Common Workflow
 
 Replace `PATH` with your copied library folder. Do not start on your only copy.
+For a friendlier first pass, see [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md)
+or run:
+
+```bash
+uv run sfx guide PATH
+uv run --extra tui --extra dev sfx tui
+```
 
 ```bash
 # 1. Remove obvious junk. Dry-run first.

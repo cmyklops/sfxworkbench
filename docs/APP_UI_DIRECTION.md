@@ -65,6 +65,8 @@ model feels trustworthy against real libraries.
 Current alpha coverage:
 
 - Dashboard signals from SQLite.
+- Start tab for first-run setup, quick indexing, full audit, and payoff-ranked
+  next steps.
 - Payoff-ranked first-pass worklist that points users toward the biggest
   cleanup/review wins before lower-impact inspection, including the matching
   CLI next action for each step.

@@ -24,6 +24,12 @@ def _fake_bwfmetaedit(tmp_path: Path) -> Path:
 
 
 def test_scan_audit_search_export_json(tmp_library, tmp_db, tmp_path) -> None:
+    guide = runner.invoke(app, ["guide", str(tmp_library), "--db", str(tmp_db), "--json"])
+    assert guide.exit_code == 0
+    guide_payload = json.loads(guide.stdout)
+    assert guide_payload["command"] == "guide"
+    assert guide_payload["steps"][0]["label"] == "Choose a copied library"
+
     scan = runner.invoke(app, ["scan", str(tmp_library), "--db", str(tmp_db), "--no-hash", "--json"])
     assert scan.exit_code == 0
     assert json.loads(scan.stdout)["command"] == "scan"

@@ -37,6 +37,7 @@ from sfxworkbench.tui_data import (
     save_library_path,
     saved_library_path,
     scan_findings,
+    start_steps,
     summarize_plan_file,
 )
 from typer.testing import CliRunner
@@ -363,6 +364,23 @@ def test_tui_feature_pages_cover_full_operations_workbench(tmp_library: Path, tm
     assert by_key["clean"].description.startswith("Remove junk")
     assert by_key["dedupe"].description.startswith("Review exact")
     assert by_key["metadata"].status == "review"
+
+
+def test_tui_start_steps_begin_with_library_and_index(tmp_library: Path, tmp_db: Path) -> None:
+    empty_steps = start_steps(tmp_db, library_path=tmp_library)
+
+    assert [step.label for step in empty_steps[:2]] == ["Choose a copied library", "Build searchable index"]
+    assert empty_steps[0].status == "clear"
+    assert empty_steps[1].status == "ready"
+    assert "Quick Index" in empty_steps[1].next_action
+
+    scan_library(tmp_library, tmp_db, skip_hash=True, quiet=True)
+    indexed_steps = start_steps(tmp_db, library_path=tmp_library)
+
+    by_key = {step.destination_key: step for step in indexed_steps}
+    assert by_key["scan"].status == "clear"
+    assert by_key["duplicates"].destination == "Dedupe"
+    assert by_key["missing_metadata"].destination == "Metadata"
 
 
 def test_tui_feature_findings_cover_each_page(tmp_library: Path, tmp_db: Path) -> None:

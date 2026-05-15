@@ -516,6 +516,7 @@ def build_metadata_review_screen(plan_path: Path, *, db_path: Path = DEFAULT_DB_
             self._page_size = 100
             self._offset = 0
             self._random_pending = False
+            self._showing_reviewed_entries = False
             # Keyed by ``(path, field, value)`` so multivalue candidates on the
             # same field are reviewed independently. Fixes the P2 bug where
             # two ``keyword`` candidates on one file would flip together.
@@ -573,6 +574,7 @@ def build_metadata_review_screen(plan_path: Path, *, db_path: Path = DEFAULT_DB_
                             placeholder="Source (substring match)",
                             id="review-filter-source",
                         )
+                    yield Static("", id="review-mode-note", classes="note")
                     yield Static(
                         "Source symbols: # filename  / path  ~ group  ^ UCS catalog/stem  * synonym",
                         classes="note",
@@ -612,6 +614,20 @@ def build_metadata_review_screen(plan_path: Path, *, db_path: Path = DEFAULT_DB_
                 pending_only=True,
                 random_pending=self._random_pending,
             )
+            self._showing_reviewed_entries = False
+            if not self.items and not self._random_pending:
+                # If every candidate has already been approved/rejected, the
+                # screen should still show the user's decisions instead of a
+                # mostly blank modal that looks broken.
+                self.items = build_review_queue(
+                    plan_path,
+                    db_path=db_path,
+                    limit=self._page_size,
+                    offset=self._offset,
+                    pending_only=False,
+                    random_pending=False,
+                )
+                self._showing_reviewed_entries = bool(self.items)
             self.file_cursor = 0
             self.candidate_cursor = 0
             self._counts_by_path.clear()
@@ -628,6 +644,16 @@ def build_metadata_review_screen(plan_path: Path, *, db_path: Path = DEFAULT_DB_
                         self._context_by_path[item.path] = build_metadata_context(item.path, db_path=db_path, conn=conn)
                 finally:
                     conn.close()
+
+        def _review_mode_note(self) -> str:
+            if self._showing_reviewed_entries:
+                return f"No pending suggestions remain in {plan_path.name}; showing reviewed entries from the plan."
+            if not self.items:
+                return (
+                    f"No reviewable tag suggestions found in {plan_path.name}. "
+                    "Run Find Tags from Metadata to rebuild the plan, or inspect History for the plan summary."
+                )
+            return "Review pending suggestions. Approve or reject values, then Save & back."
 
         def _candidate_text(self, candidate: TagCandidate, status: str) -> Text:
             return _tag_text(candidate.proposed_value, candidate.field, status=status, source=candidate.source)
@@ -775,6 +801,7 @@ def build_metadata_review_screen(plan_path: Path, *, db_path: Path = DEFAULT_DB_
             subsequent approve/reject can update a single row via
             ``_refresh_file_row`` rather than rebuilding everything.
             """
+            self.query_one("#review-mode-note", Static).update(self._review_mode_note())
             table = self.query_one("#review-files-table", DataTable)
             table.clear(columns=True)
             table.add_columns(*self.FILES_COLUMNS)
@@ -854,7 +881,7 @@ def build_metadata_review_screen(plan_path: Path, *, db_path: Path = DEFAULT_DB_
             table.add_columns("State", "Field", "Value", "Current", "Diff", "Conf")
             current = self._current_file()
             if current is None:
-                table.add_row(_state_token("info"), "", "No pending tag suggestions", "", "", "")
+                table.add_row(_state_token("info"), "Review queue", self._review_mode_note(), "", "", "")
                 return
             built: list[tuple] = []
             for candidate in self._sorted_candidates_for_display(current):

@@ -272,6 +272,7 @@ def test_windows_process_check_uses_kernel_wait_state() -> None:
 
 def test_tui_tab_registry_places_files_between_metadata_and_history() -> None:
     assert [spec.key for spec in TAB_REGISTRY] == [
+        "start",
         "scan",
         "clean",
         "dedupe",
@@ -284,6 +285,7 @@ def test_tui_tab_registry_places_files_between_metadata_and_history() -> None:
 def test_feature_tabs_no_longer_embed_history_tables() -> None:
     repo_root = Path(__file__).parents[1]
     tab_paths = [
+        repo_root / "sfxworkbench" / "tui_screens" / "start_tab.py",
         repo_root / "sfxworkbench" / "tui_screens" / "scan_tab.py",
         repo_root / "sfxworkbench" / "tui_screens" / "clean_tab.py",
         repo_root / "sfxworkbench" / "tui_screens" / "dedupe_tab.py",
@@ -357,9 +359,17 @@ def test_windows_tui_hides_textual_scrollbars() -> None:
 def test_tab_hotkeys_are_hidden_from_binding_discovery() -> None:
     app_source = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
 
-    for action in ("focus_scan", "focus_clean", "focus_dedupe", "focus_metadata", "focus_files", "focus_history"):
+    for action in (
+        "focus_start",
+        "focus_scan",
+        "focus_clean",
+        "focus_dedupe",
+        "focus_metadata",
+        "focus_files",
+        "focus_history",
+    ):
         assert f'"{action}"' in app_source
-    assert app_source.count("show=False") >= 6
+    assert app_source.count("show=False") >= 7
 
 
 def test_tui_startup_path_does_not_call_heavy_adapters() -> None:
@@ -404,9 +414,9 @@ def test_tui_lazy_mounts_inactive_tab_widgets() -> None:
     app_source = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
 
     compose_source = app_source[app_source.index("def compose") : app_source.index("def _page_widget")]
-    assert 'with ContentSwitcher(initial="scan-page", id="feature-pages")' in compose_source
-    assert 'self._page_widget("scan", self._scan_page)' in compose_source
-    for inactive_key in ("clean", "dedupe", "metadata", "files", "history"):
+    assert 'with ContentSwitcher(initial="start-page", id="feature-pages")' in compose_source
+    assert 'self._page_widget("start", self._start_page)' in compose_source
+    for inactive_key in ("scan", "clean", "dedupe", "metadata", "files", "history"):
         assert f'self._page_widget("{inactive_key}"' not in compose_source
 
     assert "def _ensure_page_mounted" in app_source

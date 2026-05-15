@@ -90,6 +90,60 @@ def _main(
 
 
 # ---------------------------------------------------------------------------
+# sfx guide
+# ---------------------------------------------------------------------------
+
+
+@app.command("guide")
+def cmd_guide(
+    ctx: typer.Context,
+    path: Annotated[Path | None, typer.Argument(help="Optional copied library folder to guide.")] = None,
+    db: Annotated[Path | None, typer.Option("--db", help="Path to the SQLite index.")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Show a safe first-run workflow for a copied sound library."""
+    from dataclasses import asdict
+
+    from rich.panel import Panel
+
+    from sfxworkbench.tui_data import preferred_library_path, start_steps
+
+    effective_db = resolve_db_path(ctx, db)
+    guide_root = str(path) if path is not None else preferred_library_path(effective_db)
+    steps = start_steps(db_path=effective_db, library_path=guide_root)
+    if json_output:
+        print(
+            json_dumps(
+                {
+                    "schema_version": 1,
+                    "command": "guide",
+                    "db_path": effective_db,
+                    "root": guide_root,
+                    "steps": [asdict(step) for step in steps],
+                }
+            )
+        )
+        return
+
+    console.print(
+        Panel.fit(
+            "Start with a copied library. Run previews and reports first; apply steps only after reviewing the plan.",
+            title="sfxworkbench first run",
+            border_style="cyan",
+        )
+    )
+    table = Table(show_lines=False)
+    table.add_column("Step", style="cyan", no_wrap=True)
+    table.add_column("State", no_wrap=True)
+    table.add_column("Signal")
+    table.add_column("Next action")
+    for step in steps:
+        table.add_row(f"{step.order}. {step.label}", step.status, step.detail, step.next_action)
+    console.print(table)
+    console.print("\nOpen the guided TUI with: [cyan]sfx tui[/cyan]")
+
+
+# ---------------------------------------------------------------------------
 # sfx compare / processed / delete / audio dual-mono
 # ---------------------------------------------------------------------------
 
@@ -235,7 +289,9 @@ def cmd_scan(
 
     effective_db = resolve_db_path(ctx, db)
     try:
-        result = scan_library(path, db_path=effective_db, skip_hash=no_hash, force_rescan=force, quiet=json_output, mode=mode)
+        result = scan_library(
+            path, db_path=effective_db, skip_hash=no_hash, force_rescan=force, quiet=json_output, mode=mode
+        )
     except ValueError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e

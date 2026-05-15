@@ -655,6 +655,15 @@ def _display_path(value: str | Path) -> str:
     return path
 
 
+def _existing_library_dir(path: str | Path | None) -> bool:
+    if path is None:
+        return False
+    text = str(path).strip()
+    if not text or text == "PATH":
+        return False
+    return Path(text).expanduser().is_dir()
+
+
 def _db_arg(db_path: Path) -> str:
     return f"--db {_quote_path(_display_path(db_path))}"
 
@@ -2408,6 +2417,17 @@ def start_steps(
     library_path: str | Path | None = None,
 ) -> list[StartStep]:
     """Return a first-run work order ranked by expected user payoff."""
+    root = _command_root(db_path, library_path)
+    quoted_root = _quote_path(_display_path(root))
+    has_library = _existing_library_dir(root)
+    try:
+        conn = get_connection(db_path)
+        try:
+            indexed_files = _count(conn, "SELECT COUNT(*) FROM files")
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        indexed_files = 0
     queues = {queue.key: queue for queue in review_queues(db_path=db_path, library_path=library_path)}
 
     def queue_count(key: str) -> int:
@@ -2418,71 +2438,95 @@ def start_steps(
     steps: list[StartStep] = [
         StartStep(
             1,
-            "Fix import health",
-            "highest",
-            "needs review" if health_count else "clear",
-            f"{queue_count('scan_errors'):,} scan errors / {queue_count('filename_issues'):,} unsafe names",
-            "Broken reads and unsafe paths can spoil every later batch change.",
-            queues["scan_errors"].next_action if queue_count("scan_errors") else queues["filename_issues"].next_action,
-            "Review",
-            "scan_errors" if queue_count("scan_errors") else "filename_issues",
+            "Choose a copied library",
+            "required",
+            "clear" if has_library else "ready",
+            _display_path(root) if has_library else "No folder selected",
+            "Start on a disposable copy so previews, quarantines, and undo logs stay low-risk.",
+            "Paste or drag a copied library folder into Library, then press Enter.",
+            "Start",
+            "library",
         ),
         StartStep(
             2,
-            "Remove exact duplicates",
-            "highest",
-            "needs review" if queue_count("duplicates") else "clear",
-            f"{queue_count('duplicates'):,} duplicate groups",
-            "This quickly reduces clutter, storage, and repeated decisions.",
-            queues["duplicates"].next_action,
-            "Review",
-            "duplicates",
+            "Build searchable index",
+            "required",
+            "clear" if indexed_files else "ready" if has_library else "not started",
+            f"{indexed_files:,} indexed files",
+            "The index powers search, audit counts, duplicate review, and every later plan.",
+            f"Quick Index button, or: uv run sfx scan {quoted_root} {_db_arg(db_path)} --mode index"
+            if has_library
+            else "Choose a library folder first.",
+            "Scan",
+            "scan",
         ),
         StartStep(
             3,
-            "Fill metadata gaps",
-            "high",
-            "ready" if queue_count("missing_metadata") else "clear",
-            f"{queue_count('missing_metadata'):,} missing BEXT+iXML",
-            "Better descriptions and embedded fields improve search in other audio tools.",
-            queues["missing_metadata"].next_action,
-            "Review",
-            "missing_metadata",
+            "Fix import health",
+            "highest",
+            "needs review" if health_count else "clear" if indexed_files else "not started",
+            f"{queue_count('scan_errors'):,} scan errors / {queue_count('filename_issues'):,} unsafe names",
+            "Broken reads and unsafe paths can spoil every later batch change.",
+            queues["scan_errors"].next_action if queue_count("scan_errors") else queues["filename_issues"].next_action,
+            "Cleanup",
+            "scan_errors" if queue_count("scan_errors") else "filename_issues",
         ),
         StartStep(
             4,
-            "Validate naming provenance",
-            "medium",
-            "ready" if queue_count("ucs_named") else "clear",
-            f"{queue_count('ucs_named'):,} UCS-looking names",
-            "UCS-looking names are useful evidence, but they should not be trusted blindly.",
-            queues["ucs_named"].next_action,
-            "Review",
-            "ucs_named",
+            "Remove exact duplicates",
+            "highest",
+            "needs review" if queue_count("duplicates") else "clear" if indexed_files else "not started",
+            f"{queue_count('duplicates'):,} duplicate groups",
+            "This quickly reduces clutter, storage, and repeated decisions.",
+            queues["duplicates"].next_action,
+            "Dedupe",
+            "duplicates",
         ),
         StartStep(
             5,
+            "Fill metadata gaps",
+            "high",
+            "ready" if queue_count("missing_metadata") else "clear" if indexed_files else "not started",
+            f"{queue_count('missing_metadata'):,} missing BEXT+iXML",
+            "Better descriptions and embedded fields improve search in other audio tools.",
+            queues["missing_metadata"].next_action,
+            "Metadata",
+            "missing_metadata",
+        ),
+        StartStep(
+            6,
+            "Validate naming provenance",
+            "medium",
+            "ready" if queue_count("ucs_named") else "clear" if indexed_files else "not started",
+            f"{queue_count('ucs_named'):,} UCS-looking names",
+            "UCS-looking names are useful evidence, but they should not be trusted blindly.",
+            queues["ucs_named"].next_action,
+            "Metadata",
+            "ucs_named",
+        ),
+        StartStep(
+            7,
             "Inspect accepted tags",
             "medium",
             "ready" if queue_count("db_only_tags") else "not started",
             f"{queue_count('db_only_tags'):,} accepted DB-only tags",
             "Accepted tags are decisions worth checking before export or embedding.",
             queues["db_only_tags"].next_action,
-            "Review",
+            "Metadata",
             "db_only_tags",
         ),
         StartStep(
-            6,
+            8,
             "Browse reports and logs",
             "supporting",
-            "available",
+            "available" if indexed_files else "not started",
             "Reports, plans, logs",
             "Use generated evidence to understand what changed and what is still pending.",
             "Pass report paths with: uv run sfx tui --db "
             + _quote_path(_display_path(db_path))
             + " --report ~/reports",
             "Reports",
-            "",
+            "history",
         ),
     ]
     return steps

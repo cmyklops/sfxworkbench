@@ -81,6 +81,7 @@ from sfxworkbench.tui_text import _tag_text as _tag_text
 from sfxworkbench.tui_text import _tags_cell as _tags_cell
 
 _FEATURES: tuple[tuple[str, str], ...] = (
+    ("start", "Start"),
     ("scan", "Scan"),
     ("clean", "Cleanup"),
     ("dedupe", "Dedupe"),
@@ -90,6 +91,10 @@ _FEATURES: tuple[tuple[str, str], ...] = (
 )
 
 _PAGE_HEADERS = {
+    "start": (
+        "Start",
+        "Follow a safe first pass: choose a copied library, index it, then review before applying changes.",
+    ),
     "scan": (
         "Scan",
         "Refresh the SQLite index and generate read-only reports that feed the rest of the workbench.",
@@ -796,12 +801,13 @@ def run_tui(
         BINDINGS = [
             ("q", "quit", "Quit"),
             ("r", "refresh", "Refresh"),
-            Binding("1", "focus_scan", "Scan", show=False),
-            Binding("2", "focus_clean", "Cleanup", show=False),
-            Binding("3", "focus_dedupe", "Dedupe", show=False),
-            Binding("4", "focus_metadata", "Metadata", show=False),
-            Binding("5", "focus_files", "Files", show=False),
-            Binding("6", "focus_history", "History", show=False),
+            Binding("1", "focus_start", "Start", show=False),
+            Binding("2", "focus_scan", "Scan", show=False),
+            Binding("3", "focus_clean", "Cleanup", show=False),
+            Binding("4", "focus_dedupe", "Dedupe", show=False),
+            Binding("5", "focus_metadata", "Metadata", show=False),
+            Binding("6", "focus_files", "Files", show=False),
+            Binding("7", "focus_history", "History", show=False),
             ("s", "focus_file_search", "Search"),
             # PR #14: push the two-pane review screen for the most recent tag plan.
             ("R", "open_metadata_review", "Review tags"),
@@ -849,6 +855,7 @@ def run_tui(
             self._progress_last_emit_phase = ""
             self._progress_last_emit_percent: int | None = None
             self._file_rows = []
+            self._start_rows = []
             self._history_rows = []
             self._history_query = ""
             self._history_feature_filter = ""
@@ -875,7 +882,7 @@ def run_tui(
             self._metadata_prewarmed_rows_by_key: dict[tuple[object, ...], list] = {}
             self._dedupe_query = ""
             self._dedupe_search_debounce = None
-            self._mounted_tabs: set[str] = {"scan"}
+            self._mounted_tabs: set[str] = {"start"}
             self._status_pages_cache = None
             self._status_indexed_gb_cache: float | None = None
             self._scan_findings_cache = None
@@ -883,7 +890,7 @@ def run_tui(
             # next sees them. ``_refresh()`` marks all six; activation drains a
             # tab's dirty flag by filling it. Tabs the user never opens stay
             # dirty and skip the work entirely.
-            self._dirty_tabs: set[str] = {"clean", "dedupe", "metadata", "files", "history"}
+            self._dirty_tabs: set[str] = {"scan", "clean", "dedupe", "metadata", "files", "history"}
             # Tier 3.8: file paths the user has selected on the Files tab (via
             # space-toggle). Persists across tab switches; cleared automatically
             # on scan completion since the index is rebuilding. Apply action
@@ -923,12 +930,12 @@ def run_tui(
                     yield Button("Refresh", id="refresh-all")
                 yield Static("", id="library-status-buffer")
                 yield Static("", id="status-strip")
-            yield Tabs(*(Tab(label, id=key) for key, label in _FEATURES), active="scan", id="feature-tabs")
+            yield Tabs(*(Tab(label, id=key) for key, label in _FEATURES), active="start", id="feature-tabs")
             with Horizontal(id="operation-row"):
                 yield Static("", id="operation-strip")
                 yield Button("Cancel", id="cancel-action", disabled=True)
-            with ContentSwitcher(initial="scan-page", id="feature-pages"):
-                yield self._page_widget("scan", self._scan_page)
+            with ContentSwitcher(initial="start-page", id="feature-pages"):
+                yield self._page_widget("start", self._start_page)
 
         def _page_widget(self, key: str, factory) -> VerticalScroll:
             class FeaturePage(VerticalScroll):
@@ -940,6 +947,7 @@ def run_tui(
 
         def _page_factory_for_key(self, key: str):
             return {
+                "start": self._start_page,
                 "scan": self._scan_page,
                 "clean": self._clean_page,
                 "dedupe": self._dedupe_page,
@@ -1008,6 +1016,11 @@ def run_tui(
             yield Static(title, classes="pane-title")
             yield DataTable(id=table_id)
 
+        def _start_page(self) -> ComposeResult:
+            from sfxworkbench.tui_screens import start_tab
+
+            yield from start_tab.compose(self)
+
         def _scan_page(self) -> ComposeResult:
             from sfxworkbench.tui_screens import scan_tab
 
@@ -1042,7 +1055,7 @@ def run_tui(
             self._last_compact = self._compact
             self.query_one("#status-strip", Static).update("Loading index summary…")
             self.query_one("#operation-strip", Static).update("No action is running.")
-            self._fill_scan_loading()
+            self._fill_start_loading()
             self.query_one("#feature-tabs", Tabs).focus()
             self._start_artifact_sync(materialize=True)
             self.set_timer(0.01, self._start_initial_load)
@@ -1052,19 +1065,22 @@ def run_tui(
                 try:
                     pages = feature_pages(db_path=db_path, config_path=config_path)
                     indexed_gb = indexed_library_size_gb(db_path)
-                    from sfxworkbench.tui_data import scan_findings
+                    from sfxworkbench.tui_data import scan_findings, start_steps
 
                     findings = scan_findings(db_path=db_path, config_path=config_path)
-                    self.call_from_thread(self._finish_initial_load, pages, indexed_gb, findings, None)
+                    steps = start_steps(db_path=db_path, library_path=self._library_path)
+                    self.call_from_thread(self._finish_initial_load, pages, indexed_gb, findings, steps, None)
                 except Exception as exc:  # pragma: no cover - defensive thread boundary
                     try:
-                        self.call_from_thread(self._finish_initial_load, None, None, None, str(exc))
+                        self.call_from_thread(self._finish_initial_load, None, None, None, None, str(exc))
                     except RuntimeError:
                         pass
 
             threading.Thread(target=_load, daemon=True).start()
 
-        def _finish_initial_load(self, pages, indexed_gb: float | None, scan_findings_rows, error: str | None) -> None:
+        def _finish_initial_load(
+            self, pages, indexed_gb: float | None, scan_findings_rows, start_rows, error: str | None
+        ) -> None:
             if error is not None:
                 self.query_one("#status-strip", Static).update(f"Index summary failed: {error}")
                 return
@@ -1073,7 +1089,7 @@ def run_tui(
             self._scan_findings_cache = scan_findings_rows
             self._fill_status_strip(use_cache=True)
             self._fill_operation_strip()
-            self._fill_scan_from_rows(scan_findings_rows)
+            self._fill_start_from_rows(start_rows)
             self._update_button_locks()
             self.query_one("#feature-tabs", Tabs).focus()
 
@@ -1104,6 +1120,9 @@ def run_tui(
 
         def action_refresh(self) -> None:
             self._refresh()
+
+        def action_focus_start(self) -> None:
+            self._open_feature("start")
 
         def action_focus_scan(self) -> None:
             self._open_feature("scan")
@@ -1699,6 +1718,28 @@ def run_tui(
             self.query_one("#file-search", Input).value = ""
             self._fill_files()
 
+        def _open_start_step(self, row_index: int | None) -> None:
+            """Jump from the Start worklist to the tab that owns the selected step."""
+            if row_index is None or row_index < 0 or row_index >= len(self._start_rows):
+                return
+            row = self._start_rows[row_index]
+            destination = {
+                "library": "library",
+                "scan": "scan",
+                "scan_errors": "clean",
+                "filename_issues": "clean",
+                "duplicates": "dedupe",
+                "missing_metadata": "metadata",
+                "ucs_named": "metadata",
+                "db_only_tags": "metadata",
+                "history": "history",
+            }.get(row.destination_key, row.destination.casefold())
+            if destination == "library":
+                self.query_one("#library-path-input", Input).focus()
+                return
+            if destination in {"start", "scan", "clean", "dedupe", "metadata", "files", "history"}:
+                self._open_feature(destination)
+
         def on_button_pressed(self, event: Button.Pressed) -> None:
             button_id = event.button.id or ""
             lock = self._button_lock_state(button_id)
@@ -1718,13 +1759,17 @@ def run_tui(
                 handler()
 
         def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-            if event.data_table.id == "files-table":
+            if event.data_table.id == "start-steps-table":
+                self._open_start_step(event.cursor_row)
+            elif event.data_table.id == "files-table":
                 self._show_file_detail(event.cursor_row)
             elif event.data_table.id == "history-table":
                 self._show_history_detail(event.cursor_row, event.row_key)
 
         def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
-            if event.data_table.id == "files-table":
+            if event.data_table.id == "start-steps-table":
+                self._open_start_step(event.coordinate.row)
+            elif event.data_table.id == "files-table":
                 self._show_file_detail(event.coordinate.row)
             elif event.data_table.id == "history-table":
                 self._show_history_detail(event.coordinate.row, event.cell_key.row_key)
@@ -2223,7 +2268,7 @@ def run_tui(
 
         def _active_feature(self) -> str:
             active = self.query_one("#feature-tabs", Tabs).active
-            return str(active or "scan")
+            return str(active or "start")
 
         def _invalidate_all_tabs(self) -> None:
             """Mark every tab dirty so each gets re-filled on its next view."""
@@ -2252,6 +2297,7 @@ def run_tui(
                 keys.add("history")
             if keys:
                 keys.add("scan")
+                keys.add("start")
             self._dirty_tabs.update(keys)
 
         def _ensure_tab_filled(self, key: str) -> None:
@@ -2274,6 +2320,7 @@ def run_tui(
             directly) without bookkeeping.
             """
             method_name = {
+                "start": "_fill_start",
                 "scan": "_fill_scan",
                 "files": "_fill_files",
                 "clean": "_fill_clean",
@@ -2433,6 +2480,23 @@ def run_tui(
                 table.add_row(
                     row.label, _fmt(row.count), _state_token(_finding_status(row.status, row.count)), row.detail
                 )
+
+        def _fill_start(self) -> None:
+            from sfxworkbench.tui_screens import start_tab
+
+            start_tab.fill(self)
+            self._dirty_tabs.discard("start")
+
+        def _fill_start_loading(self) -> None:
+            from sfxworkbench.tui_screens import start_tab
+
+            start_tab.fill_loading(self)
+
+        def _fill_start_from_rows(self, rows) -> None:
+            from sfxworkbench.tui_screens import start_tab
+
+            start_tab.fill_rows(self, rows or [])
+            self._dirty_tabs.discard("start")
 
         def _fill_scan(self) -> None:
             from sfxworkbench.tui_screens import scan_tab
