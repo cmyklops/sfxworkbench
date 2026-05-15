@@ -28,7 +28,7 @@ Run apply/undo workflows only against a disposable copy until the Windows smoke 
 
 Use Windows Terminal or PowerShell against a disposable copy of a sound library. Do not point first-run testing at a production library.
 
-For the simplest setup, open normal PowerShell, not as Administrator, and run:
+For the simplest setup, open normal PowerShell, not as Administrator, and paste only this line. Do not add `powershell` before it:
 
 ```powershell
 irm https://raw.githubusercontent.com/cmyklops/sfxworkbench/main/scripts/install-windows-tui.ps1 | iex

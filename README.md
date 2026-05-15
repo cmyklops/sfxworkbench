@@ -62,9 +62,13 @@ When in doubt, run the preview command and inspect the report before applying.
 
 Fast TUI setup for internal testers:
 
+Windows PowerShell - paste only this line, without adding `powershell` before it:
+
 ```powershell
 irm https://raw.githubusercontent.com/cmyklops/sfxworkbench/main/scripts/install-windows-tui.ps1 | iex
 ```
+
+macOS Terminal:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cmyklops/sfxworkbench/main/scripts/install-macos-tui.sh | bash
