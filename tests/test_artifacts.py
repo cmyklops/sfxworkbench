@@ -241,25 +241,25 @@ def test_artifact_sync_handles_portable_path_characters(tmp_path: Path, tmp_db: 
         "space name_rename_plan.json",
         "100%_rename_plan.json",
         "under_score_rename_plan.json",
-        "C:\\Reports\\rename_plan.json",
-        "drive_C:_rename_plan.json",
     ]
+    if tmp_path.drive:
+        names.extend(["C_Reports_rename_plan.json", "drive_C_rename_plan.json"])
+    else:
+        names.extend(["C:\\Reports\\rename_plan.json", "drive_C:_rename_plan.json"])
+
     for name in names:
-        (tmp_path / name).write_text(json.dumps({"pattern": "portable", "entries": [{"old_path": name}]}))
+        artifact_path = tmp_path / name
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text(json.dumps({"pattern": "portable", "entries": [{"old_path": name}]}))
 
     result = sync_artifacts_from_paths(tmp_db, [tmp_path])
+    expected_names = {Path(tmp_path / name).name for name in names}
     registered = {Path(row.path).name for row in list_artifacts(tmp_db, limit=20)}
 
     assert result.registered == len(names)
-    assert set(names) <= registered
+    assert expected_names <= registered
     assert [Path(row.path).name for row in list_artifacts(tmp_db, query="%", limit=20)] == ["100%_rename_plan.json"]
-    assert {Path(row.path).name for row in list_artifacts(tmp_db, query="_", limit=20)} == {
-        "drive_C:_rename_plan.json",
-        "under_score_rename_plan.json",
-        "100%_rename_plan.json",
-        "space name_rename_plan.json",
-        "C:\\Reports\\rename_plan.json",
-    }
+    assert {Path(row.path).name for row in list_artifacts(tmp_db, query="_", limit=20)} == expected_names
 
 
 def test_artifact_sync_marks_windows_style_stored_paths_missing_on_posix(tmp_db: Path) -> None:
