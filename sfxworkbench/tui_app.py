@@ -360,27 +360,96 @@ def _latest_json_across(paths: list[Path], *patterns: str) -> Path | None:
     return sorted(matches, key=lambda candidate: candidate.stat().st_mtime, reverse=True)[0]
 
 
-def _latest_clean_preview_details(report_paths: list[Path]) -> tuple[dict | None, bool]:
-    preview = _latest_json_across(report_paths, "clean_preview_*.json")
-    if preview is None:
-        return None, False
-    apply_log = _latest_json_across(report_paths, "clean_apply_*.json")
+_CLEANUP_PREVIEW_FILES: tuple[tuple[str, str], ...] = (
+    ("clean_preview", "clean_preview_*.json"),
+    ("rename_preview", "portable_rename_plan.json"),
+    ("organize_audit", "organize_report.json"),
+    ("organize_nesting_audit", "redundant_nesting_report.json"),
+    ("organize_nesting_plan", "nesting_plan.json"),
+)
+_CLEANUP_PREVIEW_TITLES: dict[str, str] = {
+    "clean_preview": "Previewed Junk",
+    "rename_preview": "Previewed Name Cleanup",
+    "organize_audit": "Previewed Folder Cleanup",
+    "organize_nesting_audit": "Nested Folder Candidates",
+    "organize_nesting_plan": "Nesting Plan Preview",
+}
+_CLEANUP_APPLY_ACTIONS: dict[str, str] = {
+    "clean_apply": "Junk cleanup was applied; run Preview Junk to refresh.",
+    "rename_apply": "Name cleanup was applied; run Preview Name Cleanup to refresh.",
+    "organize_apply": "Folder cleanup was applied; run Preview Folder Cleanup to refresh.",
+    "organize_nesting_apply": "Nesting cleanup was applied; run Find Nested Folders or Build Nesting Plan to refresh.",
+}
+
+
+def _cleanup_preview_title(action: str | None) -> str:
+    return _CLEANUP_PREVIEW_TITLES.get(str(action or ""), "Latest Cleanup Preview")
+
+
+def _preview_report_paths(report_paths: list[Path]) -> list[Path]:
+    paths = list(report_paths)
+    for path in report_paths:
+        log_path = path / APPLY_LOG_DIR_NAME
+        if log_path.exists():
+            paths.append(log_path)
+    return paths
+
+
+def _latest_cleanup_preview_details(report_paths: list[Path]) -> tuple[str | None, dict | None, bool]:
+    paths = _preview_report_paths(report_paths)
+    candidates: list[tuple[float, str, Path]] = []
+    for action, pattern in _CLEANUP_PREVIEW_FILES:
+        preview = _latest_json_across(paths, pattern)
+        if preview is not None:
+            candidates.append((preview.stat().st_mtime, action, preview))
+    if not candidates:
+        return None, None, False
+
+    _mtime, action, preview = sorted(candidates, key=lambda item: item[0], reverse=True)[0]
+    stale_patterns = {
+        "clean_preview": ("clean_apply_*.json",),
+        "rename_preview": ("rename_log_*.json",),
+        "organize_audit": ("organize_log_*.json",),
+        "organize_nesting_audit": ("nesting_log_*.json",),
+        "organize_nesting_plan": ("nesting_log_*.json",),
+    }.get(action, ())
+    apply_log = _latest_json_across(paths, *stale_patterns) if stale_patterns else None
     if apply_log is not None and apply_log.stat().st_mtime > preview.stat().st_mtime:
-        return None, True
+        return action, None, True
     try:
         payload = json.loads(preview.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return None, None, False
+    if not isinstance(payload, dict):
+        return None, None, False
+    if action == "clean_preview" and not bool(payload.get("dry_run")):
+        return None, None, False
+    return action, payload, False
+
+
+def _latest_clean_preview_details(report_paths: list[Path]) -> tuple[dict | None, bool]:
+    action, details, stale = _latest_cleanup_preview_details(report_paths)
+    if action != "clean_preview":
         return None, False
-    if not isinstance(payload, dict) or not bool(payload.get("dry_run")):
-        return None, False
-    return payload, False
+    return details, stale
+
+
+def _preview_display_path(path: str, root_path: Path) -> str:
+    try:
+        return str(Path(path).relative_to(root_path))
+    except ValueError:
+        return _short_path(path)
+
+
+def _preview_move_text(old_path: str, new_path: str | None, root_path: Path) -> str:
+    old_display = _preview_display_path(old_path, root_path)
+    if not new_path:
+        return old_display
+    return f"{old_display} -> {_preview_display_path(new_path, root_path)}"
 
 
 def _clean_preview_table_rows(
-    details: dict,
-    *,
-    library_path: str | Path,
-    per_type_limit: int = 100,
+    details: dict, *, library_path: str | Path, per_type_limit: int = 100
 ) -> tuple[list[tuple[str, str]], int]:
     root_path = Path(library_path).expanduser()
 
@@ -390,18 +459,71 @@ def _clean_preview_table_rows(
             return []
         return [str(item) for item in value if str(item).strip()]
 
-    def display(path: str) -> str:
-        try:
-            return str(Path(path).relative_to(root_path))
-        except ValueError:
-            return _short_path(path)
-
     files = paths("removed_files")
     dirs = paths("removed_dirs")
-    rows = [("file", display(path)) for path in files[:per_type_limit]]
-    rows.extend(("folder", display(path) + "/") for path in dirs[:per_type_limit])
+    rows = [("file", _preview_display_path(path, root_path)) for path in files[:per_type_limit]]
+    rows.extend(("folder", _preview_display_path(path, root_path) + "/") for path in dirs[:per_type_limit])
     shown = min(len(files), per_type_limit) + min(len(dirs), per_type_limit)
     return rows, max(0, len(files) + len(dirs) - shown)
+
+
+def _cleanup_preview_table_rows(
+    action: str,
+    details: dict,
+    *,
+    library_path: str | Path,
+    per_type_limit: int = 100,
+) -> tuple[list[tuple[str, str]], int]:
+    if action == "clean_preview":
+        return _clean_preview_table_rows(details, library_path=library_path, per_type_limit=per_type_limit)
+
+    root_path = Path(library_path).expanduser()
+
+    def dicts(key: str) -> list[dict]:
+        value = details.get(key, [])
+        if not isinstance(value, list):
+            return []
+        return [item for item in value if isinstance(item, dict)]
+
+    if action == "rename_preview":
+        entries = dicts("entries")
+        rows = [
+            ("rename", _preview_move_text(str(entry.get("old_path", "")), str(entry.get("new_path", "")), root_path))
+            for entry in entries[:per_type_limit]
+        ]
+        return rows, max(0, len(entries) - len(rows))
+
+    if action == "organize_audit":
+        entries = dicts("entries")
+        rows = [
+            ("folder", _preview_move_text(str(entry.get("old_path", "")), str(entry.get("new_path", "")), root_path))
+            for entry in entries[:per_type_limit]
+        ]
+        return rows, max(0, len(entries) - len(rows))
+
+    if action == "organize_nesting_audit":
+        candidates = dicts("candidates")
+        rows = [
+            (
+                str(candidate.get("kind", "candidate")),
+                _preview_move_text(str(candidate.get("path", "")), str(candidate.get("target_path") or ""), root_path),
+            )
+            for candidate in candidates[:per_type_limit]
+        ]
+        return rows, max(0, len(candidates) - len(rows))
+
+    if action == "organize_nesting_plan":
+        entries = dicts("entries")
+        rows = [
+            (
+                str(entry.get("kind", "nesting")),
+                _preview_move_text(str(entry.get("source_path", "")), str(entry.get("target_path", "")), root_path),
+            )
+            for entry in entries[:per_type_limit]
+        ]
+        return rows, max(0, len(entries) - len(rows))
+
+    return [], 0
 
 
 def _json_has_work(
@@ -766,6 +888,7 @@ def run_tui(
         }
         .cleanup-workflow-label {
             width: 30;
+            height: auto;
             padding-right: 2;
         }
         .cleanup-workflow-title {
@@ -1065,7 +1188,7 @@ def run_tui(
 
         def _titled_table(self, title: str, table_id: str) -> ComposeResult:
             """Yield a ``Static`` pane-title followed by an empty ``DataTable``."""
-            yield Static(title, classes="pane-title")
+            yield Static(title, id=f"{table_id}-title", classes="pane-title")
             yield DataTable(id=table_id)
 
         def _start_page(self) -> ComposeResult:
@@ -1516,7 +1639,7 @@ def run_tui(
                 _confirm(
                     "clean_apply",
                     "Apply Junk Cleanup",
-                    "This removes known junk files and folders. Recommended first: run Preview Junk and inspect the Previewed Junk table.",
+                    "This removes known junk files and folders. Recommended first: run Preview Junk and inspect the latest cleanup preview table.",
                     lambda: clean_action(
                         root,
                         self._report_dir,
@@ -1586,7 +1709,12 @@ def run_tui(
                 _start(
                     "rename_preview",
                     "Preview Name Cleanup",
-                    lambda: rename_preview_action(root, self._report_dir, pattern="portable"),
+                    lambda: rename_preview_action(
+                        root,
+                        self._report_dir,
+                        pattern="portable",
+                        progress_callback=pcb,
+                    ),
                 )
 
             handlers["organize-rename-preview"] = _h_rename_preview
@@ -2198,9 +2326,12 @@ def run_tui(
             self._running_job_id = None
             self._cancel_requested = False
             self._reset_action_progress()
+            self._last_action = result
             self._set_action_buttons_disabled(False)
             self.query_one("#cancel-action", Button).disabled = True
-            self._run_action(result, job_id=job_id)
+            self._fill_operation_strip()
+            self._fill_action_result()
+            self.set_timer(0.01, lambda: self._run_action(result, job_id=job_id))
 
         def _run_action(self, result: ActionResult, *, job_id: int | None = None) -> None:
             self._last_action = result
@@ -2575,31 +2706,37 @@ def run_tui(
 
         def _fill_clean_items(self) -> None:
             table = self._reset_table("clean-items-table", ("Type", "Path"))
+            title = self.query_one("#clean-items-table-title", Static)
+            action: str | None = None
             details: dict | None = None
             preview_stale = False
-            if self._last_action is not None and self._last_action.action == "clean_preview":
+            stale_message = "Cleanup was applied; run the matching preview to refresh."
+            if self._last_action is not None and self._last_action.action in _CLEANUP_PREVIEW_TITLES:
+                action = self._last_action.action
                 details = self._last_action.details or {}
-            elif self._last_action is not None and self._last_action.action == "clean_apply":
+            elif self._last_action is not None and self._last_action.action in _CLEANUP_APPLY_ACTIONS:
                 preview_stale = True
+                stale_message = _CLEANUP_APPLY_ACTIONS[self._last_action.action]
             else:
-                details, preview_stale = _latest_clean_preview_details(self._history_report_paths())
+                action, details, preview_stale = _latest_cleanup_preview_details(self._history_report_paths())
 
+            title.update(_cleanup_preview_title(action))
             if preview_stale:
-                table.add_row("applied", "Cleanup was applied; preview list cleared. Run Preview Junk to refresh.")
+                table.add_row("applied", stale_message)
                 return
             if details is None:
-                table.add_row("none", "Run Preview Junk to list the files and folders that cleanup would touch.")
+                table.add_row("none", "Run a cleanup preview to list the paths that action would touch.")
                 return
 
-            rows, remaining = _clean_preview_table_rows(details, library_path=self._library_path)
+            rows, remaining = _cleanup_preview_table_rows(action or "", details, library_path=self._library_path)
             if not rows:
-                table.add_row("clear", "No junk files or folders were found.")
+                table.add_row("clear", f"No rows were found for {_cleanup_preview_title(action).lower()}.")
                 return
 
             for kind, path in rows:
                 table.add_row(kind, path)
             if remaining:
-                table.add_row("more", f"{remaining:,} additional item(s) in the generated cleanup log.")
+                table.add_row("more", f"{remaining:,} additional item(s) in the generated preview.")
 
         def _fill_dedupe(self) -> None:
             from sfxworkbench.tui_screens import dedupe_tab

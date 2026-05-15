@@ -13,10 +13,13 @@ from sfxworkbench.tui_app import (
     _button_flow_rows,
     _button_lock_state,
     _clean_preview_table_rows,
+    _cleanup_preview_table_rows,
+    _cleanup_preview_title,
     _desktop_open_command,
     _finding_status,
     _format_duration,
     _latest_clean_preview_details,
+    _latest_cleanup_preview_details,
     _latest_metadata_tag_plan,
     _latest_quarantine_dir_from_reports,
     _progress_eta_label,
@@ -190,6 +193,44 @@ def test_clean_preview_table_rows_show_only_kind_and_relative_path(tmp_path: Pat
     assert remaining == 0
 
 
+def test_cleanup_preview_table_rows_follow_rename_preview(tmp_path: Path) -> None:
+    library = tmp_path / "library"
+    details = {
+        "entries": [
+            {
+                "old_path": str(library / "Bad Names" / " bad hit.wav"),
+                "new_path": str(library / "Bad Names" / "bad hit.wav"),
+            }
+        ]
+    }
+
+    rows, remaining = _cleanup_preview_table_rows("rename_preview", details, library_path=library)
+
+    assert _cleanup_preview_title("rename_preview") == "Previewed Name Cleanup"
+    assert rows == [("rename", f"{Path('Bad Names') / ' bad hit.wav'} -> {Path('Bad Names') / 'bad hit.wav'}")]
+    assert remaining == 0
+
+
+def test_latest_cleanup_preview_uses_most_recent_preview_file(tmp_path: Path) -> None:
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    clean_preview = report_dir / "clean_preview_20260515_120000.json"
+    rename_preview = report_dir / "portable_rename_plan.json"
+    clean_preview.write_text(json.dumps({"dry_run": True, "removed_files": ["._Hit.wav"]}), encoding="utf-8")
+    rename_preview.write_text(
+        json.dumps({"entries": [{"old_path": "bad.wav", "new_path": "good.wav"}]}), encoding="utf-8"
+    )
+    os.utime(clean_preview, (100.0, 100.0))
+    os.utime(rename_preview, (200.0, 200.0))
+
+    action, details, stale = _latest_cleanup_preview_details([report_dir])
+
+    assert action == "rename_preview"
+    assert details is not None
+    assert details["entries"]
+    assert stale is False
+
+
 def test_latest_clean_preview_ignores_preview_after_newer_apply(tmp_path: Path) -> None:
     report_dir = tmp_path / "reports"
     report_dir.mkdir()
@@ -359,6 +400,15 @@ def test_top_meta_group_precedes_tabs() -> None:
     assert status_strip.index("for index, page in enumerate(pages):") < status_strip.index('"  reports dir: "')
 
 
+def test_worker_completion_clears_running_strip_before_post_action_bookkeeping() -> None:
+    app_source = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
+    finish_block = app_source[app_source.index("def _finish_running_action") : app_source.index("def _run_action")]
+
+    assert "self._last_action = result" in finish_block
+    assert finish_block.index("self._fill_operation_strip()") < finish_block.index("self.set_timer")
+    assert "self.set_timer(0.01, lambda: self._run_action(result, job_id=job_id))" in finish_block
+
+
 def test_keybind_footer_is_hidden_on_startup() -> None:
     app_source = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
 
@@ -490,6 +540,13 @@ def test_undo_buttons_use_primary_variant() -> None:
     ):
         assert f'"{button_id}", "primary"' in clean_text
     assert '"metadata-write-undo", "primary"' in metadata_text
+
+
+def test_cleanup_workflow_labels_do_not_expand_rows() -> None:
+    app_text = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
+    label_block = app_text[app_text.index(".cleanup-workflow-label {") : app_text.index(".cleanup-workflow-title {")]
+
+    assert "height: auto;" in label_block
 
 
 def test_metadata_paging_buttons_live_only_in_review_screen() -> None:

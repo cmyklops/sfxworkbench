@@ -509,7 +509,9 @@ def build_tag_plan(
             progress_callback=progress_callback,
             cancel_requested=cancel_requested,
         )
-    return _plan_from_suggestion_report(
+    if progress_callback is not None:
+        progress_callback("planning", 0, None, "Building reviewed tag plan from suggestions")
+    plan = _plan_from_suggestion_report(
         report,
         db_path=db_path,
         source_report=source_report,
@@ -517,6 +519,14 @@ def build_tag_plan(
         sources=sources,
         fields=fields,
     )
+    if progress_callback is not None:
+        progress_callback(
+            "planning",
+            len(plan.entries),
+            len(plan.entries),
+            f"Built reviewed tag plan with {plan.summary.add_entries:,} planned DB tag write(s)",
+        )
+    return plan
 
 
 def write_tag_plan(plan: TagPlan, output_path: Path | None = None, quiet: bool = False) -> Path:
@@ -888,6 +898,8 @@ def apply_tag_plan(
                 extra={"db_path": str(effective_db)},
             )
         if not dry_run:
+            if progress_callback is not None:
+                progress_callback("updating_index", result.applied, total_entries, "Recording tag apply history")
             conn.execute(
                 """
                 INSERT INTO tag_apply_log (plan_path, db_path, dry_run, generated_at, result_json)
@@ -902,6 +914,10 @@ def apply_tag_plan(
                 ),
             )
             conn.commit()
+    if log_path is not None and log_payload is not None:
+        if progress_callback is not None:
+            progress_callback("writing_log", 0, None, f"Writing tag apply log to {log_path.name}")
+        atomic_write_json(log_path, log_payload)
     if progress_callback is not None:
         completed_entries = (
             min(result.applied + result.skipped + len(result.errors), total_entries)
@@ -920,8 +936,6 @@ def apply_tag_plan(
                 errors=len(result.errors),
             ),
         )
-    if log_path is not None and log_payload is not None:
-        atomic_write_json(log_path, log_payload)
     if not quiet:
         show_tag_apply_result(result)
     return result

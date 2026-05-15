@@ -354,6 +354,53 @@ def test_apply_dedupe_can_require_reviewed_plan(tmp_path: Path) -> None:
     assert not b.exists()
 
 
+def test_apply_dedupe_reports_finalizing_steps_before_complete(tmp_path: Path, tmp_db: Path) -> None:
+    keep = tmp_path / "keep.wav"
+    drop = tmp_path / "drop.wav"
+    keep.write_bytes(b"audio")
+    drop.write_bytes(b"audio")
+    _seed_files(
+        tmp_db,
+        [
+            {"path": str(keep), "md5": "AAA", "size": keep.stat().st_size},
+            {"path": str(drop), "md5": "AAA", "size": drop.stat().st_size},
+        ],
+    )
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "groups": [
+                    [
+                        {"path": str(keep), "action": "keep", "size_bytes": keep.stat().st_size},
+                        {"path": str(drop), "action": "remove", "size_bytes": drop.stat().st_size},
+                    ]
+                ]
+            }
+        )
+    )
+    review_dedupe_plan(plan_path, approve_all=True, quiet=True)
+    events: list[tuple[str, int, int | None, str]] = []
+
+    result = apply_dedupe_plan(
+        plan_path,
+        db_path=tmp_db,
+        dry_run=False,
+        quarantine_dir=tmp_path / "quarantine",
+        require_reviewed=True,
+        quiet=True,
+        log_path=tmp_path / "dedupe_log.json",
+        progress_callback=lambda phase, completed, total, message: events.append((phase, completed, total, message)),
+    )
+
+    phases = [phase for phase, _completed, _total, _message in events]
+    assert result.quarantined == 1
+    assert "updating_index" in phases
+    assert "writing_log" in phases
+    assert phases[-1] == "complete"
+    assert phases.index("updating_index") < phases.index("writing_log") < len(phases) - 1
+
+
 def test_apply_dedupe_refuses_cli_safe_folder_even_for_old_plan(tmp_path: Path) -> None:
     a = tmp_path / "keep.wav"
     b = tmp_path / "Protected" / "drop.wav"

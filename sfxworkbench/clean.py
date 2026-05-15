@@ -43,6 +43,12 @@ def _clean_apply_message(
     return f"{message}; current {current.name}" if current is not None else message
 
 
+def _clean_finalizing_message(*, deleted_paths: int, removed_rows: int | None = None) -> str:
+    if removed_rows is None:
+        return f"Updating index for {deleted_paths:,} removed junk path(s)"
+    return f"Updated index for {deleted_paths:,} removed junk path(s); dropped {removed_rows:,} stale row(s)"
+
+
 def find_junk(
     root: Path,
     quiet: bool = False,
@@ -292,12 +298,45 @@ def clean_library(
                 if completed % 50 == 0 and cancel_requested is not None and cancel_requested():
                     cancelled = True
                     break
-        if db_path is not None and (result.removed_files or result.removed_dirs):
-            _drop_indexed_rows_under(
-                db_path,
-                [Path(p) for p in result.removed_files] + [Path(p) for p in result.removed_dirs],
-            )
-    elif progress_callback is not None:
+        deleted_paths = [Path(p) for p in result.removed_files] + [Path(p) for p in result.removed_dirs]
+        if db_path is not None and deleted_paths:
+            if progress_callback is not None:
+                progress_callback(
+                    "updating_index",
+                    0,
+                    None,
+                    _clean_finalizing_message(deleted_paths=len(deleted_paths)),
+                )
+            removed_rows = _drop_indexed_rows_under(db_path, deleted_paths)
+            if progress_callback is not None:
+                progress_callback(
+                    "updating_index",
+                    len(deleted_paths),
+                    len(deleted_paths),
+                    _clean_finalizing_message(deleted_paths=len(deleted_paths), removed_rows=removed_rows),
+                )
+    elif not quiet:
+        console.print("[green]Done.[/green]")
+    result.cancelled = cancelled
+
+    if log_path is not None:
+        if progress_callback is not None:
+            progress_callback("writing_log", 0, None, f"Writing cleanup log to {log_path.name}")
+        log_data = {
+            "schema_version": 1,
+            "generated_at": datetime.now(UTC).isoformat(),
+            "root": str(root),
+            "dry_run": dry_run,
+            "removed_files": result.removed_files,
+            "removed_dirs": result.removed_dirs,
+            "bytes_freed": result.bytes_freed,
+            "cancelled": result.cancelled,
+        }
+        log_path.write_text(json.dumps(log_data, indent=2))
+        if not quiet:
+            console.print(f"Log written to [cyan]{log_path}[/cyan]")
+
+    if progress_callback is not None and dry_run:
         total = len(junk_files) + len(junk_dirs)
         progress_callback(
             "preview",
@@ -305,10 +344,7 @@ def clean_library(
             total,
             f"Previewed {total:,} junk item(s) ({len(junk_files):,} files, {len(junk_dirs):,} dirs, {fmt_bytes(planned_bytes)})",
         )
-        if not quiet:
-            console.print("[green]Done.[/green]")
-    result.cancelled = cancelled
-    if progress_callback is not None and not dry_run:
+    elif progress_callback is not None:
         total = len(junk_files) + len(junk_dirs)
         completed_items = min(completed, total) if cancelled else total
         progress_callback(
@@ -324,20 +360,5 @@ def clean_library(
                 bytes_freed=result.bytes_freed,
             ),
         )
-
-    if log_path is not None:
-        log_data = {
-            "schema_version": 1,
-            "generated_at": datetime.now(UTC).isoformat(),
-            "root": str(root),
-            "dry_run": dry_run,
-            "removed_files": result.removed_files,
-            "removed_dirs": result.removed_dirs,
-            "bytes_freed": result.bytes_freed,
-            "cancelled": result.cancelled,
-        }
-        log_path.write_text(json.dumps(log_data, indent=2))
-        if not quiet:
-            console.print(f"Log written to [cyan]{log_path}[/cyan]")
 
     return result

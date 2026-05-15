@@ -155,6 +155,31 @@ def test_clean_apply_drops_index_rows_for_removed_files(tmp_path: Path, tmp_db: 
     assert after_total == audio_path.stat().st_size
 
 
+def test_clean_apply_reports_finalizing_steps_before_complete(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    root.mkdir()
+    (root / "leftover.reapeaks").write_text("junk")
+    log_path = tmp_path / "clean_log.json"
+    events: list[tuple[str, int, int | None, str]] = []
+
+    clean_library(
+        root,
+        dry_run=False,
+        log_path=log_path,
+        quiet=True,
+        db_path=tmp_db,
+        progress_callback=lambda phase, completed, total, message: events.append((phase, completed, total, message)),
+    )
+
+    phases = [phase for phase, _, _, _ in events]
+    assert "cleaning" in phases
+    assert "updating_index" in phases
+    assert "writing_log" in phases
+    assert phases[-1] == "complete"
+    assert phases.index("cleaning") < phases.index("updating_index") < phases.index("writing_log")
+    assert log_path.exists()
+
+
 def test_cancelled_apply_reports_only_removed_junk(tmp_path: Path) -> None:
     import json
 

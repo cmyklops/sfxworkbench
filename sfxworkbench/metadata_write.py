@@ -837,7 +837,7 @@ def build_metadata_write_plan(
     plan.summary = _summarize_plan(plan)
     if progress_callback is not None:
         progress_callback(
-            "complete",
+            "summarizing",
             total_rows,
             total_rows,
             (
@@ -1411,12 +1411,30 @@ def apply_metadata_write_plan(
             except Exception as e:
                 result.errors.append({"path": str(source), "error": str(e)})
         if conn is not None:
+            if progress_callback is not None:
+                progress_callback(
+                    "updating_index", result.files_written, total_commands, "Committing metadata index updates"
+                )
             conn.commit()
     finally:
         if conn is not None:
             conn.close()
 
     result.cancelled = cancelled
+    if log_path is None and not dry_run:
+        log_path = _default_apply_log_path(plan_path)
+    if log_path is not None:
+        result.log_path = str(log_path)
+        if progress_callback is not None:
+            progress_callback("writing_log", 0, None, f"Writing metadata apply log to {log_path.name}")
+        write_apply_log(
+            log_path,
+            plan_path=plan_path,
+            tool_version=__version__,
+            result=result,
+            schema_version=PLAN_SCHEMA_VERSION,
+            extra={"db_path": str(effective_db)},
+        )
     if progress_callback is not None:
         processed_commands = (
             total_commands
@@ -1440,18 +1458,6 @@ def apply_metadata_write_plan(
                 skipped=result.skipped,
                 errors=len(result.errors),
             ),
-        )
-    if log_path is None and not dry_run:
-        log_path = _default_apply_log_path(plan_path)
-    if log_path is not None:
-        result.log_path = str(log_path)
-        write_apply_log(
-            log_path,
-            plan_path=plan_path,
-            tool_version=__version__,
-            result=result,
-            schema_version=PLAN_SCHEMA_VERSION,
-            extra={"db_path": str(effective_db)},
         )
     if not quiet:
         show_metadata_write_apply_result(result)

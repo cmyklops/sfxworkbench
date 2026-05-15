@@ -415,9 +415,20 @@ def metadata_audit_action(
     from sfxworkbench.metadata_audit import build_metadata_audit_report, write_metadata_audit_report
 
     try:
+        if progress_callback is not None:
+            progress_callback("auditing", 0, None, "Building metadata audit report")
         report = build_metadata_audit_report(db_path)
         output = _ensure_report_dir(report_dir) / "metadata_audit.json"
+        if progress_callback is not None:
+            progress_callback("writing_report", 0, None, f"Writing metadata audit report to {output.name}")
         write_metadata_audit_report(report, output, quiet=True)
+        if progress_callback is not None:
+            progress_callback(
+                "complete",
+                report.summary.total_files,
+                report.summary.total_files,
+                "Metadata audit complete",
+            )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("metadata_audit", e)
     return ActionResult(
@@ -538,7 +549,16 @@ def tag_plan_action(
                 cancel_requested=cancel_requested,
             )
         output = _ensure_report_dir(report_dir) / "metadata_tag_plan.json"
+        if progress_callback is not None:
+            progress_callback("writing_report", len(plan.entries), len(plan.entries), f"Writing {output.name}")
         write_tag_plan(plan, output, quiet=True)
+        if progress_callback is not None:
+            progress_callback(
+                "complete",
+                len(plan.entries),
+                len(plan.entries),
+                f"Metadata tag plan complete: {plan.summary.add_entries:,} planned DB tag write(s)",
+            )
     except InterruptedError as e:
         return ActionResult(
             action="tag_plan",
@@ -682,9 +702,15 @@ def build_dedupe_plan_action(
 
     try:
         ensure_hashes(db_path, root, progress_callback=progress_callback, cancel_requested=cancel_requested)
+        if progress_callback is not None:
+            progress_callback("planning", 0, None, "Finding duplicate files")
         groups = find_duplicates(db_path)
         output = _ensure_report_dir(report_dir) / "dedupe_plan.json"
+        if progress_callback is not None:
+            progress_callback("writing_report", len(groups), len(groups), f"Writing {output.name}")
         write_dedupe_plan(groups, output, db_path=db_path, quiet=True)
+        if progress_callback is not None:
+            progress_callback("complete", len(groups), len(groups), "Dedupe plan complete")
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("dedupe_plan", e)
     return ActionResult(
@@ -780,9 +806,20 @@ def pack_audit_action(
 
     try:
         ensure_hashes(db_path, root, progress_callback=progress_callback, cancel_requested=cancel_requested)
+        if progress_callback is not None:
+            progress_callback("auditing", 0, None, "Auditing pack overlap")
         report = audit_packs(root, db_path=db_path)
         output = _ensure_report_dir(report_dir) / "pack_overlap_report.json"
+        if progress_callback is not None:
+            progress_callback("writing_report", 0, None, f"Writing {output.name}")
         write_pack_audit_report(report, output, quiet=True)
+        if progress_callback is not None:
+            progress_callback(
+                "complete",
+                report.summary.exact_duplicate_groups + report.summary.overlap_candidates,
+                None,
+                "Pack audit complete",
+            )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("pack_audit", e)
     return ActionResult(
@@ -866,15 +903,30 @@ def apply_pack_plan_action(db_path: Path, report_dir: Path) -> ActionResult:
     )
 
 
-def rename_preview_action(root: Path, report_dir: Path, *, pattern: str = "portable") -> ActionResult:
+def rename_preview_action(
+    root: Path,
+    report_dir: Path,
+    *,
+    pattern: str = "portable",
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+) -> ActionResult:
     from sfxworkbench.rename import build_rename_plan, write_rename_log
 
     try:
-        plan = build_rename_plan(root, pattern=pattern)
+        plan = build_rename_plan(root, pattern=pattern, progress_callback=progress_callback)
         output = _ensure_report_dir(report_dir) / f"{pattern}_rename_plan.json"
+        if progress_callback is not None:
+            progress_callback("writing", len(plan.entries), len(plan.entries), f"Writing {output.name}")
         write_rename_log(plan, output)
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("rename_preview", e)
+    if progress_callback is not None:
+        progress_callback(
+            "preview",
+            len(plan.entries),
+            len(plan.entries),
+            f"Previewed {len(plan.entries):,} {pattern} rename(s), errors {len(plan.errors):,}.",
+        )
     return ActionResult(
         action="rename_preview",
         status="dry_run",
@@ -902,11 +954,14 @@ def apply_rename_action(
 
     try:
         plan = RenamePlan.model_validate_json(plan_path.read_text())
+        log_path = (report_dir / APPLY_LOG_DIR_NAME) / f"rename_log_{_now_stamp()}.json"
         result = apply_rename_plan(
             plan,
             db_path=db_path,
+            log_path=log_path,
             dry_run=False,
             quiet=True,
+            allow_partial=True,
             progress_callback=progress_callback,
             cancel_requested=cancel_requested,
         )
@@ -914,11 +969,13 @@ def apply_rename_action(
         return _action_error("rename_apply", e)
     errors = _result_errors(result)
     cancel_note = " — cancelled mid-apply" if result.cancelled else ""
-    status = "cancelled" if result.cancelled else ("applied" if not errors else "error")
+    status = "cancelled" if result.cancelled else ("applied" if result.renamed or not errors else "error")
     return ActionResult(
         action="rename_apply",
         status=status,
-        message=f"Renamed {result.renamed:,} path(s).{cancel_note}",
+        message=(
+            f"Renamed {result.renamed:,} path(s){f', skipped {len(errors):,} issue(s)' if errors else ''}.{cancel_note}"
+        ),
         output_path=result.log_path,
         errors=errors,
         refresh=("clean", "files", "reports"),
@@ -1087,14 +1144,22 @@ def apply_nesting_action(db_path: Path, report_dir: Path) -> ActionResult:
     if auto_approve_error is not None:
         return _action_error("organize_nesting_apply", auto_approve_error)
     try:
-        result = apply_nesting_plan(plan_path, db_path=db_path, require_reviewed=True, dry_run=False, quiet=True)
+        result = apply_nesting_plan(
+            plan_path,
+            db_path=db_path,
+            require_reviewed=True,
+            dry_run=False,
+            quiet=True,
+            allow_partial=True,
+        )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("organize_nesting_apply", e)
     errors = _result_errors(result)
+    error_note = f", skipped {len(errors):,} issue(s)" if errors else ""
     return ActionResult(
         action="organize_nesting_apply",
-        status="applied" if not errors else "error",
-        message=f"Flattened {result.flattened:,} nested folder(s), moved {result.moved:,} path(s).",
+        status="applied" if result.flattened or result.moved or not errors else "error",
+        message=f"Flattened {result.flattened:,} nested folder(s), moved {result.moved:,} path(s){error_note}.",
         output_path=result.log_path,
         errors=errors,
         refresh=("clean", "files", "reports"),
@@ -1198,9 +1263,18 @@ def build_embedded_metadata_plan_action(
             progress_callback=progress_callback,
             cancel_requested=cancel_requested,
         )
+        if progress_callback is not None:
+            progress_callback("writing_report", len(plan.entries), len(plan.entries), f"Writing {output.name}")
+        write_metadata_write_plan(plan, output, quiet=True)
+        if progress_callback is not None:
+            progress_callback(
+                "complete",
+                len(plan.entries),
+                len(plan.entries),
+                f"Embedded metadata plan complete: {plan.summary.supported_entries:,} supported entrie(s)",
+            )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("metadata_write_plan", e)
-    write_metadata_write_plan(plan, output, quiet=True)
     return ActionResult(
         action="metadata_write_plan",
         status="ok" if plan.summary.supported_entries else "error",

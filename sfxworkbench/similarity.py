@@ -835,28 +835,16 @@ def crawl_similarity_descriptors(
     except KeyboardInterrupt:
         status = "interrupted"
         stop_reason = "keyboard_interrupt"
-    if progress_callback is not None:
-        completed_for_progress = summary.skipped + summary.analyzed + summary.pending
-        progress_callback(
-            "cancelled" if status == "cancelled" else "complete",
-            min(total, completed_for_progress),
-            total,
-            _similarity_crawl_progress_message(
-                processed=min(total, completed_for_progress),
-                total=total,
-                analyzed=summary.analyzed,
-                skipped=summary.skipped,
-                pending=summary.pending,
-                segments=summary.segments_detected,
-                errors=summary.errors,
-            ),
-        )
     if summary.pending:
         status = "partial" if status == "completed" else status
         stop_reason = stop_reason or "max_files"
     summary.stale = max(0, summary.total_files - summary.skipped - summary.analyzed)
 
     finished_at = _utc_now()
+    if progress_callback is not None:
+        progress_callback(
+            "updating_index", summary.analyzed + summary.skipped, total, "Recording similarity run status"
+        )
     conn.execute(
         """
         UPDATE analysis_runs
@@ -897,7 +885,26 @@ def crawl_similarity_descriptors(
         descriptors=descriptors,
     )
     if cache_path is not None:
-        atomic_write_json(cache_path / f"similarity_crawl_{run_id}.json", report)
+        report_path = cache_path / f"similarity_crawl_{run_id}.json"
+        if progress_callback is not None:
+            progress_callback("writing_report", 0, None, f"Writing similarity crawl report to {report_path.name}")
+        atomic_write_json(report_path, report)
+    if progress_callback is not None:
+        completed_for_progress = summary.skipped + summary.analyzed + summary.pending
+        progress_callback(
+            "cancelled" if status == "cancelled" else "complete",
+            min(total, completed_for_progress),
+            total,
+            _similarity_crawl_progress_message(
+                processed=min(total, completed_for_progress),
+                total=total,
+                analyzed=summary.analyzed,
+                skipped=summary.skipped,
+                pending=summary.pending,
+                segments=summary.segments_detected,
+                errors=summary.errors,
+            ),
+        )
     if not quiet:
         show_similarity_crawl_report(report)
     return report

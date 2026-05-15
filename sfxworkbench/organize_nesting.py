@@ -245,6 +245,7 @@ def apply_nesting_plan(
     quiet: bool = False,
     config_path: Path | None = None,
     safe_folders: list[Path] | None = None,
+    allow_partial: bool = False,
 ) -> NestingApplyResult:
     """Flatten repeated-folder-name entries from a reviewed nesting plan."""
     raw_plan = json.loads(plan_path.read_text())
@@ -256,9 +257,12 @@ def apply_nesting_plan(
 
     if errors:
         result.errors.extend(errors)
+        if not allow_partial:
+            if not quiet:
+                console.print("[red]Refusing to apply nesting plan with unresolved errors.[/red]")
+            return result
         if not quiet:
-            console.print("[red]Refusing to apply nesting plan with unresolved errors.[/red]")
-        return result
+            console.print("[yellow]Plan has unresolved errors; applying valid nesting entries only.[/yellow]")
     if require_reviewed and not approved:
         result.errors.append({"path": plan.root, "error": "plan has no approved entries"})
         return result
@@ -274,7 +278,7 @@ def apply_nesting_plan(
             continue
         selected_entries.append((index, entry))
 
-    if result.errors:
+    if result.errors and not allow_partial:
         return result
     if dry_run:
         result.flattened = len(selected_entries)

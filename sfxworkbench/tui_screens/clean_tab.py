@@ -2,8 +2,8 @@
 
 Houses the three-row button set: junk preview/apply + name cleanup + folder
 cleanup + nesting. The findings table is the cross-page summary; the
-``clean-items-table`` shows the most recent Preview Junk result so users can
-audit before applying.
+``clean-items-table`` follows the most recent cleanup preview so users can
+audit the relevant paths before applying.
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ def compose(app) -> ComposeResult:
         ("Apply Nesting", "organize-nesting-apply", "warning"),
         ("Undo Nesting", "organize-nesting-undo", "primary"),
     )
-    yield from app._titled_table("Previewed Junk", "clean-items-table")
+    yield from app._titled_table("Latest Cleanup Preview", "clean-items-table")
 
 
 def fill(app) -> None:

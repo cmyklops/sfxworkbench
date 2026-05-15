@@ -28,6 +28,7 @@ from sfxworkbench.preservation import PreservationRules, build_preservation_rule
 from sfxworkbench.ucs import looks_ucs_casefold, normalize_stem
 
 console = Console()
+ProgressCallback = Callable[[str, int, int | None, str], None]
 
 _BAD_CHARS_RE = re.compile(r"[:*?\"<>|#&;'\\!]+")
 _SAFE_BAD_CHARS_RE = re.compile(r"[:*?\"<>|]+")
@@ -69,6 +70,11 @@ def _rename_progress_message(
     if current:
         return f"{message}; current {Path(current).name}"
     return message
+
+
+def _rename_plan_walk_message(visited: int, candidates: int, current: Path | None = None) -> str:
+    location = f"; now {current}" if current is not None else ""
+    return f"Walked {visited:,} item(s); found {candidates:,} audio candidate(s){location}"
 
 
 def _now_iso() -> str:
@@ -216,6 +222,7 @@ def build_rename_plan(
     *,
     config_path: Path | None = None,
     safe_folders: list[Path] | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> RenamePlan:
     """Build a dry-run rename plan for audio files under root."""
     if pattern not in {"ucs", "safe", "portable"}:
@@ -227,14 +234,37 @@ def build_rename_plan(
     errors: list[dict] = []
     planned_target_keys: set[str] = set()
 
-    for path in sorted(root.rglob("*")):
+    visited = 0
+    audio_paths: list[Path] = []
+    if progress_callback is not None:
+        progress_callback("walking", 0, None, f"Walking {root} for rename candidates")
+    for path in root.rglob("*"):
+        visited += 1
         if not path.is_file():
+            if progress_callback is not None and visited % 500 == 0:
+                progress_callback("walking", visited, None, _rename_plan_walk_message(visited, len(audio_paths), path))
             continue
         if junk.is_inside_junk_dir(path) or junk.is_junk_file(path):
             continue
         if path.suffix.lower() not in junk.AUDIO_EXTENSIONS:
             continue
+        audio_paths.append(path)
+        if progress_callback is not None and visited % 500 == 0:
+            progress_callback("walking", visited, None, _rename_plan_walk_message(visited, len(audio_paths), path))
 
+    total_candidates = len(audio_paths)
+    if progress_callback is not None:
+        progress_callback(
+            "planning",
+            0,
+            total_candidates,
+            f"Planning {pattern} rename preview for {total_candidates:,} audio candidate(s)",
+        )
+    from sfxworkbench.utils import progress_interval
+
+    report_every = min(progress_interval(total_candidates), _PROGRESS_MAX_INTERVAL)
+
+    for index, path in enumerate(sorted(audio_paths), start=1):
         if pattern == "ucs":
             new_filename, fixes = _ucs_filename(path)
             candidates = [(path, path.with_name(new_filename), fixes)]
@@ -283,6 +313,16 @@ def build_rename_plan(
                 old_filename=source.name,
                 new_filename=target.name,
                 issue_fixes=fixes,
+            )
+        if progress_callback is not None and (index % report_every == 0 or index == total_candidates):
+            progress_callback(
+                "planning",
+                index,
+                total_candidates,
+                (
+                    f"Planned {index:,}/{total_candidates:,}; "
+                    f"renames {len(entries_by_path):,}, errors {len(errors):,}; current {path.name}"
+                ),
             )
 
     return RenamePlan(
@@ -525,10 +565,17 @@ def apply_rename_plan(
                     pass
 
     if conn is not None:
+        if progress_callback is not None:
+            progress_callback("updating_index", result.renamed, total_entries, "Committing rename index updates")
         conn.commit()
         conn.close()
 
     result.cancelled = cancelled
+    log_plan = plan.model_copy(update={"entries": applied})
+    if progress_callback is not None:
+        progress_callback("writing_log", 0, None, f"Writing rename undo log to {log_path.name}")
+    write_rename_log(log_plan, log_path)
+    result.log_path = str(log_path)
     if progress_callback is not None:
         processed_entries = result.renamed + result.skipped + len(result.errors)
         completed_entries = min(processed_entries, total_entries) if cancelled else total_entries
@@ -544,9 +591,6 @@ def apply_rename_plan(
                 errors=len(result.errors),
             ),
         )
-    log_plan = plan.model_copy(update={"entries": applied})
-    write_rename_log(log_plan, log_path)
-    result.log_path = str(log_path)
     if not quiet:
         console.print(f"Rename log written to [cyan]{log_path}[/cyan]")
     return result

@@ -184,6 +184,10 @@ def _scan_progress_message(
     return f"{prefix}; current {name}"
 
 
+def _scan_finalizing_message(processed: int, total: int) -> str:
+    return f"Updating scan index metadata after {processed:,}/{total:,} processed file(s)"
+
+
 def _collect_audio_files(
     root: Path,
     cancel_requested: CancelCallback | None = None,
@@ -501,7 +505,10 @@ def scan_library(
                 if progress_callback is not None and (processed % report_every == 0 or processed == total):
                     progress_callback("scanning", processed, total, description)
 
-    # Final flush + scan_meta update
+    # Final flush + scan_meta update. Surface this as its own phase so the
+    # TUI does not sit on a full scanning bar while SQLite is still flushing.
+    if progress_callback is not None:
+        progress_callback("updating_index", processed, total, _scan_finalizing_message(processed, total))
     conn.execute(
         "INSERT OR REPLACE INTO scan_meta (key, value) VALUES (?, ?)",
         ("last_scan_root", str(root)),
@@ -589,9 +596,18 @@ def ensure_hashes(
                 pending = 0
             if progress_callback is not None and (index % _SCAN_REPORT_MAX_INTERVAL == 0 or index == result.total):
                 progress_callback("hashing", index, result.total, f"Hashed {index:,}/{result.total:,} file(s)")
+        if progress_callback is not None:
+            progress_callback("updating_index", result.scanned, result.total, "Committing hash updates")
         conn.commit()
     finally:
         conn.close()
+    if progress_callback is not None:
+        progress_callback(
+            "cancelled" if _should_cancel(cancel_requested) else "complete",
+            result.scanned,
+            result.total,
+            f"Hashing complete: {result.scanned:,}/{result.total:,} file(s), errors {result.errors:,}",
+        )
     return result
 
 
@@ -631,9 +647,18 @@ def ensure_audio_info(
                 pending = 0
             if progress_callback is not None and (index % _SCAN_REPORT_MAX_INTERVAL == 0 or index == result.total):
                 progress_callback("audio", index, result.total, f"Read audio headers for {index:,}/{result.total:,}")
+        if progress_callback is not None:
+            progress_callback("updating_index", result.scanned, result.total, "Committing audio header updates")
         conn.commit()
     finally:
         conn.close()
+    if progress_callback is not None:
+        progress_callback(
+            "cancelled" if _should_cancel(cancel_requested) else "complete",
+            result.scanned,
+            result.total,
+            f"Audio headers complete: {result.scanned:,}/{result.total:,} file(s), errors {result.errors:,}",
+        )
     return result
 
 
@@ -677,7 +702,16 @@ def ensure_metadata_info(
                     result.total,
                     f"Read embedded metadata for {index:,}/{result.total:,}",
                 )
+        if progress_callback is not None:
+            progress_callback("updating_index", result.scanned, result.total, "Committing embedded metadata updates")
         conn.commit()
     finally:
         conn.close()
+    if progress_callback is not None:
+        progress_callback(
+            "cancelled" if _should_cancel(cancel_requested) else "complete",
+            result.scanned,
+            result.total,
+            f"Embedded metadata complete: {result.scanned:,}/{result.total:,} file(s), errors {result.errors:,}",
+        )
     return result

@@ -1599,7 +1599,7 @@ def build_tag_suggestion_report(
         )
     if progress_callback is not None:
         progress_callback(
-            "complete",
+            "summarizing",
             total_rows,
             total_rows,
             _tag_suggest_progress_message(

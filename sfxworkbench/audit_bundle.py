@@ -186,6 +186,8 @@ def build_audit_bundle(
         errors=errors,
     )
     bundle_path = output / "audit_bundle.json"
+    if progress_callback is not None:
+        progress_callback("writing_report", 0, None, f"Writing audit bundle to {bundle_path.name}")
     _write_json(bundle_path, bundle)
     bundle.report_paths["audit_bundle"] = str(bundle_path)
     bundle.summary.reports_written = len(bundle.report_paths)

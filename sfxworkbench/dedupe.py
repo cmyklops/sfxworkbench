@@ -49,6 +49,12 @@ def _dedupe_apply_progress_message(
     return message
 
 
+def _dedupe_finalizing_message(*, affected_paths: int, removed_rows: int | None = None) -> str:
+    if removed_rows is None:
+        return f"Updating index for {affected_paths:,} affected duplicate path(s)"
+    return f"Updated index for {affected_paths:,} affected duplicate path(s); dropped {removed_rows:,} row(s)"
+
+
 def _now_stamp() -> str:
     return datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
 
@@ -478,17 +484,51 @@ def apply_dedupe_plan(
 
     # Clean up the index after a real apply so it doesn't reference dead paths.
     if not dry_run and affected_paths and db_path is not None:
+        if progress_callback is not None:
+            progress_callback(
+                "updating_index",
+                0,
+                None,
+                _dedupe_finalizing_message(affected_paths=len(affected_paths)),
+            )
         conn = get_connection(db_path)
-        conn.executemany(
+        cursor = conn.executemany(
             "DELETE FROM files WHERE path = ?",
             [(path,) for path in affected_paths],
         )
         conn.commit()
         conn.close()
+        removed_rows = cursor.rowcount if cursor.rowcount is not None and cursor.rowcount >= 0 else len(affected_paths)
+        if progress_callback is not None:
+            progress_callback(
+                "updating_index",
+                len(affected_paths),
+                len(affected_paths),
+                _dedupe_finalizing_message(affected_paths=len(affected_paths), removed_rows=removed_rows),
+            )
         if not quiet:
             console.print(f"Removed [cyan]{len(affected_paths):,}[/cyan] row(s) from index.")
 
     result.cancelled = cancelled
+    if not dry_run and log_entries:
+        if log_path is None:
+            log_path = _default_dedupe_log_path(plan_path)
+        result.log_path = str(log_path)
+        if progress_callback is not None:
+            progress_callback("writing_log", 0, None, f"Writing dedupe quarantine log to {log_path.name}")
+        write_apply_log(
+            log_path,
+            plan_path=plan_path,
+            tool_version=__version__,
+            result=result,
+            extra={
+                "quarantine_dir": str(quarantine_dir) if quarantine_dir is not None else None,
+                "entries": log_entries,
+            },
+        )
+        if not quiet:
+            console.print(f"Dedupe quarantine log written to [cyan]{log_path}[/cyan]")
+
     if progress_callback is not None:
         progress_callback(
             "cancelled" if cancelled else "complete",
@@ -504,22 +544,6 @@ def apply_dedupe_plan(
                 bytes_freed=result.bytes_freed,
             ),
         )
-    if not dry_run and log_entries:
-        if log_path is None:
-            log_path = _default_dedupe_log_path(plan_path)
-        result.log_path = str(log_path)
-        write_apply_log(
-            log_path,
-            plan_path=plan_path,
-            tool_version=__version__,
-            result=result,
-            extra={
-                "quarantine_dir": str(quarantine_dir) if quarantine_dir is not None else None,
-                "entries": log_entries,
-            },
-        )
-        if not quiet:
-            console.print(f"Dedupe quarantine log written to [cyan]{log_path}[/cyan]")
 
     if not quiet:
         action = "Would quarantine" if dry_run else ("Deleted" if permanent_delete else "Quarantined")

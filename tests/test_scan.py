@@ -187,6 +187,9 @@ def test_scan_progress_reports_collection_and_scan_counts(tmp_library: Path, tmp
         phase == "scanning" and "indexed" in message and "skipped" in message and "errors" in message
         for phase, _completed, _total, message in events
     )
+    phases = [phase for phase, _completed, _total, _message in events]
+    assert "updating_index" in phases
+    assert phases.index("updating_index") < len(phases) - 1
     assert events[-1][0] == "complete"
     assert "Scan complete" in events[-1][3]
 

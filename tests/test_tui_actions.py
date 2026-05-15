@@ -13,6 +13,8 @@ from sfxworkbench.tui_actions import (
     ActionResult,
     apply_dedupe_plan_action,
     apply_delete_plan_action,
+    apply_nesting_action,
+    apply_rename_action,
     apply_tag_plan_action,
     apply_tag_plan_and_build_embedded_plan_action,
     approve_dedupe_plan_action,
@@ -24,6 +26,7 @@ from sfxworkbench.tui_actions import (
     full_audit_action,
     operation_report_dir,
     organize_audit_action,
+    rename_preview_action,
     scan_action,
     tag_plan_action,
     write_action_history,
@@ -85,6 +88,7 @@ def test_tui_long_actions_report_progress(tmp_library: Path, tmp_db: Path, tmp_p
     report_dir = tmp_path / "reports"
     audit_events: list[tuple[str, int, int | None, str]] = []
     clean_events: list[tuple[str, int, int | None, str]] = []
+    rename_events: list[tuple[str, int, int | None, str]] = []
 
     audit = full_audit_action(
         tmp_library,
@@ -102,13 +106,24 @@ def test_tui_long_actions_report_progress(tmp_library: Path, tmp_db: Path, tmp_p
             (phase, completed, total, message)
         ),
     )
+    rename = rename_preview_action(
+        tmp_library,
+        report_dir,
+        progress_callback=lambda phase, completed, total, message: rename_events.append(
+            (phase, completed, total, message)
+        ),
+    )
 
     assert audit.ok or audit.status == "error"
     assert clean.ok
+    assert rename.ok
     assert any(event[0] == "scanning" for event in audit_events)
     assert any(event[0] == "auditing" for event in audit_events)
     assert any(event[0] == "walking" for event in clean_events)
     assert clean_events[-1][0] == "preview"
+    assert any(event[0] == "walking" for event in rename_events)
+    assert any(event[0] == "planning" for event in rename_events)
+    assert rename_events[-1][0] == "preview"
 
 
 def test_tui_scan_action_reports_cancelled_status(tmp_library: Path, tmp_db: Path) -> None:
@@ -142,6 +157,85 @@ def test_tui_declutter_folder_cleanup_actions_write_reviewable_reports(tmp_path:
     assert preview.output_path == str(report_dir / "organize_report.json")
     assert (report_dir / "organize_report.json").exists()
     assert approve.ok
+
+
+def test_tui_apply_name_cleanup_applies_valid_entries_when_plan_has_errors(tmp_path: Path, tmp_db: Path) -> None:
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    source = tmp_path / "library" / "bad name.wav"
+    target = tmp_path / "library" / "bad_name.wav"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"audio")
+    plan_path = report_dir / "portable_rename_plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-05-15T00:00:00+00:00",
+                "root": str(source.parent),
+                "pattern": "portable",
+                "entries": [
+                    {
+                        "old_path": str(source),
+                        "new_path": str(target),
+                        "old_filename": source.name,
+                        "new_filename": target.name,
+                        "issue_fixes": ["space"],
+                    }
+                ],
+                "errors": [{"path": str(source.parent / "blocked.wav"), "error": "target exists"}],
+            }
+        )
+    )
+
+    result = apply_rename_action(tmp_db, report_dir)
+
+    assert result.status == "applied"
+    assert "Renamed 1 path(s), skipped 1 issue(s)." in result.message
+    assert target.exists()
+    assert result.output_path is not None
+    assert Path(result.output_path).parent == report_dir / "apply_logs"
+
+
+def test_tui_apply_nesting_applies_valid_entries_when_plan_has_errors(tmp_path: Path, tmp_db: Path) -> None:
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    root = tmp_path / "library"
+    source = root / "Pack" / "Pack"
+    target = source.parent
+    old_file = source / "hit.wav"
+    new_file = target / "hit.wav"
+    source.mkdir(parents=True)
+    old_file.write_bytes(b"audio")
+    plan_path = report_dir / "nesting_plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-05-15T00:00:00+00:00",
+                "tool_version": "test",
+                "root": str(root),
+                "source_report": str(report_dir / "redundant_nesting_report.json"),
+                "entries": [
+                    {
+                        "source_path": str(source),
+                        "target_path": str(target),
+                        "kind": "repeated_folder_name",
+                        "action": "flatten_child_into_parent",
+                        "reason": "folder name repeats its parent",
+                        "audio_files": 1,
+                        "moves": [{"old_path": str(old_file), "new_path": str(new_file), "path_type": "file"}],
+                    }
+                ],
+                "errors": [{"path": str(root / "Other"), "error": "target exists"}],
+            }
+        )
+    )
+
+    result = apply_nesting_action(tmp_db, report_dir)
+
+    assert result.status == "applied"
+    assert "Flattened 1 nested folder(s), moved 1 path(s), skipped 1 issue(s)." in result.message
+    assert new_file.exists()
+    assert not source.exists()
 
 
 def test_tui_action_runner_dedupe_plan_review_apply(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
