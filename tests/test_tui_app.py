@@ -18,6 +18,8 @@ from sfxworkbench.tui_app import (
     _cleanup_preview_title,
     _desktop_open_command,
     _finding_status,
+    _fmt_finding_count,
+    _fmt_indexed_size,
     _format_duration,
     _latest_clean_preview_details,
     _latest_cleanup_preview_details,
@@ -34,6 +36,12 @@ from sfxworkbench.tui_app import (
 )
 from sfxworkbench.tui_lock import process_is_running
 from sfxworkbench.tui_screens._tabs import TAB_REGISTRY
+
+
+def test_tui_size_formatting_uses_tb_for_large_totals() -> None:
+    assert _fmt_indexed_size(999.9) == "999.9 GB"
+    assert _fmt_indexed_size(1000.0) == "1.0 TB"
+    assert _fmt_finding_count("Wasted size", 1024**4) == "1.0 TB"
 
 
 def test_tui_operation_buttons_are_registered_for_running_state() -> None:
@@ -808,7 +816,7 @@ def test_quarantine_dir_template_names_library_root_destination(tmp_path: Path) 
     root = tmp_path / "library"
 
     assert _quarantine_dir_template(root) == root / "sfxworkbench_quarantine_YYYYMMDD_HHMMSS"
-    assert _quarantine_dir_template(root, kind="pack") == root / "sfxworkbench_pack_quarantine_YYYYMMDD_HHMMSS"
+    assert _quarantine_dir_template(root, kind="pack") == root / "sfxworkbench_quarantine_YYYYMMDD_HHMMSS"
 
 
 def test_tui_quarantine_reveal_finds_legacy_quarantine_folder(tmp_path: Path) -> None:
@@ -846,7 +854,7 @@ def test_tui_quarantine_reveal_finds_pack_log_folder_destination(tmp_path: Path)
     reports = tmp_path / "reports"
     log_dir = reports / "apply_logs"
     log_dir.mkdir(parents=True)
-    quarantine = tmp_path / "library" / "sfxworkbench_pack_quarantine_20260516_105918"
+    quarantine = tmp_path / "library" / "sfxworkbench_quarantine_20260516_105918"
     quarantined_folder = quarantine / "B Pack"
     quarantined_folder.mkdir(parents=True)
     (log_dir / "pack_quarantine_log_20260516_105918.json").write_text(

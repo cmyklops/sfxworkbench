@@ -579,7 +579,7 @@ def _validate_remove_candidate(path: Path, expected_size: int | None, expected_h
         except OSError as e:
             return str(e)
         if actual_size != expected_size:
-            return f"size changed: expected {expected_size}, got {actual_size}"
+            return f"size changed: expected {fmt_bytes(expected_size)}, got {fmt_bytes(actual_size)}"
     if expected_hash and len(expected_hash) == 32:
         try:
             actual_hash = _md5(path)

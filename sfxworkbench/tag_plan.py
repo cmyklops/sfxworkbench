@@ -52,7 +52,7 @@ from sfxworkbench.tag_suggest import (
     is_technical_metadata_blob,
     normalize_filter_values,
 )
-from sfxworkbench.utils import atomic_write_json, json_dumps
+from sfxworkbench.utils import atomic_write_json, fmt_bytes, json_dumps
 
 console = Console()
 
@@ -704,7 +704,7 @@ def _validate_plan_entry(conn, entry: TagPlanEntry) -> str | None:
     if row["path"] != entry.path:
         return f"path changed: expected {entry.path}, got {row['path']}"
     if entry.size_bytes is not None and row["size_bytes"] != entry.size_bytes:
-        return f"size changed: expected {entry.size_bytes}, got {row['size_bytes']}"
+        return f"size changed: expected {fmt_bytes(entry.size_bytes)}, got {fmt_bytes(row['size_bytes'])}"
     if entry.mtime is not None and not math.isclose(row["mtime"], entry.mtime, abs_tol=_MTIME_TOLERANCE):
         return "mtime changed"
     if entry.md5 is not None and row["md5"] != entry.md5:
@@ -717,7 +717,7 @@ def _validate_plan_entry(conn, entry: TagPlanEntry) -> str | None:
     except OSError as e:
         return str(e)
     if entry.size_bytes is not None and stat.st_size != entry.size_bytes:
-        return f"file size changed: expected {entry.size_bytes}, got {stat.st_size}"
+        return f"file size changed: expected {fmt_bytes(entry.size_bytes)}, got {fmt_bytes(stat.st_size)}"
     if entry.mtime is not None and not math.isclose(stat.st_mtime, entry.mtime, abs_tol=_MTIME_TOLERANCE):
         return "file mtime changed"
     if entry.md5 is not None and len(entry.md5) == 32:

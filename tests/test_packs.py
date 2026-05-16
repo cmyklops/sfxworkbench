@@ -532,6 +532,7 @@ def test_pack_apply_defaults_quarantine_to_plan_root(tmp_path: Path, tmp_db: Pat
 
     quarantine_dir = Path(result.quarantine_dir or "")
     assert quarantine_dir.parent == root
+    assert quarantine_dir.name.startswith("sfxworkbench_quarantine_")
     assert (quarantine_dir / "B Pack" / "one.wav").exists()
     assert not duplicate.exists()
 

@@ -40,6 +40,7 @@ def fill(app) -> None:
     """
     from sfxworkbench.tui_app import _clip_middle, _fmt, _state_token
     from sfxworkbench.tui_data import dedupe_findings, dedupe_group_rows
+    from sfxworkbench.utils import fmt_bytes
 
     app._fill_findings("dedupe-findings-table", dedupe_findings(db_path=app.db_path))
     table = app._reset_table(
@@ -59,8 +60,8 @@ def fill(app) -> None:
             str(row.group_id),
             _fmt(row.copies),
             _fmt(row.extra_copies),
-            _fmt(row.size_bytes),
-            _fmt(row.wasted_bytes),
+            fmt_bytes(float(row.size_bytes or 0)),
+            fmt_bytes(float(row.wasted_bytes or 0)),
             _state_token(row.status),
             _clip_middle(row.keep_path),
         )

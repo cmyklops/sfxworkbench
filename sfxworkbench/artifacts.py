@@ -12,6 +12,7 @@ from typing import Any
 
 from sfxworkbench.db import DEFAULT_DB_PATH, get_connection
 from sfxworkbench.platform_paths import canonical_path_key, is_scoped_path
+from sfxworkbench.utils import fmt_bytes
 
 APPLY_LOG_DIR_NAME = "apply_logs"
 ACTION_HISTORY_DIR_NAME = "action_history"
@@ -932,9 +933,7 @@ def artifact_detail_rows_from_file(path: Path, *, limit: int = 100) -> list[Arti
         if "entry_id" in entry and "source_log" in entry:
             path_type = _first_text(entry, "path_type")
             size = entry.get("size_bytes")
-            detail_parts = [
-                part for part in (path_type, f"{size:,} byte(s)" if isinstance(size, int | float) else "") if part
-            ]
+            detail_parts = [part for part in (path_type, fmt_bytes(float(size)) if isinstance(size, int | float) else "") if part]
             detail = "; ".join(detail_parts)
         if moves:
             move_detail = f"{len(moves):,} move(s)"

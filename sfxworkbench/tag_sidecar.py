@@ -13,7 +13,7 @@ from rich.table import Table
 from sfxworkbench import __version__
 from sfxworkbench.db import DEFAULT_DB_PATH, get_connection, is_scoped_path, resolve_scope_root
 from sfxworkbench.models import TagSidecarEntry, TagSidecarImportResult, TagSidecarReport, TagSidecarTag
-from sfxworkbench.utils import atomic_write_json
+from sfxworkbench.utils import atomic_write_json, fmt_bytes
 
 console = Console()
 
@@ -122,7 +122,7 @@ def _validate_sidecar_entry(row, entry: TagSidecarEntry) -> str | None:
     if row is None:
         return "indexed file row is missing"
     if entry.size_bytes is not None and row["size_bytes"] != entry.size_bytes:
-        return f"size changed: expected {entry.size_bytes}, got {row['size_bytes']}"
+        return f"size changed: expected {fmt_bytes(entry.size_bytes)}, got {fmt_bytes(row['size_bytes'])}"
     if entry.mtime is not None and row["mtime"] != entry.mtime:
         return "mtime changed"
     if entry.md5 is not None and row["md5"] != entry.md5:
@@ -135,7 +135,7 @@ def _validate_sidecar_entry(row, entry: TagSidecarEntry) -> str | None:
     except OSError as e:
         return str(e)
     if entry.size_bytes is not None and stat.st_size != entry.size_bytes:
-        return f"file size changed: expected {entry.size_bytes}, got {stat.st_size}"
+        return f"file size changed: expected {fmt_bytes(entry.size_bytes)}, got {fmt_bytes(stat.st_size)}"
     if entry.mtime is not None and stat.st_mtime != entry.mtime:
         return "file mtime changed"
     if entry.md5 is not None and len(entry.md5) == 32:

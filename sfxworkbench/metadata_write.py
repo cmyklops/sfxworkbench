@@ -40,7 +40,7 @@ from sfxworkbench.models import (
 )
 from sfxworkbench.preservation import build_preservation_rules, move_protected_by
 from sfxworkbench.ucs import looks_ucs
-from sfxworkbench.utils import atomic_write_json
+from sfxworkbench.utils import atomic_write_json, fmt_bytes
 
 console = Console()
 
@@ -915,7 +915,7 @@ def _validate_plan_entry(conn, entry: MetadataWritePlanEntry) -> str | None:
     if row["path"] != entry.path:
         return f"path changed: expected {entry.path}, got {row['path']}"
     if entry.size_bytes is not None and row["size_bytes"] != entry.size_bytes:
-        return f"size changed: expected {entry.size_bytes}, got {row['size_bytes']}"
+        return f"size changed: expected {fmt_bytes(entry.size_bytes)}, got {fmt_bytes(row['size_bytes'])}"
     if entry.mtime is not None and row["mtime"] != entry.mtime:
         return "mtime changed"
     if entry.md5 is not None and row["md5"] != entry.md5:
@@ -924,7 +924,7 @@ def _validate_plan_entry(conn, entry: MetadataWritePlanEntry) -> str | None:
         return "file does not exist"
     stat = path.stat()
     if entry.size_bytes is not None and stat.st_size != entry.size_bytes:
-        return f"file size changed: expected {entry.size_bytes}, got {stat.st_size}"
+        return f"file size changed: expected {fmt_bytes(entry.size_bytes)}, got {fmt_bytes(stat.st_size)}"
     if entry.mtime is not None and stat.st_mtime != entry.mtime:
         return "file mtime changed"
     if entry.md5 is not None:

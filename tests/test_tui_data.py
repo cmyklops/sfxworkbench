@@ -155,6 +155,23 @@ def test_tui_file_detail_includes_facts_and_issues(tmp_library: Path, tmp_db: Pa
     assert any("open -R" in action for action in detail.actions)
 
 
+def test_tui_file_detail_formats_size_as_human_units(tmp_library: Path, tmp_db: Path) -> None:
+    scan_library(tmp_library, tmp_db, skip_hash=True, quiet=True)
+    target = tmp_library / "sounds" / "AMB_RAIN_01.wav"
+    conn = sqlite3.connect(tmp_db)
+    try:
+        conn.execute("UPDATE files SET size_bytes = ? WHERE path = ?", (1024**3, str(target)))
+        conn.commit()
+    finally:
+        conn.close()
+
+    detail = file_detail(tmp_db, path=str(target))
+
+    assert detail is not None
+    location = next(section for section in detail.sections if section.title == "Location")
+    assert ("Size", "1.0 GB") in location.rows
+
+
 def test_tui_file_detail_includes_indexed_metadata_fields(tmp_library: Path, tmp_db: Path) -> None:
     scan_library(tmp_library, tmp_db, skip_hash=True, quiet=True)
     target = tmp_library / "sounds" / "AMB_RAIN_01.wav"
@@ -954,6 +971,31 @@ def test_tui_command_invokes_runner(tmp_db: Path, monkeypatch) -> None:
     assert calls
     assert calls[0]["db_path"] == tmp_db
     assert calls[0]["report_paths"] == [tmp_db.parent]
+
+
+def test_tui_plan_detail_rows_format_quarantine_entry_sizes(tmp_path: Path) -> None:
+    path = tmp_path / "delete_plan.json"
+    path.write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "entry_id": 1,
+                        "source_log": "combined_quarantine_log.json",
+                        "path": "old.wav",
+                        "source_path": "old.wav",
+                        "path_type": "file",
+                        "size_bytes": 1024**4,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rows = plan_detail_rows(path)
+
+    assert rows[0].detail == "file; 1.0 TB"
 
 
 # -- PR #2 safety fixes -----------------------------------------------------

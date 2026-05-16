@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from itertools import combinations
@@ -43,6 +44,7 @@ from sfxworkbench.preservation import protected_by as preservation_protected_by
 from sfxworkbench.rename import _update_directory_rows
 from sfxworkbench.scan import ensure_hashes
 from sfxworkbench.scan_errors import _md5
+from sfxworkbench.utils import fmt_bytes
 
 console = Console()
 
@@ -389,7 +391,7 @@ def show_pack_audit_report(report: PackAuditReport) -> None:
 
 def _default_quarantine_dir(plan_path: Path, root: str | Path | None = None) -> Path:
     base = Path(root).expanduser() if root else plan_path.parent
-    return base / f"sfxworkbench_pack_quarantine_{_now_stamp()}"
+    return base / f"sfxworkbench_quarantine_{_now_stamp()}"
 
 
 def _default_pack_log_path(plan_path: Path) -> Path:
@@ -482,6 +484,7 @@ def build_pack_plan(
     config_path: Path | None = None,
     safe_folders: list[Path] | None = None,
     prefer_folders: list[Path] | None = None,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
 ) -> PackPlan:
     """Create a reviewed pack consolidation plan from a pack audit report."""
     report = PackAuditReport.model_validate(json.loads(report_path.read_text()))
@@ -495,6 +498,12 @@ def build_pack_plan(
     entries: list[PackPlanEntry] = []
     errors: list[dict] = []
     planned_sources: set[str] = set()
+    total_sources = len(report.exact_groups) + len(report.overlap_candidates)
+    processed_sources = 0
+    report_every = max(1, min(100, total_sources // 50 or 1))
+
+    if progress_callback is not None:
+        progress_callback("planning", 0, total_sources, "Building pack consolidation plan")
 
     conn = get_connection(db_path)
     try:
@@ -535,6 +544,16 @@ def build_pack_plan(
                 entries.append(entry)
                 if action == "quarantine_folder":
                     planned_sources.add(folder.path)
+            processed_sources += 1
+            if progress_callback is not None and (
+                processed_sources % report_every == 0 or processed_sources == total_sources
+            ):
+                progress_callback(
+                    "planning",
+                    processed_sources,
+                    total_sources,
+                    f"Planned {processed_sources:,}/{total_sources:,} pack candidate(s)",
+                )
 
         for candidate in report.overlap_candidates:
             source, keep = _choose_overlap_source(candidate)
@@ -577,6 +596,16 @@ def build_pack_plan(
             )
             if action == "quarantine_folder":
                 planned_sources.add(source.path)
+            processed_sources += 1
+            if progress_callback is not None and (
+                processed_sources % report_every == 0 or processed_sources == total_sources
+            ):
+                progress_callback(
+                    "planning",
+                    processed_sources,
+                    total_sources,
+                    f"Planned {processed_sources:,}/{total_sources:,} pack candidate(s)",
+                )
     finally:
         conn.close()
 
@@ -593,7 +622,11 @@ def build_pack_plan(
         errors=errors,
     )
     if output_path is not None:
+        if progress_callback is not None:
+            progress_callback("writing_report", len(entries), len(entries), f"Writing {output_path.name}")
         write_pack_plan(plan, output_path, quiet=quiet)
+    if progress_callback is not None:
+        progress_callback("complete", len(entries), len(entries), "Pack plan complete")
     return plan
 
 
@@ -677,7 +710,7 @@ def _validate_plan_file(file: PackPlanFile) -> str | None:
         except OSError as e:
             return str(e)
         if actual_size != file.size_bytes:
-            return f"size changed: expected {file.size_bytes}, got {actual_size}"
+            return f"size changed: expected {fmt_bytes(file.size_bytes)}, got {fmt_bytes(actual_size)}"
     if file.hash and len(file.hash) == 32:
         try:
             actual_hash = _md5(path)
@@ -708,7 +741,15 @@ def _indexed_folder_paths(db_path: Path, folder: Path, conn=None) -> set[str]:
     return {row["path"] for row in rows}
 
 
-def _validate_pack_entry(entry: PackPlanEntry, db_path: Path | None = None, conn=None) -> list[dict]:
+def _validate_pack_entry(
+    entry: PackPlanEntry,
+    db_path: Path | None = None,
+    conn=None,
+    *,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    progress_start: int = 0,
+    progress_total: int | None = None,
+) -> list[dict]:
     errors: list[dict] = []
     folder = Path(entry.folder_path)
     keep = Path(entry.keep_folder_path)
@@ -723,14 +764,30 @@ def _validate_pack_entry(entry: PackPlanEntry, db_path: Path | None = None, conn
         indexed_paths = _indexed_folder_paths(db_path, folder, conn=conn)
         for path in sorted(indexed_paths - planned_paths):
             errors.append({"path": path, "error": "indexed file was not in plan"})
-    for file in entry.files:
+    for file_index, file in enumerate(entry.files, start=1):
         path = Path(file.path)
         if not is_scoped_path(path, folder):
             errors.append({"path": str(path), "error": "planned file is outside source folder"})
+            if progress_callback is not None:
+                completed = progress_start + file_index
+                progress_callback(
+                    "validating",
+                    completed,
+                    progress_total,
+                    f"Validated {completed:,}/{progress_total or 0:,} pack file(s)",
+                )
             continue
         validation_error = _validate_plan_file(file)
         if validation_error is not None:
             errors.append({"path": str(path), "error": validation_error})
+        if progress_callback is not None:
+            completed = progress_start + file_index
+            progress_callback(
+                "validating",
+                completed,
+                progress_total,
+                f"Validated {completed:,}/{progress_total or 0:,} pack file(s)",
+            )
     return errors
 
 
@@ -753,6 +810,7 @@ def apply_pack_plan(
     quiet: bool = False,
     config_path: Path | None = None,
     safe_folders: list[Path] | None = None,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
 ) -> PackApplyResult:
     """Apply a reviewed pack plan by quarantining redundant folders."""
     raw_plan = json.loads(plan_path.read_text())
@@ -768,8 +826,10 @@ def apply_pack_plan(
     )
 
     approved = set(raw_plan.get("review", {}).get("approved_groups", []))
+    planned_entries = [(index, entry) for index, entry in enumerate(plan.entries) if entry.action == "quarantine_folder"]
+    validation_total = sum(len(entry.files) for _, entry in planned_entries)
     result = PackApplyResult(
-        planned=sum(1 for entry in plan.entries if entry.action == "quarantine_folder"),
+        planned=len(planned_entries),
         quarantine_dir=str(quarantine_dir) if quarantine_dir is not None else None,
         dry_run=dry_run,
     )
@@ -783,12 +843,22 @@ def apply_pack_plan(
     applied: list[PackPlanEntry] = []
     root = Path(plan.root)
     validation_conn = get_connection(db_path) if dry_run and db_path is not None else None
+    validation_completed = 0
+    processed_entries = 0
+    if progress_callback is not None:
+        progress_callback("validating", 0, validation_total, "Validating pack quarantine plan")
     try:
-        for index, entry in enumerate(plan.entries):
-            if entry.action != "quarantine_folder":
-                continue
+        for index, entry in planned_entries:
             if require_reviewed and index not in approved:
                 result.errors.append({"path": entry.folder_path, "error": f"group {index + 1} is not approved"})
+                processed_entries += 1
+                if progress_callback is not None:
+                    progress_callback(
+                        "applying",
+                        processed_entries,
+                        len(planned_entries),
+                        f"Skipped {processed_entries:,}/{len(planned_entries):,} pack folder(s)",
+                    )
                 continue
             protected_match = preservation_protected_by(Path(entry.folder_path), effective_rules)
             if protected_match is not None:
@@ -799,16 +869,50 @@ def apply_pack_plan(
                         "error": "source folder is protected by safe folder",
                     }
                 )
+                processed_entries += 1
+                if progress_callback is not None:
+                    progress_callback(
+                        "applying",
+                        processed_entries,
+                        len(planned_entries),
+                        f"Skipped {processed_entries:,}/{len(planned_entries):,} pack folder(s)",
+                    )
                 continue
-            validation_errors = _validate_pack_entry(entry, db_path=db_path, conn=validation_conn)
+            validation_errors = _validate_pack_entry(
+                entry,
+                db_path=db_path,
+                conn=validation_conn,
+                progress_callback=progress_callback,
+                progress_start=validation_completed,
+                progress_total=validation_total,
+            )
+            validation_completed += len(entry.files)
+            if progress_callback is not None and not entry.files:
+                progress_callback("validating", validation_completed, validation_total, "Validated pack folder")
             if validation_errors:
                 result.errors.extend(validation_errors)
+                processed_entries += 1
+                if progress_callback is not None:
+                    progress_callback(
+                        "applying",
+                        processed_entries,
+                        len(planned_entries),
+                        f"Skipped {processed_entries:,}/{len(planned_entries):,} pack folder(s)",
+                    )
                 continue
             source = Path(entry.folder_path)
             result.files_moved += len(entry.files) if dry_run else 0
             result.bytes_quarantined += entry.total_bytes if dry_run else 0
             if dry_run:
                 result.quarantined += 1
+                processed_entries += 1
+                if progress_callback is not None:
+                    progress_callback(
+                        "applying",
+                        processed_entries,
+                        len(planned_entries),
+                        f"Previewed {processed_entries:,}/{len(planned_entries):,} pack folder(s)",
+                    )
                 if not quiet:
                     console.print(f"[dim]Would quarantine folder: {source}[/dim]")
                 continue
@@ -816,6 +920,13 @@ def apply_pack_plan(
             assert quarantine_dir is not None
             target = _quarantine_target(source, quarantine_dir, quarantine_target_root)
             try:
+                if progress_callback is not None:
+                    progress_callback(
+                        "applying",
+                        processed_entries,
+                        len(planned_entries),
+                        f"Moving pack folder {processed_entries + 1:,}/{len(planned_entries):,}",
+                    )
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(source), str(target))
                 applied_entry = entry.model_copy(update={"quarantine_path": str(target)})
@@ -824,11 +935,34 @@ def apply_pack_plan(
                 result.files_moved += len(entry.files)
                 result.bytes_quarantined += entry.total_bytes
                 if db_path is not None:
+                    if progress_callback is not None:
+                        progress_callback(
+                            "updating_index",
+                            result.quarantined,
+                            len(planned_entries),
+                            f"Updating index for {result.quarantined:,}/{len(planned_entries):,} pack folder(s)",
+                        )
                     _update_quarantined_rows(db_path, source, target, root)
+                processed_entries += 1
+                if progress_callback is not None:
+                    progress_callback(
+                        "applying",
+                        processed_entries,
+                        len(planned_entries),
+                        f"Quarantined {processed_entries:,}/{len(planned_entries):,} pack folder(s)",
+                    )
                 if not quiet:
                     console.print(f"[green]Quarantined folder:[/green] {source} -> {target}")
             except OSError as e:
                 result.errors.append({"path": str(source), "target": str(target), "error": str(e)})
+                processed_entries += 1
+                if progress_callback is not None:
+                    progress_callback(
+                        "applying",
+                        processed_entries,
+                        len(planned_entries),
+                        f"Finished {processed_entries:,}/{len(planned_entries):,} pack folder(s)",
+                    )
     finally:
         if validation_conn is not None:
             validation_conn.close()
@@ -838,11 +972,20 @@ def apply_pack_plan(
             log_path = _default_pack_log_path(plan_path)
         log_plan = plan.model_copy(update={"entries": applied, "errors": []})
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        if progress_callback is not None:
+            progress_callback("writing_log", result.quarantined, len(planned_entries), f"Writing {log_path.name}")
         log_path.write_text(json.dumps(log_plan.model_dump(), indent=2))
         result.log_path = str(log_path)
         if not quiet:
             console.print(f"Pack undo log written to [cyan]{log_path}[/cyan]")
 
+    if progress_callback is not None:
+        progress_callback(
+            "complete",
+            processed_entries,
+            len(planned_entries),
+            f"Pack apply complete: quarantined {result.quarantined:,} folder(s)",
+        )
     return result
 
 

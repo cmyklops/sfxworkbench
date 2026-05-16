@@ -178,7 +178,7 @@ def _validate_candidate(path: Path, expected_size: int | None, expected_hash: st
     if expected_size is not None:
         actual_size = path.stat().st_size
         if actual_size != expected_size:
-            return f"size changed: expected {expected_size}, got {actual_size}"
+            return f"size changed: expected {fmt_bytes(expected_size)}, got {fmt_bytes(actual_size)}"
     if expected_hash and len(expected_hash) == 32:
         if _md5(path) != expected_hash:
             return "md5 changed"

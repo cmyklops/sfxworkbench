@@ -26,7 +26,7 @@ from sfxworkbench.cli.similarity import similarity_app
 from sfxworkbench.cli.tag import tag_app
 from sfxworkbench.cli.ucs import ucs_app
 from sfxworkbench.config import ConfigError, load_config
-from sfxworkbench.utils import json_dumps
+from sfxworkbench.utils import fmt_bytes, json_dumps
 
 app = typer.Typer(
     name="sfx",
@@ -438,8 +438,7 @@ def cmd_dedupe(
             f"Duplicate groups: [yellow]{summary.duplicate_groups:,}[/yellow]\n"
             f"Duplicate files: [yellow]{summary.duplicate_files:,}[/yellow]\n"
             f"Extra copies: [yellow]{summary.extra_copies:,}[/yellow]\n"
-            f"Wasted bytes: [yellow]{summary.wasted_bytes:,}[/yellow] "
-            f"([yellow]{summary.wasted_bytes / (1024**3):.2f} GB[/yellow])"
+            f"Wasted size: [yellow]{fmt_bytes(summary.wasted_bytes)}[/yellow]"
         )
     if json_output:
         print(

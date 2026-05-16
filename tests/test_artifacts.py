@@ -139,6 +139,32 @@ def test_materialized_artifact_rows_feed_detail_and_search(tmp_path: Path, tmp_d
     assert [row.path for row in matches] == [str(plan_path)]
 
 
+def test_artifact_detail_rows_format_quarantine_entry_sizes(tmp_path: Path, tmp_db: Path) -> None:
+    plan_path = tmp_path / "delete_plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "entry_id": 1,
+                        "source_log": "combined_quarantine_log.json",
+                        "path": "old.wav",
+                        "source_path": "old.wav",
+                        "path_type": "file",
+                        "size_bytes": 1024**4,
+                    }
+                ]
+            }
+        )
+    )
+    artifact = register_artifact(tmp_db, plan_path)
+    materialize_artifact_rows(tmp_db, artifact_id=artifact.id)
+
+    detail_rows = artifact_detail_rows(tmp_db, artifact_id=artifact.id)
+
+    assert detail_rows[0].detail == "file; 1.0 TB"
+
+
 def test_materialize_sync_fills_rows_for_unchanged_registered_artifacts(tmp_path: Path, tmp_db: Path) -> None:
     plan_path = tmp_path / "portable_rename_plan.json"
     plan_path.write_text(

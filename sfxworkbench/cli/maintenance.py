@@ -18,7 +18,7 @@ from rich.table import Table
 from sfxworkbench.artifacts import default_artifact_search_paths, sync_artifacts_from_paths
 from sfxworkbench.backups import clean_backups
 from sfxworkbench.cli._shared import resolve_db_path
-from sfxworkbench.utils import json_dumps
+from sfxworkbench.utils import fmt_bytes, json_dumps
 
 console = Console()
 
@@ -72,7 +72,7 @@ def cmd_maintenance_clean_backups(
         table.add_row("Scanned", f"{result.scanned:,}")
         table.add_row(verb, f"{result.removed:,}")
         table.add_row("Kept (newer than cutoff)", f"{result.kept:,}")
-        table.add_row("Bytes freed", f"{result.bytes_freed:,}")
+        table.add_row("Freed", fmt_bytes(result.bytes_freed))
         console.print(table)
         if result.dry_run and result.removed:
             console.print("[dim]Pass [bold]--apply[/bold] to actually delete the eligible backups.[/dim]")

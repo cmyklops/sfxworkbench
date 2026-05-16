@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from sfxworkbench.utils import fmt_bytes
+
 APPLY_LOG_DIR_NAME = "apply_logs"
 _TUI_SYNONYM_LIMIT = 8
 _TUI_SYNONYM_DEPTH = 0
@@ -120,6 +122,18 @@ def _action_error(action: str, exc: Exception) -> ActionResult:
 def _result_errors(result: Any) -> tuple[str, ...]:
     errors = getattr(result, "errors", []) or []
     return tuple(str(error.get("error", error)) if isinstance(error, dict) else str(error) for error in errors)
+
+
+def _applied_status(result: Any, errors: tuple[str, ...], *success_fields: str, cancelled: bool = False) -> str:
+    if cancelled:
+        return "cancelled"
+    if not errors:
+        return "applied"
+    for field in success_fields:
+        value = getattr(result, field, 0)
+        if isinstance(value, int | float) and value > 0:
+            return "applied"
+    return "error"
 
 
 def _per_entry_plan_has_approvals(plan_path: Path) -> bool:
@@ -658,7 +672,7 @@ def apply_tag_plan_action(
     errors = _result_errors(result)
     scope_note = f" (scoped to {len(target_paths)} selected file(s))" if target_paths else ""
     cancel_note = " — cancelled mid-apply, partial commits preserved" if result.cancelled else ""
-    status = "cancelled" if result.cancelled else ("applied" if not errors else "error")
+    status = _applied_status(result, errors, "applied", cancelled=result.cancelled)
     return ActionResult(
         action="tag_apply",
         status=status,
@@ -781,12 +795,12 @@ def apply_dedupe_plan_action(
         return _action_error("dedupe_apply", e)
     errors = _result_errors(result)
     cancel_note = " — cancelled mid-apply" if result.cancelled else ""
-    status = "cancelled" if result.cancelled else ("applied" if not errors else "error")
+    status = _applied_status(result, errors, "quarantined", "removed", cancelled=result.cancelled)
     return ActionResult(
         action="dedupe_apply",
         status=status,
         message=(
-            f"Quarantined {result.quarantined:,} duplicate file(s), freed {result.bytes_freed:,} byte(s)."
+            f"Quarantined {result.quarantined:,} duplicate file(s), freed {fmt_bytes(result.bytes_freed)}."
             f"{cancel_note} Destination: {result.quarantine_dir or 'none'}."
         ),
         output_path=result.log_path or result.quarantine_dir,
@@ -838,7 +852,11 @@ def pack_audit_action(
     )
 
 
-def pack_plan_action(report_dir: Path) -> ActionResult:
+def pack_plan_action(
+    report_dir: Path,
+    *,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+) -> ActionResult:
     report_path = report_dir / "pack_overlap_report.json"
     if not report_path.exists():
         return ActionResult(
@@ -848,7 +866,7 @@ def pack_plan_action(report_dir: Path) -> ActionResult:
 
     try:
         output = report_dir / "pack_consolidation_plan.json"
-        plan = build_pack_plan(report_path, output_path=output, quiet=True)
+        plan = build_pack_plan(report_path, output_path=output, quiet=True, progress_callback=progress_callback)
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("pack_plan", e)
     return ActionResult(
@@ -881,7 +899,12 @@ def approve_pack_plan_action(report_dir: Path) -> ActionResult:
     )
 
 
-def apply_pack_plan_action(db_path: Path, report_dir: Path) -> ActionResult:
+def apply_pack_plan_action(
+    db_path: Path,
+    report_dir: Path,
+    *,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+) -> ActionResult:
     plan_path = report_dir / "pack_consolidation_plan.json"
     if not plan_path.exists():
         return ActionResult("pack_apply", "error", "No pack plan found.", errors=("No pack plan found.",))
@@ -891,13 +914,20 @@ def apply_pack_plan_action(db_path: Path, report_dir: Path) -> ActionResult:
     if auto_approve_error is not None:
         return _action_error("pack_apply", auto_approve_error)
     try:
-        result = apply_pack_plan(plan_path, db_path=db_path, dry_run=False, require_reviewed=True, quiet=True)
+        result = apply_pack_plan(
+            plan_path,
+            db_path=db_path,
+            dry_run=False,
+            require_reviewed=True,
+            quiet=True,
+            progress_callback=progress_callback,
+        )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("pack_apply", e)
     errors = _result_errors(result)
     return ActionResult(
         action="pack_apply",
-        status="applied" if not errors else "error",
+        status=_applied_status(result, errors, "quarantined"),
         message=f"Quarantined {result.quarantined:,} pack folder(s). Destination: {result.quarantine_dir or 'none'}.",
         output_path=result.log_path,
         errors=errors,
@@ -972,7 +1002,7 @@ def apply_rename_action(
         return _action_error("rename_apply", e)
     errors = _result_errors(result)
     cancel_note = " — cancelled mid-apply" if result.cancelled else ""
-    status = "cancelled" if result.cancelled else ("applied" if result.renamed or not errors else "error")
+    status = _applied_status(result, errors, "renamed", cancelled=result.cancelled)
     return ActionResult(
         action="rename_apply",
         status=status,
@@ -1000,7 +1030,7 @@ def undo_rename_action(db_path: Path, report_dir: Path) -> ActionResult:
     errors = _result_errors(result)
     return ActionResult(
         action="rename_undo",
-        status="applied" if not errors else "error",
+        status=_applied_status(result, errors, "renamed"),
         message=f"Restored {result.renamed:,} renamed path(s).",
         output_path=str(log_path),
         errors=errors,
@@ -1074,7 +1104,7 @@ def apply_organize_action(db_path: Path, report_dir: Path) -> ActionResult:
     errors = _result_errors(result)
     return ActionResult(
         action="organize_apply",
-        status="applied" if not errors else "error",
+        status=_applied_status(result, errors, "renamed"),
         message=f"Applied {result.renamed:,} folder organization rename(s).",
         output_path=result.log_path,
         errors=errors,
@@ -1099,7 +1129,7 @@ def undo_organize_action(db_path: Path, report_dir: Path) -> ActionResult:
     errors = _result_errors(result)
     return ActionResult(
         action="organize_undo",
-        status="applied" if not errors else "error",
+        status=_applied_status(result, errors, "renamed"),
         message=f"Restored {result.renamed:,} folder organization rename(s).",
         output_path=str(log_path),
         errors=errors,
@@ -1161,7 +1191,7 @@ def apply_nesting_action(db_path: Path, report_dir: Path) -> ActionResult:
     error_note = f", skipped {len(errors):,} issue(s)" if errors else ""
     return ActionResult(
         action="organize_nesting_apply",
-        status="applied" if result.flattened or result.moved or not errors else "error",
+        status=_applied_status(result, errors, "flattened", "moved"),
         message=f"Flattened {result.flattened:,} nested folder(s), moved {result.moved:,} path(s){error_note}.",
         output_path=result.log_path,
         errors=errors,
@@ -1186,7 +1216,7 @@ def undo_nesting_action(db_path: Path, report_dir: Path) -> ActionResult:
     errors = _result_errors(result)
     return ActionResult(
         action="organize_nesting_undo",
-        status="applied" if not errors else "error",
+        status=_applied_status(result, errors, "restored", "moved"),
         message=f"Restored {result.undone:,} nested folder(s), moved {result.moved:,} path(s).",
         output_path=str(log_path),
         errors=errors,
@@ -1358,7 +1388,7 @@ def apply_embedded_metadata_action(
     errors = _result_errors(result)
     scope_note = f" (scoped to {len(target_paths)} selected file(s))" if target_paths else ""
     cancel_note = " — cancelled mid-apply" if result.cancelled else ""
-    status = "cancelled" if result.cancelled else ("applied" if not errors else "error")
+    status = _applied_status(result, errors, "applied", "files_written", cancelled=result.cancelled)
     return ActionResult(
         action="metadata_write_apply",
         status=status,
@@ -1391,7 +1421,7 @@ def undo_embedded_metadata_action(db_path: Path, report_dir: Path) -> ActionResu
     errors = _result_errors(result)
     return ActionResult(
         action="metadata_write_undo",
-        status="applied" if not errors else "error",
+        status=_applied_status(result, errors, "restored"),
         message=f"Restored {result.restored:,} embedded metadata backup file(s).",
         output_path=str(log_path),
         errors=errors,
@@ -1414,8 +1444,6 @@ def build_delete_plan_action(report_dir: Path) -> ActionResult:
     except OSError as e:
         return _action_error("delete_plan", e)
     from sfxworkbench.delete import build_delete_plan, write_delete_plan
-    from sfxworkbench.utils import fmt_bytes
-
     try:
         output = _ensure_report_dir(report_dir) / "delete_plan.json"
         plan = build_delete_plan(source_log)
@@ -1484,7 +1512,7 @@ def apply_delete_plan_action(report_dir: Path, db_path: Path | None = None) -> A
     errors = _result_errors(result)
     return ActionResult(
         action="delete_apply",
-        status="applied" if not errors else "error",
+        status=_applied_status(result, errors, "deleted"),
         message=f"Permanently deleted {result.deleted:,} quarantine path(s), skipped {result.skipped:,}.",
         output_path=result.log_path,
         errors=errors,

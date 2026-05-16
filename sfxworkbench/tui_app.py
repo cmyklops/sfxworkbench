@@ -79,6 +79,7 @@ from sfxworkbench.tui_perf import timed as _perf_timed
 from sfxworkbench.tui_perf import write_trace as _perf_write_trace
 from sfxworkbench.tui_text import _tag_text as _tag_text
 from sfxworkbench.tui_text import _tags_cell as _tags_cell
+from sfxworkbench.utils import fmt_bytes
 
 _FEATURES: tuple[tuple[str, str], ...] = (
     ("start", "Start"),
@@ -225,6 +226,19 @@ def _fmt(value: object) -> str:
     return str(value)
 
 
+def _fmt_indexed_size(indexed_gb: float) -> str:
+    if indexed_gb >= 1000:
+        return f"{indexed_gb / 1000:,.1f} TB"
+    return f"{indexed_gb:,.1f} GB"
+
+
+def _fmt_finding_count(label: str, count: object) -> str:
+    lower_label = label.lower()
+    if isinstance(count, int | float) and ("bytes" in lower_label or "size" in lower_label):
+        return fmt_bytes(float(count))
+    return _fmt(count)
+
+
 def _progress_phase_label(phase: str) -> str:
     text = phase.replace("_", " ").strip()
     return text.title() if text else "Progress"
@@ -325,8 +339,7 @@ def _valid_library_path(path: str | Path | None) -> bool:
 
 
 def _quarantine_dir_template(root: str | Path, *, kind: str = "dedupe") -> Path:
-    prefix = "sfxworkbench_pack_quarantine" if kind == "pack" else "sfxworkbench_quarantine"
-    return Path(root).expanduser() / f"{prefix}_YYYYMMDD_HHMMSS"
+    return Path(root).expanduser() / "sfxworkbench_quarantine_YYYYMMDD_HHMMSS"
 
 
 def _quarantine_log_dirs_from_payload(payload: dict) -> list[Path]:
@@ -1745,7 +1758,9 @@ def run_tui(
 
             handlers["pack-audit"] = _h_pack_audit
             handlers["pack-plan"] = lambda: _start(
-                "pack_plan", "Build Pack Plan", lambda: pack_plan_action(self._report_dir)
+                "pack_plan",
+                "Build Pack Plan",
+                lambda: pack_plan_action(self._report_dir, progress_callback=pcb),
             )
             handlers["pack-apply"] = lambda: _confirm(
                 "pack_apply",
@@ -1753,7 +1768,7 @@ def run_tui(
                 "This quarantines pack/folder overlaps from the current pack plan. "
                 f"{self._quarantine_destination_hint('pack')} "
                 "Any pending groups are auto-approved at apply time.",
-                lambda: apply_pack_plan_action(db_path, self._report_dir),
+                lambda: apply_pack_plan_action(db_path, self._report_dir, progress_callback=pcb),
             )
 
             # Organize: rename
@@ -2062,9 +2077,7 @@ def run_tui(
                 text.append("  reports: ", style="bold")
                 text.append(_short_path(self._report_dir, width=46), style="cyan")
                 text.append("\nquarantine: ", style="bold")
-                text.append(_short_path(_quarantine_dir_template(root), width=54), style="yellow")
-                text.append("  pack: ", style="bold")
-                text.append(_short_path(_quarantine_dir_template(root, kind="pack"), width=46), style="yellow")
+                text.append(_short_path(_quarantine_dir_template(root), width=84), style="yellow")
             else:
                 last_scan = library_root(db_path)
                 invalid = str(self._library_path).strip() not in {"", "PATH"}
@@ -2710,7 +2723,7 @@ def run_tui(
             status.append("  reports dir: ", style="bold")
             status.append(_short_path(self._report_dir, width=52 if not self._compact else 26), style="cyan")
             status.append("  indexed size: ", style="bold")
-            status.append(f"{indexed_gb:,.1f} GB", style="yellow")
+            status.append(_fmt_indexed_size(indexed_gb), style="yellow")
             self.query_one("#status-strip", Static).update(status)
 
         def _fill_operation_strip(self) -> None:
@@ -2802,7 +2815,10 @@ def run_tui(
                 return
             for row in rows:
                 table.add_row(
-                    row.label, _fmt(row.count), _state_token(_finding_status(row.status, row.count)), row.detail
+                    row.label,
+                    _fmt_finding_count(row.label, row.count),
+                    _state_token(_finding_status(row.status, row.count)),
+                    row.detail,
                 )
 
         def _fill_start(self) -> None:

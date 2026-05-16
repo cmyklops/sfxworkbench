@@ -26,6 +26,7 @@ from sfxworkbench.preservation import build_preservation_rules
 from sfxworkbench.tag_suggest import clean_tag_suggestion_text, is_technical_metadata_blob
 from sfxworkbench.tui_perf import record_phase as _perf_record_phase
 from sfxworkbench.tui_perf import timed as _perf_timed
+from sfxworkbench.utils import fmt_bytes
 
 APPLY_LOG_DIR_NAME = "apply_logs"
 _STANDARD_SAMPLE_RATES = {44100, 48000, 88200, 96000, 176400, 192000}
@@ -926,7 +927,7 @@ def dedupe_findings(db_path: Path = DEFAULT_DB_PATH) -> list[FeatureFinding]:
             FeatureFinding("dedupe", "Duplicate groups", summary.duplicate_groups, "review" if groups else "clear"),
             FeatureFinding("dedupe", "Duplicate files", summary.duplicate_files, "review" if groups else "clear"),
             FeatureFinding("dedupe", "Extra copies", summary.extra_copies, "review" if groups else "clear"),
-            FeatureFinding("dedupe", "Wasted bytes", summary.wasted_bytes, "review" if groups else "clear"),
+            FeatureFinding("dedupe", "Wasted size", summary.wasted_bytes, "review" if groups else "clear"),
         ]
 
     return _adapter_cached(cache_key, _build)
@@ -2733,7 +2734,7 @@ def file_detail(
         ("Path", row["path"]),
         ("Stem", row["stem"] or ""),
         ("Extension", row["extension"] or ""),
-        ("Size", f"{int(row['size_bytes'] or 0):,} bytes" if row["size_bytes"] is not None else ""),
+        ("Size", fmt_bytes(float(row["size_bytes"])) if row["size_bytes"] is not None else ""),
         ("Scanned", row["scanned_at"] or ""),
     )
     audio_rows = (
@@ -3502,9 +3503,7 @@ def plan_detail_rows(path: Path, *, limit: int = 100) -> list[PlanDetailRow]:
         if "entry_id" in entry and "source_log" in entry:
             path_type = _first_text(entry, "path_type")
             size = entry.get("size_bytes")
-            detail_parts = [
-                part for part in (path_type, f"{size:,} byte(s)" if isinstance(size, int | float) else "") if part
-            ]
+            detail_parts = [part for part in (path_type, fmt_bytes(float(size)) if isinstance(size, int | float) else "") if part]
             detail = "; ".join(detail_parts)
         if moves:
             move_detail = f"{len(moves):,} move(s)"

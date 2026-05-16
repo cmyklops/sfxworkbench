@@ -14,6 +14,7 @@ from sfxworkbench.tui_actions import (
     apply_dedupe_plan_action,
     apply_delete_plan_action,
     apply_nesting_action,
+    apply_pack_plan_action,
     apply_rename_action,
     apply_tag_plan_action,
     apply_tag_plan_and_build_embedded_plan_action,
@@ -26,6 +27,8 @@ from sfxworkbench.tui_actions import (
     full_audit_action,
     operation_report_dir,
     organize_audit_action,
+    pack_audit_action,
+    pack_plan_action,
     rename_preview_action,
     scan_action,
     tag_plan_action,
@@ -124,6 +127,101 @@ def test_tui_long_actions_report_progress(tmp_library: Path, tmp_db: Path, tmp_p
     assert any(event[0] == "walking" for event in rename_events)
     assert any(event[0] == "planning" for event in rename_events)
     assert rename_events[-1][0] == "preview"
+
+
+def test_tui_pack_plan_action_reports_progress(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
+    pack_a = tmp_library / "Pack A"
+    pack_b = tmp_library / "Pack B"
+    pack_a.mkdir()
+    pack_b.mkdir()
+    shutil.copy2(tmp_library / "sounds" / "AMB_RAIN_01.wav", pack_a / "AMB_RAIN_01.wav")
+    shutil.copy2(tmp_library / "sounds" / "AMB_RAIN_01.wav", pack_a / "AMB_RAIN_02.wav")
+    shutil.copy2(tmp_library / "sounds" / "AMB_RAIN_01.wav", pack_b / "AMB_RAIN_01.wav")
+    shutil.copy2(tmp_library / "sounds" / "AMB_RAIN_01.wav", pack_b / "AMB_RAIN_02.wav")
+    scan_library(tmp_library, tmp_db, skip_hash=False, quiet=True)
+    report_dir = tmp_path / "reports"
+    events: list[tuple[str, int, int | None, str]] = []
+
+    audit = pack_audit_action(tmp_library, tmp_db, report_dir)
+    plan = pack_plan_action(
+        report_dir,
+        progress_callback=lambda phase, completed, total, message: events.append(
+            (phase, completed, total, message)
+        ),
+    )
+
+    assert audit.ok
+    assert plan.ok
+    assert any(event[0] == "planning" for event in events)
+    assert any(event[0] == "writing_report" for event in events)
+    assert events[-1][0] == "complete"
+
+
+def test_tui_pack_apply_action_reports_progress(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
+    pack_a = tmp_library / "Pack A"
+    pack_b = tmp_library / "Pack B"
+    pack_a.mkdir()
+    pack_b.mkdir()
+    shutil.copy2(tmp_library / "sounds" / "AMB_RAIN_01.wav", pack_a / "AMB_RAIN_01.wav")
+    shutil.copy2(tmp_library / "sounds" / "AMB_RAIN_01.wav", pack_a / "AMB_RAIN_02.wav")
+    shutil.copy2(tmp_library / "sounds" / "AMB_RAIN_01.wav", pack_b / "AMB_RAIN_01.wav")
+    shutil.copy2(tmp_library / "sounds" / "AMB_RAIN_01.wav", pack_b / "AMB_RAIN_02.wav")
+    scan_library(tmp_library, tmp_db, skip_hash=False, quiet=True)
+    report_dir = tmp_path / "reports"
+    events: list[tuple[str, int, int | None, str]] = []
+
+    audit = pack_audit_action(tmp_library, tmp_db, report_dir)
+    plan = pack_plan_action(report_dir)
+    apply = apply_pack_plan_action(
+        tmp_db,
+        report_dir,
+        progress_callback=lambda phase, completed, total, message: events.append(
+            (phase, completed, total, message)
+        ),
+    )
+
+    assert audit.ok
+    assert plan.ok
+    assert apply.ok
+    assert any(event[0] == "validating" for event in events)
+    assert any(event[0] == "applying" for event in events)
+    assert any(event[0] == "writing_log" for event in events)
+    assert events[-1][0] == "complete"
+
+
+def test_tui_pack_apply_partial_success_is_applied_status(
+    tmp_library: Path, tmp_db: Path, tmp_path: Path
+) -> None:
+    pack_a = tmp_library / "Pack A"
+    pack_b = tmp_library / "Pack B"
+    pack_a.mkdir()
+    pack_b.mkdir()
+    shutil.copy2(tmp_library / "sounds" / "AMB_RAIN_01.wav", pack_a / "AMB_RAIN_01.wav")
+    shutil.copy2(tmp_library / "sounds" / "AMB_RAIN_01.wav", pack_a / "AMB_RAIN_02.wav")
+    shutil.copy2(tmp_library / "sounds" / "AMB_RAIN_01.wav", pack_b / "AMB_RAIN_01.wav")
+    shutil.copy2(tmp_library / "sounds" / "AMB_RAIN_01.wav", pack_b / "AMB_RAIN_02.wav")
+    scan_library(tmp_library, tmp_db, skip_hash=False, quiet=True)
+    report_dir = tmp_path / "reports"
+
+    audit = pack_audit_action(tmp_library, tmp_db, report_dir)
+    plan = pack_plan_action(report_dir)
+    plan_path = report_dir / "pack_consolidation_plan.json"
+    payload = json.loads(plan_path.read_text())
+    assert payload["entries"]
+    missing_entry = dict(payload["entries"][0])
+    missing_entry["folder_path"] = str(tmp_library / "Missing Pack")
+    payload["entries"].append(missing_entry)
+    plan_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    apply = apply_pack_plan_action(tmp_db, report_dir)
+
+    assert audit.ok
+    assert plan.ok
+    assert apply.status == "applied"
+    assert apply.ok
+    assert apply.errors
+    assert apply.details is not None
+    assert apply.details["quarantined"] >= 1
 
 
 def test_tui_scan_action_reports_cancelled_status(tmp_library: Path, tmp_db: Path) -> None:
@@ -265,7 +363,7 @@ def test_tui_permanent_delete_plan_and_apply_from_quarantine_log(tmp_path: Path)
     report_dir = tmp_path / "reports"
     apply_log_dir = report_dir / "apply_logs"
     apply_log_dir.mkdir(parents=True)
-    quarantined = report_dir / "sfxworkbench_pack_quarantine_20260512_120000" / "old_pack"
+    quarantined = report_dir / "sfxworkbench_quarantine_20260512_120000" / "old_pack"
     quarantined.mkdir(parents=True)
     (quarantined / "hit.wav").write_bytes(b"audio")
     source_log = apply_log_dir / "pack_quarantine_log_20260512_120000.json"
@@ -327,7 +425,7 @@ def test_tui_permanent_delete_plan_includes_every_quarantine_log(tmp_path: Path)
     apply_log_dir = report_dir / "apply_logs"
     apply_log_dir.mkdir(parents=True)
     first_dir = report_dir / "sfxworkbench_dedupe_quarantine_20260510_100000"
-    second_dir = report_dir / "sfxworkbench_pack_quarantine_20260512_120000"
+    second_dir = report_dir / "sfxworkbench_quarantine_20260512_120000"
     first_dir.mkdir()
     second_dir.mkdir()
     (first_dir / "dupe.wav").write_bytes(b"01")
