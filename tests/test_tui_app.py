@@ -840,3 +840,18 @@ def test_tui_quarantine_reveal_finds_log_destination_outside_reports(tmp_path: P
     )
 
     assert _latest_quarantine_dir_from_reports([reports]) == quarantine
+
+
+def test_tui_quarantine_reveal_finds_pack_log_folder_destination(tmp_path: Path) -> None:
+    reports = tmp_path / "reports"
+    log_dir = reports / "apply_logs"
+    log_dir.mkdir(parents=True)
+    quarantine = tmp_path / "library" / "sfxworkbench_pack_quarantine_20260516_105918"
+    quarantined_folder = quarantine / "B Pack"
+    quarantined_folder.mkdir(parents=True)
+    (log_dir / "pack_quarantine_log_20260516_105918.json").write_text(
+        json.dumps({"entries": [{"folder_path": "/old/B Pack", "quarantine_path": str(quarantined_folder)}]}),
+        encoding="utf-8",
+    )
+
+    assert _latest_quarantine_dir_from_reports([reports]) == quarantine

@@ -349,7 +349,7 @@ def _quarantine_log_dirs_from_payload(payload: dict) -> list[Path]:
             if not isinstance(value, str) or not value:
                 continue
             path = Path(value)
-            path_candidates = [path] if path.is_dir() else list(path.parents)
+            path_candidates = [path, *path.parents]
             for candidate in path_candidates:
                 if "_quarantine_" in candidate.name:
                     candidates.append(candidate)
