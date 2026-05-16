@@ -8,6 +8,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 
 def _powershell_single_quoted(value: str) -> str:
@@ -21,6 +22,7 @@ class DesktopIntegration:
     platform: str = sys.platform
     which: Callable[[str], str | None] = shutil.which
     popen: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen
+    run: Callable[..., Any] = subprocess.run
 
     def command(self, target: Path, *, reveal: bool = False) -> list[str]:
         """Return a desktop command for revealing a path or auditioning audio."""
@@ -56,6 +58,41 @@ class DesktopIntegration:
         if command:
             self.popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return command
+
+    def choose_directory(self, initial: Path | None = None) -> Path | None:
+        """Open a native-ish directory picker and return the selected folder."""
+        initial_path = str((initial or Path.home()).expanduser())
+        if self.platform == "win32":
+            escaped = _powershell_single_quoted(initial_path)
+            script = (
+                "Add-Type -AssemblyName System.Windows.Forms; "
+                "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog; "
+                "$dialog.Description = 'Choose an sfx library folder'; "
+                f"$dialog.SelectedPath = {escaped}; "
+                "if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) "
+                "{ [Console]::Out.Write($dialog.SelectedPath) }"
+            )
+            command = ["powershell", "-NoProfile", "-STA", "-Command", script]
+        elif self.platform == "darwin":
+            escaped = initial_path.replace("\\", "\\\\").replace('"', '\\"')
+            command = [
+                "osascript",
+                "-e",
+                f'POSIX path of (choose folder with prompt "Choose an sfx library folder" default location POSIX file "{escaped}")',
+            ]
+        else:
+            picker = self.which("zenity") or self.which("kdialog")
+            if picker is None:
+                return None
+            if Path(picker).name == "kdialog":
+                command = [picker, "--getexistingdirectory", initial_path]
+            else:
+                command = [picker, "--file-selection", "--directory", "--filename", initial_path]
+        completed = self.run(command, capture_output=True, text=True, check=False)
+        selected = str(getattr(completed, "stdout", "") or "").strip()
+        if not selected:
+            return None
+        return Path(selected).expanduser()
 
 
 def desktop_open_command(

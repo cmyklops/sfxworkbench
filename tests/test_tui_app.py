@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 import pytest
+from sfxworkbench.desktop import DesktopIntegration
 from sfxworkbench.tui_app import (
     _ACTION_BUTTON_IDS,
     ButtonLockSnapshot,
@@ -26,6 +27,7 @@ from sfxworkbench.tui_app import (
     _progress_phase_label,
     _progress_rate_label,
     _progress_unit,
+    _quarantine_dir_template,
     _state_token,
     _tag_text,
     _TuiInstanceLock,
@@ -382,8 +384,12 @@ def test_top_meta_group_precedes_tabs() -> None:
     assert app_source.index('id="library-path-input"') < app_source.index('id="status-strip"')
     assert 'yield Static("Library", classes="control-label")' in app_source
     assert "Paste or drag a folder path" in app_source
+    assert 'yield Button("Browse...", id="library-browse")' in app_source
     assert 'yield Button("Use Path", id="set-library-path")' not in app_source
     assert 'yield Button("Use Last Scan", id="use-indexed-root")' in app_source
+    assert "def _fill_library_status" in app_source
+    assert "sfxworkbench_quarantine" in app_source
+    assert "YYYYMMDD_HHMMSS" in app_source
     assert 'yield Button("Cancel", id="cancel-action", disabled=True)' in app_source
     assert app_source.index("yield Tabs(*(Tab(label, id=key) for key, label in _FEATURES)") < app_source.index(
         'id="operation-row"'
@@ -778,6 +784,33 @@ def test_audition_reports_no_linux_player() -> None:
     assert _desktop_open_command(target, platform="linux", which=lambda _: None) == []
 
 
+def test_desktop_choose_directory_uses_windows_folder_picker() -> None:
+    calls = []
+
+    class Completed:
+        stdout = "C:\\SFX Library"
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return Completed()
+
+    selected = DesktopIntegration(platform="win32", run=fake_run).choose_directory(Path("C:/Start"))
+
+    assert selected == Path("C:/SFX Library")
+    command, kwargs = calls[0]
+    assert command[:3] == ["powershell", "-NoProfile", "-STA"]
+    assert "FolderBrowserDialog" in command[-1]
+    assert kwargs["capture_output"] is True
+    assert kwargs["text"] is True
+
+
+def test_quarantine_dir_template_names_library_root_destination(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+
+    assert _quarantine_dir_template(root) == root / "sfxworkbench_quarantine_YYYYMMDD_HHMMSS"
+    assert _quarantine_dir_template(root, kind="pack") == root / "sfxworkbench_pack_quarantine_YYYYMMDD_HHMMSS"
+
+
 def test_tui_quarantine_reveal_finds_legacy_quarantine_folder(tmp_path: Path) -> None:
     reports = tmp_path / "reports"
     legacy = reports / "wavwarden_quarantine_20260508_044220"
@@ -791,3 +824,19 @@ def test_tui_quarantine_reveal_finds_legacy_quarantine_folder(tmp_path: Path) ->
     os.utime(legacy, (legacy_time, legacy_time))
 
     assert _latest_quarantine_dir_from_reports([reports]) == legacy
+
+
+def test_tui_quarantine_reveal_finds_log_destination_outside_reports(tmp_path: Path) -> None:
+    reports = tmp_path / "reports"
+    log_dir = reports / "apply_logs"
+    log_dir.mkdir(parents=True)
+    quarantine = tmp_path / "library" / "sfxworkbench_quarantine_20260516_105918"
+    quarantined_file = quarantine / "one.wav"
+    quarantined_file.parent.mkdir(parents=True)
+    quarantined_file.write_bytes(b"audio")
+    (log_dir / "dedupe_quarantine_log_20260516_105918.json").write_text(
+        json.dumps({"entries": [{"path": "/old/one.wav", "quarantine_path": str(quarantined_file)}]}),
+        encoding="utf-8",
+    )
+
+    assert _latest_quarantine_dir_from_reports([reports]) == quarantine

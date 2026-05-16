@@ -324,6 +324,39 @@ def _valid_library_path(path: str | Path | None) -> bool:
     return Path(text).expanduser().is_dir()
 
 
+def _quarantine_dir_template(root: str | Path, *, kind: str = "dedupe") -> Path:
+    prefix = "sfxworkbench_pack_quarantine" if kind == "pack" else "sfxworkbench_quarantine"
+    return Path(root).expanduser() / f"{prefix}_YYYYMMDD_HHMMSS"
+
+
+def _quarantine_log_dirs_from_payload(payload: dict) -> list[Path]:
+    candidates: list[Path] = []
+    for key in ("quarantine_dir",):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            candidates.append(Path(value))
+    result = payload.get("result")
+    if isinstance(result, dict):
+        value = result.get("quarantine_dir")
+        if isinstance(value, str) and value:
+            candidates.append(Path(value))
+    entries = payload.get("entries")
+    if isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            value = entry.get("quarantine_path")
+            if not isinstance(value, str) or not value:
+                continue
+            path = Path(value)
+            path_candidates = [path] if path.is_dir() else list(path.parents)
+            for candidate in path_candidates:
+                if "_quarantine_" in candidate.name:
+                    candidates.append(candidate)
+                    break
+    return candidates
+
+
 def _db_count(db_path: Path, sql: str) -> int:
     if not db_path.exists():
         return 0
@@ -725,6 +758,17 @@ def _latest_quarantine_dir_from_reports(report_paths: list[Path]) -> Path | None
             continue
         for pattern in patterns:
             candidates.extend(path for path in report_path.glob(pattern) if path.is_dir())
+        for directory in (report_path, report_path / APPLY_LOG_DIR_NAME):
+            if not directory.exists():
+                continue
+            for log_path in directory.glob("*.json"):
+                try:
+                    payload = json.loads(log_path.read_text())
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                candidates.extend(path for path in _quarantine_log_dirs_from_payload(payload) if path.is_dir())
     matches = sorted(set(candidates), key=lambda path: path.stat().st_mtime, reverse=True)
     return matches[0] if matches else None
 
@@ -825,8 +869,10 @@ def run_tui(
             color: #d7dee7;
         }
         #library-status-buffer {
-            height: 1;
+            height: 2;
+            padding: 0 1;
             background: #111a23;
+            color: #9fb0c0;
         }
         #library-path-input {
             width: 1fr;
@@ -1101,6 +1147,7 @@ def run_tui(
                         placeholder="Paste or drag a folder path, then press Enter",
                         id="library-path-input",
                     )
+                    yield Button("Browse...", id="library-browse")
                     yield Button("Use Last Scan", id="use-indexed-root")
                     yield Button("Refresh", id="refresh-all")
                 yield Static("", id="library-status-buffer")
@@ -1228,6 +1275,7 @@ def run_tui(
 
         def on_mount(self) -> None:
             self._last_compact = self._compact
+            self._fill_library_status()
             self.query_one("#status-strip", Static).update("Loading index summary…")
             self.query_one("#operation-strip", Static).update("No action is running.")
             self._fill_start_loading()
@@ -1577,6 +1625,7 @@ def run_tui(
             handlers: dict[str, Callable[[], None]] = {}
 
             # -- Direct UI handlers (no worker action) ---------------------
+            handlers["library-browse"] = self._browse_library_path
             handlers["use-indexed-root"] = lambda: self._set_library_path(library_root(db_path))
             handlers["cancel-action"] = self._cancel_running_action
             handlers["refresh-all"] = self._refresh
@@ -1667,7 +1716,9 @@ def run_tui(
             handlers["dedupe-apply"] = lambda: _confirm(
                 "dedupe_apply",
                 "Apply Dedupe",
-                "This quarantines duplicate files from the current dedupe plan. Required first: Build Dedupe Plan. Any pending groups are auto-approved at apply time.",
+                "This quarantines duplicate files from the current dedupe plan. "
+                f"{self._quarantine_destination_hint('dedupe')} "
+                "Any pending groups are auto-approved at apply time.",
                 lambda: apply_dedupe_plan_action(
                     db_path,
                     self._report_dir,
@@ -1699,7 +1750,9 @@ def run_tui(
             handlers["pack-apply"] = lambda: _confirm(
                 "pack_apply",
                 "Apply Pack",
-                "This quarantines pack/folder overlaps from the current pack plan. Required first: Pack Audit, Build Pack Plan. Any pending groups are auto-approved at apply time.",
+                "This quarantines pack/folder overlaps from the current pack plan. "
+                f"{self._quarantine_destination_hint('pack')} "
+                "Any pending groups are auto-approved at apply time.",
                 lambda: apply_pack_plan_action(db_path, self._report_dir),
             )
 
@@ -1977,6 +2030,85 @@ def run_tui(
         def _root_path(self) -> Path:
             return Path(self._library_path).expanduser()
 
+        def _plan_root(self, plan_name: str) -> str | None:
+            plan_path = self._report_dir / plan_name
+            try:
+                payload = json.loads(plan_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                return None
+            if not isinstance(payload, dict):
+                return None
+            root = payload.get("root")
+            return str(root).strip() if isinstance(root, str) and root.strip() else None
+
+        def _quarantine_destination_hint(self, kind: str) -> str:
+            plan_name = "pack_consolidation_plan.json" if kind == "pack" else "dedupe_plan.json"
+            root = self._plan_root(plan_name) or (self._library_path if _valid_library_path(self._library_path) else "")
+            if not root:
+                return "Quarantine destination: set an existing library folder first."
+            template = _quarantine_dir_template(root, kind=kind)
+            return f"Quarantine destination: {_short_path(template, width=84)}."
+
+        def _fill_library_status(self) -> None:
+            try:
+                target = self.query_one("#library-status-buffer", Static)
+            except NoMatches:
+                return
+            text = Text()
+            if _valid_library_path(self._library_path):
+                root = self._root_path()
+                text.append("library: ", style="bold")
+                text.append(_short_path(root, width=54), style="cyan")
+                text.append("  reports: ", style="bold")
+                text.append(_short_path(self._report_dir, width=46), style="cyan")
+                text.append("\nquarantine: ", style="bold")
+                text.append(_short_path(_quarantine_dir_template(root), width=54), style="yellow")
+                text.append("  pack: ", style="bold")
+                text.append(_short_path(_quarantine_dir_template(root, kind="pack"), width=46), style="yellow")
+            else:
+                last_scan = library_root(db_path)
+                invalid = str(self._library_path).strip() not in {"", "PATH"}
+                text.append("library: ", style="bold")
+                text.append("invalid" if invalid else "unset", style="yellow")
+                if invalid:
+                    text.append(" ")
+                    text.append(_short_path(self._library_path, width=58), style="red")
+                if last_scan != "PATH":
+                    text.append("  last scan: ", style="bold")
+                    text.append(_short_path(last_scan, width=58), style="cyan")
+                text.append("\nreports: ")
+                text.append(_short_path(self._report_dir, width=58), style="cyan")
+            target.update(text)
+
+        def _browse_library_path(self) -> None:
+            initial = self._root_path() if _valid_library_path(self._library_path) else None
+            if initial is None:
+                indexed_root = library_root(db_path)
+                initial = Path(indexed_root).expanduser() if _valid_library_path(indexed_root) else None
+            try:
+                selected = self._desktop.choose_directory(initial)
+            except Exception as exc:  # pragma: no cover - platform picker boundary
+                self._last_action = ActionResult(
+                    action="library_browse",
+                    status="error",
+                    message=str(exc),
+                    errors=(str(exc),),
+                )
+                self._fill_library_status()
+                self._fill_operation_strip()
+                self._fill_action_result()
+                return
+            if selected is None:
+                self._last_action = ActionResult(
+                    action="library_browse",
+                    status="warning",
+                    message="No library folder selected.",
+                )
+                self._fill_operation_strip()
+                self._fill_action_result()
+                return
+            self._set_library_path(str(selected))
+
         def _set_library_path(self, value: str) -> None:
             text = value.strip() or "PATH"
             if text.startswith("~"):
@@ -1991,6 +2123,13 @@ def run_tui(
                     message=save_error,
                     errors=(save_error,),
                 )
+            elif self._library_path != "PATH" and not _valid_library_path(self._library_path):
+                self._last_action = ActionResult(
+                    action="set_library_path",
+                    status="warning",
+                    message=f"Library path does not exist: {self._library_path}",
+                    errors=(f"Library path does not exist: {self._library_path}",),
+                )
             self._resolved_report_paths = report_search_paths(
                 db_path=db_path,
                 report_paths=report_paths,
@@ -2001,6 +2140,7 @@ def run_tui(
             self.query_one("#library-path-input", Input).value = (
                 "" if self._library_path == "PATH" else self._library_path
             )
+            self._fill_library_status()
             # Different library = different DB and report dir; every cached
             # adapter result is now stale.
             clear_adapter_cache()
@@ -2539,6 +2679,7 @@ def run_tui(
             return sorted(rows, key=key_func, reverse=reverse)
 
         def _fill_status_strip(self, *, use_cache: bool = False) -> None:
+            self._fill_library_status()
             if use_cache:
                 pages = self._status_pages_cache
                 indexed_gb = self._status_indexed_gb_cache

@@ -785,7 +785,10 @@ def apply_dedupe_plan_action(
     return ActionResult(
         action="dedupe_apply",
         status=status,
-        message=f"Quarantined {result.quarantined:,} duplicate file(s), freed {result.bytes_freed:,} byte(s).{cancel_note}",
+        message=(
+            f"Quarantined {result.quarantined:,} duplicate file(s), freed {result.bytes_freed:,} byte(s)."
+            f"{cancel_note} Destination: {result.quarantine_dir or 'none'}."
+        ),
         output_path=result.log_path or result.quarantine_dir,
         errors=errors,
         refresh=("dedupe", "files", "reports"),
@@ -895,7 +898,7 @@ def apply_pack_plan_action(db_path: Path, report_dir: Path) -> ActionResult:
     return ActionResult(
         action="pack_apply",
         status="applied" if not errors else "error",
-        message=f"Quarantined {result.quarantined:,} pack folder(s).",
+        message=f"Quarantined {result.quarantined:,} pack folder(s). Destination: {result.quarantine_dir or 'none'}.",
         output_path=result.log_path,
         errors=errors,
         refresh=("dedupe", "files", "reports"),

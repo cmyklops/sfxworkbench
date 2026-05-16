@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 # title-cased version of the id with dashes replaced by spaces. Keeping the
 # map terse — these are visible only inside the palette, not on the buttons.
 _LABELS: dict[str, str] = {
+    "library-browse": "Browse for library folder",
     "use-indexed-root": "Use last-indexed root as library path",
     "cancel-action": "Cancel running action",
     "refresh-all": "Refresh all views",

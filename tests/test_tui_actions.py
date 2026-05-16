@@ -253,6 +253,8 @@ def test_tui_action_runner_dedupe_plan_review_apply(tmp_library: Path, tmp_db: P
     assert apply.ok
     assert apply.details is not None
     assert apply.details["quarantined"] >= 1
+    assert "Destination:" in apply.message
+    assert Path(apply.details["quarantine_dir"]).parent == tmp_library
     delete = build_delete_plan_action(report_dir)
     assert delete.ok
     assert delete.details is not None
