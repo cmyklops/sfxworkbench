@@ -67,17 +67,25 @@ def _md5(path: Path, block: int = 65536) -> str:
     return h.hexdigest()
 
 
-def _default_quarantine_dir(plan_path: Path) -> Path:
-    return plan_path.parent / f"sfxworkbench_quarantine_{_now_stamp()}"
+def _default_quarantine_dir(plan_path: Path, root: str | Path | None = None) -> Path:
+    base = Path(root).expanduser() if root else plan_path.parent
+    return base / f"sfxworkbench_quarantine_{_now_stamp()}"
 
 
 def _default_dedupe_log_path(plan_path: Path) -> Path:
     return default_apply_log_path_for_plan(plan_path, "dedupe_quarantine_log")
 
 
-def _quarantine_target(path: Path, quarantine_dir: Path) -> Path:
+def _quarantine_target(path: Path, quarantine_dir: Path, root: str | Path | None = None) -> Path:
     """Map an absolute source path into a quarantine tree without overwriting."""
-    parts = [part for part in path.parts if part not in (path.anchor, "/")]
+    if root:
+        try:
+            parts = path.resolve().relative_to(Path(root).expanduser().resolve()).parts
+        except ValueError:
+            drive = path.drive.rstrip(":") or "absolute"
+            parts = ("_external", drive, *[part for part in path.parts if part not in (path.anchor, "/")])
+    else:
+        parts = [part for part in path.parts if part not in (path.anchor, "/")]
     target = quarantine_dir.joinpath(*parts)
     if not path_exists_windows(target):
         return target
@@ -365,8 +373,11 @@ def apply_dedupe_plan(
         config_path=config_path,
         safe_folders=[Path(folder) for folder in plan.get("safe_folders", [])] + list(safe_folders or []),
     )
+    plan_root = plan.get("root")
+    quarantine_target_root = None
     if quarantine_dir is None and not dry_run and not permanent_delete:
-        quarantine_dir = _default_quarantine_dir(plan_path)
+        quarantine_dir = _default_quarantine_dir(plan_path, plan_root)
+        quarantine_target_root = plan_root
     if quarantine_dir is not None:
         result.quarantine_dir = str(quarantine_dir)
 
@@ -458,7 +469,7 @@ def apply_dedupe_plan(
             else:
                 try:
                     assert quarantine_dir is not None
-                    target = _quarantine_target(p.resolve(), quarantine_dir)
+                    target = _quarantine_target(p.resolve(), quarantine_dir, quarantine_target_root)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.move(str(p), str(target))
                     affected_paths.append(entry["path"])

@@ -20,6 +20,7 @@ class ScanErrorPlan(BaseModel):
     tool: str = "sfxworkbench"
     tool_version: str
     db_path: str
+    root: str | None = None
     entries: list[ScanErrorEntry]
 
 

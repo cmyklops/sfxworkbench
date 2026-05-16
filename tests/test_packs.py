@@ -517,6 +517,25 @@ def test_pack_apply_rejects_changed_size_before_quarantine(tmp_path: Path, tmp_d
     assert result.errors[0]["error"].startswith("size changed")
 
 
+def test_pack_apply_defaults_quarantine_to_plan_root(tmp_path: Path, tmp_db: Path) -> None:
+    root = tmp_path / "library"
+    keep = root / "A Pack"
+    duplicate = root / "B Pack"
+    files = [
+        {"path": keep / "one.wav", "md5": "A", "size": 10},
+        {"path": duplicate / "one.wav", "md5": "A", "size": 10},
+    ]
+    plan_path = _pack_plan_for_files(tmp_path, tmp_db, root, files)
+    review_pack_plan(plan_path, approve_all=True, quiet=True)
+
+    result = apply_pack_plan(plan_path, require_reviewed=True, dry_run=False, quiet=True)
+
+    quarantine_dir = Path(result.quarantine_dir or "")
+    assert quarantine_dir.parent == root
+    assert (quarantine_dir / "B Pack" / "one.wav").exists()
+    assert not duplicate.exists()
+
+
 def test_pack_apply_rejects_changed_hash_before_quarantine(tmp_path: Path, tmp_db: Path) -> None:
     root = tmp_path / "library"
     keep = root / "A Pack"

@@ -354,6 +354,37 @@ def test_apply_dedupe_can_require_reviewed_plan(tmp_path: Path) -> None:
     assert not b.exists()
 
 
+def test_apply_dedupe_defaults_quarantine_to_plan_root(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    keep = root / "keep.wav"
+    drop = root / "drop.wav"
+    keep.parent.mkdir(parents=True)
+    keep.write_bytes(b"audio")
+    drop.write_bytes(b"audio")
+    plan_path = tmp_path / "reports" / "dedupe_plan.json"
+    plan_path.parent.mkdir()
+    plan_path.write_text(
+        json.dumps(
+            {
+                "root": str(root),
+                "groups": [
+                    [
+                        {"path": str(keep), "action": "keep", "size_bytes": 5},
+                        {"path": str(drop), "action": "remove", "size_bytes": 5},
+                    ]
+                ],
+            }
+        )
+    )
+
+    result = apply_dedupe_plan(plan_path, dry_run=False)
+
+    quarantine_dir = Path(result.quarantine_dir or "")
+    assert quarantine_dir.parent == root
+    assert (quarantine_dir / "drop.wav").exists()
+    assert not drop.exists()
+
+
 def test_apply_dedupe_reports_finalizing_steps_before_complete(tmp_path: Path, tmp_db: Path) -> None:
     keep = tmp_path / "keep.wav"
     drop = tmp_path / "drop.wav"

@@ -84,3 +84,27 @@ def test_apply_scan_error_plan_quarantines_and_updates_db(tmp_db: Path, tmp_path
     conn.close()
     assert str(all_zero) not in paths
     assert str(broken_riff) in paths
+
+
+def test_scan_error_apply_defaults_quarantine_to_indexed_root(tmp_db: Path, tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    all_zero = root / "zero.wav"
+    all_zero.parent.mkdir(parents=True)
+    all_zero.write_bytes(b"\x00" * 128)
+    _seed_scan_error(tmp_db, all_zero, "Format not recognised.")
+    conn = get_connection(tmp_db)
+    conn.execute("INSERT OR REPLACE INTO scan_meta (key, value) VALUES ('last_scan_root', ?)", (str(root),))
+    conn.commit()
+    conn.close()
+
+    plan = build_scan_error_plan(tmp_db)
+    plan_path = tmp_path / "reports" / "scan_error_plan.json"
+    plan_path.parent.mkdir()
+    plan_path.write_text(json.dumps(plan.model_dump(), indent=2))
+
+    result = apply_scan_error_plan(plan_path, db_path=tmp_db, dry_run=False)
+
+    quarantine_dir = Path(result.quarantine_dir or "")
+    assert quarantine_dir.parent == root
+    assert (quarantine_dir / "zero.wav").exists()
+    assert not all_zero.exists()

@@ -387,16 +387,24 @@ def show_pack_audit_report(report: PackAuditReport) -> None:
         console.print(table)
 
 
-def _default_quarantine_dir(plan_path: Path) -> Path:
-    return plan_path.parent / f"sfxworkbench_pack_quarantine_{_now_stamp()}"
+def _default_quarantine_dir(plan_path: Path, root: str | Path | None = None) -> Path:
+    base = Path(root).expanduser() if root else plan_path.parent
+    return base / f"sfxworkbench_pack_quarantine_{_now_stamp()}"
 
 
 def _default_pack_log_path(plan_path: Path) -> Path:
     return default_apply_log_path_for_plan(plan_path, "pack_quarantine_log")
 
 
-def _quarantine_target(path: Path, quarantine_dir: Path) -> Path:
-    parts = [part for part in path.resolve().parts if part not in (path.anchor, "/")]
+def _quarantine_target(path: Path, quarantine_dir: Path, root: str | Path | None = None) -> Path:
+    if root:
+        try:
+            parts = path.resolve().relative_to(Path(root).expanduser().resolve()).parts
+        except ValueError:
+            drive = path.drive.rstrip(":") or "absolute"
+            parts = ("_external", drive, *[part for part in path.resolve().parts if part not in (path.anchor, "/")])
+    else:
+        parts = [part for part in path.resolve().parts if part not in (path.anchor, "/")]
     target = quarantine_dir.joinpath(*parts)
     if not path_exists_windows(target):
         return target
@@ -751,8 +759,10 @@ def apply_pack_plan(
     plan = PackPlan.model_validate(raw_plan)
     if db_path is None:
         db_path = Path(plan.db_path)
+    quarantine_target_root = None
     if quarantine_dir is None and not dry_run:
-        quarantine_dir = _default_quarantine_dir(plan_path)
+        quarantine_dir = _default_quarantine_dir(plan_path, plan.root)
+        quarantine_target_root = plan.root
     effective_rules = build_preservation_rules(
         config_path=config_path, safe_folders=[Path(folder) for folder in plan.safe_folders] + list(safe_folders or [])
     )
@@ -804,7 +814,7 @@ def apply_pack_plan(
                 continue
 
             assert quarantine_dir is not None
-            target = _quarantine_target(source, quarantine_dir)
+            target = _quarantine_target(source, quarantine_dir, quarantine_target_root)
             try:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(source), str(target))

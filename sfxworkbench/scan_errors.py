@@ -88,6 +88,7 @@ def build_scan_error_plan(db_path: Path) -> ScanErrorPlan:
         ORDER BY path
         """
     ).fetchall()
+    root_row = conn.execute("SELECT value FROM scan_meta WHERE key = 'last_scan_root'").fetchone()
     conn.close()
 
     entries: list[ScanErrorEntry] = []
@@ -109,6 +110,7 @@ def build_scan_error_plan(db_path: Path) -> ScanErrorPlan:
         generated_at=_now_iso(),
         tool_version=__version__,
         db_path=str(db_path),
+        root=str(root_row["value"]) if root_row and root_row["value"] else None,
         entries=entries,
     )
 
@@ -140,12 +142,20 @@ def show_scan_error_plan(plan: ScanErrorPlan, quiet: bool = False) -> None:
         console.print(f"[dim]...{len(plan.entries) - 50} more scan-error file(s).[/dim]")
 
 
-def _default_quarantine_dir(plan_path: Path) -> Path:
-    return plan_path.parent / f"sfxworkbench_scan_error_quarantine_{_now_stamp()}"
+def _default_quarantine_dir(plan_path: Path, root: str | Path | None = None) -> Path:
+    base = Path(root).expanduser() if root else plan_path.parent
+    return base / f"sfxworkbench_scan_error_quarantine_{_now_stamp()}"
 
 
-def _quarantine_target(path: Path, quarantine_dir: Path) -> Path:
-    parts = [part for part in path.resolve().parts if part not in (path.anchor, "/")]
+def _quarantine_target(path: Path, quarantine_dir: Path, root: str | Path | None = None) -> Path:
+    if root:
+        try:
+            parts = path.resolve().relative_to(Path(root).expanduser().resolve()).parts
+        except ValueError:
+            drive = path.drive.rstrip(":") or "absolute"
+            parts = ("_external", drive, *[part for part in path.resolve().parts if part not in (path.anchor, "/")])
+    else:
+        parts = [part for part in path.resolve().parts if part not in (path.anchor, "/")]
     target = quarantine_dir.joinpath(*parts)
     if not path_exists_windows(target):
         return target
@@ -191,8 +201,10 @@ def apply_scan_error_plan(
     plan = ScanErrorPlan.model_validate(json.loads(plan_path.read_text()))
     if db_path is None:
         db_path = Path(plan.db_path)
+    quarantine_target_root = None
     if quarantine_dir is None and not dry_run:
-        quarantine_dir = _default_quarantine_dir(plan_path)
+        quarantine_dir = _default_quarantine_dir(plan_path, plan.root)
+        quarantine_target_root = plan.root
 
     result = ScanErrorApplyResult(
         planned=sum(1 for entry in plan.entries if entry.action == "quarantine"),
@@ -222,7 +234,7 @@ def apply_scan_error_plan(
                 console.print(f"[dim]Would quarantine: {path}[/dim]")
             continue
         assert quarantine_dir is not None
-        target = _quarantine_target(path, quarantine_dir)
+        target = _quarantine_target(path, quarantine_dir, quarantine_target_root)
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(path), str(target))
