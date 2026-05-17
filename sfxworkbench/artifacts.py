@@ -933,7 +933,9 @@ def artifact_detail_rows_from_file(path: Path, *, limit: int = 100) -> list[Arti
         if "entry_id" in entry and "source_log" in entry:
             path_type = _first_text(entry, "path_type")
             size = entry.get("size_bytes")
-            detail_parts = [part for part in (path_type, fmt_bytes(float(size)) if isinstance(size, int | float) else "") if part]
+            detail_parts = [
+                part for part in (path_type, fmt_bytes(float(size)) if isinstance(size, int | float) else "") if part
+            ]
             detail = "; ".join(detail_parts)
         if moves:
             move_detail = f"{len(moves):,} move(s)"
