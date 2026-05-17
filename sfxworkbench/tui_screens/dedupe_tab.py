@@ -39,10 +39,21 @@ def fill(app) -> None:
     path. Delegates to the App for sort + render helpers.
     """
     from sfxworkbench.tui_app import _clip_middle, _fmt, _state_token
-    from sfxworkbench.tui_data import dedupe_findings, dedupe_group_rows
+    from sfxworkbench.tui_data import dedupe_findings, dedupe_group_rows, workflow_history_finding
     from sfxworkbench.utils import fmt_bytes
 
-    app._fill_findings("dedupe-findings-table", dedupe_findings(db_path=app.db_path))
+    findings = [
+        workflow_history_finding(
+            "dedupe",
+            "Latest dedupe action",
+            app._history_report_paths(),
+            actions=("dedupe_plan", "dedupe_apply", "pack_audit", "pack_plan", "pack_apply"),
+            no_history_detail="No saved dedupe or pack action found for this report folder.",
+            history_detail_suffix="Duplicate rows below are live index state.",
+        ),
+        *dedupe_findings(db_path=app.db_path),
+    ]
+    app._fill_findings("dedupe-findings-table", findings)
     table = app._reset_table(
         "dedupe-groups-table",
         ("Group", "Copies", "Extra", "Size", "Wasted", "State", "Keep Path"),

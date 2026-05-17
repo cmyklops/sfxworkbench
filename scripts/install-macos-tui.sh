@@ -58,18 +58,14 @@ fi
 
 cd "$repo_dir"
 
-step "Installing Python 3.11 and dependencies"
-uv python install 3.11
-uv sync --python 3.11 --extra dev --extra metadata --extra tui
+printf '\nNext time, run this local launcher to update and start:\n  %s/scripts/run-macos-tui.sh\n' "$repo_dir"
 
-mkdir -p reports
-export PYTHONUTF8=1
-
-sfx="$repo_dir/.venv/bin/sfx"
-if [[ ! -x "$sfx" ]]; then
-  echo "Expected launcher was not created at $sfx." >&2
+launcher="$repo_dir/scripts/run-macos-tui.sh"
+if [[ ! -x "$launcher" ]]; then
+  chmod +x "$launcher" 2>/dev/null || true
+fi
+if [[ ! -x "$launcher" ]]; then
+  echo "Expected launcher was not created at $launcher." >&2
   exit 1
 fi
-
-step "Launching sfxworkbench"
-"$sfx" tui --db ./mac_test.db --report ./reports
+"$launcher"

@@ -83,17 +83,12 @@ if (Test-Path $repoDir) {
 
 Set-Location $repoDir
 
-Write-Step "Installing Python 3.11 and dependencies"
-uv python install 3.11
-uv sync --python 3.11 --extra dev --extra metadata --extra tui
+Write-Host ""
+Write-Host "Next time, run this local launcher to update and start:" -ForegroundColor Green
+Write-Host "  powershell -ExecutionPolicy Bypass -File `"$repoDir\scripts\run-windows-tui.ps1`"" -ForegroundColor White
 
-New-Item -ItemType Directory -Force reports | Out-Null
-$env:PYTHONUTF8 = "1"
-
-$sfx = Join-Path $repoDir ".venv\Scripts\sfx.exe"
-if (-not (Test-Path $sfx)) {
-    throw "Expected launcher was not created at $sfx."
+$launcher = Join-Path $repoDir "scripts\run-windows-tui.ps1"
+if (-not (Test-Path $launcher)) {
+    throw "Expected launcher was not created at $launcher."
 }
-
-Write-Step "Launching sfxworkbench"
-& $sfx tui --db .\win_test.db --report .\reports
+& $launcher

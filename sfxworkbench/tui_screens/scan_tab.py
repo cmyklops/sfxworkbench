@@ -52,15 +52,25 @@ def fill(app) -> None:
     """
     from textual.widgets import Static
 
-    from sfxworkbench.tui_data import scan_findings
+    from sfxworkbench.tui_data import scan_findings, workflow_history_finding
 
     app.query_one("#scan-note", Static).update(
-        "Quick Index builds the searchable file list fast. Full Audit enriches audio, metadata, "
-        "hashes, and writes read-only reports."
+        "Counts are live index signals. Latest action shows what already ran; rerun Quick Index after outside file changes."
     )
+    rows = [
+        workflow_history_finding(
+            "scan",
+            "Latest scan action",
+            app._history_report_paths(),
+            actions=("scan", "full_audit"),
+            no_history_detail="No saved scan action found for this report folder.",
+            history_detail_suffix="Counts below are current DB signals.",
+        ),
+        *scan_findings(db_path=app.db_path, config_path=app.config_path),
+    ]
     app._fill_findings(
         "scan-findings-table",
-        scan_findings(db_path=app.db_path, config_path=app.config_path),
+        rows,
     )
 
 
@@ -78,7 +88,6 @@ def fill_rows(app, rows) -> None:
     from textual.widgets import Static
 
     app.query_one("#scan-note", Static).update(
-        "Quick Index builds the searchable file list fast. Full Audit enriches audio, metadata, "
-        "hashes, and writes read-only reports."
+        "Counts are live index signals. Latest action shows what already ran; rerun Quick Index after outside file changes."
     )
     app._fill_findings("scan-findings-table", rows)

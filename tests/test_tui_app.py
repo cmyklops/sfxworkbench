@@ -423,6 +423,18 @@ def test_worker_completion_clears_running_strip_before_post_action_bookkeeping()
     assert "self.set_timer(0.01, lambda: self._run_action(result, job_id=job_id))" in finish_block
 
 
+def test_tui_mount_restores_previous_session_before_initial_load() -> None:
+    app_source = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
+    on_mount_source = app_source[app_source.index("def on_mount") : app_source.index("def _start_initial_load")]
+
+    assert "self._restore_previous_session_state()" in on_mount_source
+    assert on_mount_source.index("self._restore_previous_session_state()") < on_mount_source.index(
+        "self._start_artifact_sync"
+    )
+    assert "interrupt_running_jobs(db_path)" in app_source
+    assert "read_latest_action_history(self._history_report_paths())" in app_source
+
+
 def test_keybind_footer_is_hidden_on_startup() -> None:
     app_source = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
 

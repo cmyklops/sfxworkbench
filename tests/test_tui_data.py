@@ -9,6 +9,7 @@ from pathlib import Path
 import sfxworkbench.tui_data as tui_data
 from sfxworkbench.cli import app
 from sfxworkbench.scan import scan_library
+from sfxworkbench.tui_actions import ActionResult, write_action_history
 from sfxworkbench.tui_data import (
     PlanSummary,
     clean_findings,
@@ -39,6 +40,7 @@ from sfxworkbench.tui_data import (
     scan_findings,
     start_steps,
     summarize_plan_file,
+    workflow_history_finding,
 )
 from typer.testing import CliRunner
 
@@ -408,6 +410,40 @@ def test_tui_feature_findings_cover_each_page(tmp_library: Path, tmp_db: Path) -
     assert any(row.label == "Long paths" for row in clean_findings(tmp_library, tmp_db))
     assert any(row.label == "Duplicate groups" for row in dedupe_findings(tmp_db))
     assert any(row.label == "Missing BEXT/iXML" for row in metadata_findings(tmp_db))
+
+
+def test_workflow_history_finding_restores_latest_relevant_action(tmp_path: Path) -> None:
+    write_action_history(ActionResult("scan", "ok", "Indexed 3 file(s)."), tmp_path)
+    write_action_history(ActionResult("dedupe_apply", "applied", "Quarantined 2 duplicate file(s)."), tmp_path)
+
+    row = workflow_history_finding(
+        "dedupe",
+        "Latest dedupe action",
+        [tmp_path],
+        actions=("dedupe_plan", "dedupe_apply"),
+        no_history_detail="No saved dedupe action found.",
+        history_detail_suffix="Duplicate rows below are live index state.",
+    )
+
+    assert row.count == "applied"
+    assert row.status == "applied"
+    assert "Quarantined 2 duplicate" in row.detail
+    assert "live index state" in row.detail
+
+
+def test_workflow_history_finding_reports_missing_history(tmp_path: Path) -> None:
+    row = workflow_history_finding(
+        "clean",
+        "Latest cleanup action",
+        [tmp_path],
+        actions=("clean_preview", "clean_apply"),
+        no_history_detail="No saved cleanup action found.",
+        history_detail_suffix="Remaining rows below are current index/path signals.",
+    )
+
+    assert row.count == "Not run"
+    assert row.status == "info"
+    assert row.detail == "No saved cleanup action found."
 
 
 def test_tui_metadata_findings_use_whole_plan_counts(tmp_db: Path, tmp_path: Path) -> None:

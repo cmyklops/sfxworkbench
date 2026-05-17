@@ -115,6 +115,42 @@ def write_action_history(result: ActionResult, report_dir: Path) -> Path:
     return output
 
 
+def read_latest_action_history(report_paths: list[Path], *, actions: set[str] | None = None) -> ActionResult | None:
+    """Return the newest persisted TUI action from the supplied report roots."""
+    candidates: list[Path] = []
+    for report_path in report_paths:
+        expanded = Path(report_path).expanduser()
+        if expanded.is_file() and expanded.name.startswith("tui_action_") and expanded.suffix.lower() == ".json":
+            candidates.append(expanded)
+            continue
+        history_dir = expanded if expanded.name == "action_history" else expanded / "action_history"
+        if history_dir.is_dir():
+            candidates.extend(path for path in history_dir.glob("tui_action_*.json") if path.is_file())
+    for candidate in sorted(set(candidates), key=lambda path: (path.stat().st_mtime, str(path)), reverse=True):
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict) or payload.get("command") != "tui_action":
+            continue
+        action = str(payload.get("action") or "action")
+        if actions is not None and action not in actions:
+            continue
+        errors = payload.get("errors")
+        refresh = payload.get("refresh")
+        details = payload.get("details")
+        return ActionResult(
+            action=action,
+            status=str(payload.get("status") or "ok"),
+            message=str(payload.get("message") or ""),
+            output_path=str(payload.get("output_path") or "") or None,
+            errors=tuple(str(error) for error in errors) if isinstance(errors, list) else (),
+            refresh=tuple(str(item) for item in refresh) if isinstance(refresh, list) else (),
+            details=details if isinstance(details, dict) else None,
+        )
+    return None
+
+
 def _action_error(action: str, exc: Exception) -> ActionResult:
     return ActionResult(action=action, status="error", message=str(exc), errors=(str(exc),), refresh=("status",))
 
@@ -1444,6 +1480,7 @@ def build_delete_plan_action(report_dir: Path) -> ActionResult:
     except OSError as e:
         return _action_error("delete_plan", e)
     from sfxworkbench.delete import build_delete_plan, write_delete_plan
+
     try:
         output = _ensure_report_dir(report_dir) / "delete_plan.json"
         plan = build_delete_plan(source_log)

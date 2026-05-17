@@ -29,6 +29,7 @@ from sfxworkbench.tui_actions import (
     organize_audit_action,
     pack_audit_action,
     pack_plan_action,
+    read_latest_action_history,
     rename_preview_action,
     scan_action,
     tag_plan_action,
@@ -145,9 +146,7 @@ def test_tui_pack_plan_action_reports_progress(tmp_library: Path, tmp_db: Path, 
     audit = pack_audit_action(tmp_library, tmp_db, report_dir)
     plan = pack_plan_action(
         report_dir,
-        progress_callback=lambda phase, completed, total, message: events.append(
-            (phase, completed, total, message)
-        ),
+        progress_callback=lambda phase, completed, total, message: events.append((phase, completed, total, message)),
     )
 
     assert audit.ok
@@ -175,9 +174,7 @@ def test_tui_pack_apply_action_reports_progress(tmp_library: Path, tmp_db: Path,
     apply = apply_pack_plan_action(
         tmp_db,
         report_dir,
-        progress_callback=lambda phase, completed, total, message: events.append(
-            (phase, completed, total, message)
-        ),
+        progress_callback=lambda phase, completed, total, message: events.append((phase, completed, total, message)),
     )
 
     assert audit.ok
@@ -189,9 +186,7 @@ def test_tui_pack_apply_action_reports_progress(tmp_library: Path, tmp_db: Path,
     assert events[-1][0] == "complete"
 
 
-def test_tui_pack_apply_partial_success_is_applied_status(
-    tmp_library: Path, tmp_db: Path, tmp_path: Path
-) -> None:
+def test_tui_pack_apply_partial_success_is_applied_status(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
     pack_a = tmp_library / "Pack A"
     pack_b = tmp_library / "Pack B"
     pack_a.mkdir()
@@ -909,3 +904,26 @@ def test_tui_action_history_is_written_for_any_action(tmp_path: Path) -> None:
     assert payload["command"] == "tui_action"
     assert payload["action"] == "scan"
     assert payload["details"] == {"scanned": 3}
+
+
+def test_latest_tui_action_history_restores_previous_action(tmp_path: Path) -> None:
+    first = ActionResult(action="scan", status="ok", message="Indexed 3 file(s).", refresh=("files",), details={})
+    second = ActionResult(
+        action="metadata_audit",
+        status="ok",
+        message="Metadata audit complete.",
+        output_path=str(tmp_path / "metadata_audit.json"),
+        errors=("minor warning",),
+        refresh=("metadata", "reports"),
+        details={"summary": {"missing_metadata": 2}},
+    )
+
+    write_action_history(first, tmp_path)
+    latest_path = write_action_history(second, tmp_path)
+    latest_path.touch()
+
+    restored = read_latest_action_history([tmp_path])
+    scan = read_latest_action_history([tmp_path], actions={"scan"})
+
+    assert restored == second
+    assert scan == first

@@ -68,10 +68,31 @@ def compose(app) -> ComposeResult:
 
 
 def fill(app) -> None:
-    from sfxworkbench.tui_data import clean_findings
+    from sfxworkbench.tui_data import clean_findings, workflow_history_finding
 
+    rows = [
+        workflow_history_finding(
+            "clean",
+            "Latest cleanup action",
+            app._history_report_paths(),
+            actions=(
+                "clean_preview",
+                "clean_apply",
+                "rename_preview",
+                "rename_apply",
+                "organize_audit",
+                "organize_apply",
+                "organize_nesting_audit",
+                "organize_nesting_plan",
+                "organize_nesting_apply",
+            ),
+            no_history_detail="No saved cleanup action found for this report folder.",
+            history_detail_suffix="Remaining rows below are current index/path signals.",
+        ),
+        *clean_findings(app._library_path, db_path=app.db_path, scan_junk=False),
+    ]
     app._fill_findings(
         "clean-findings-table",
-        clean_findings(app._library_path, db_path=app.db_path, scan_junk=False),
+        rows,
     )
     app._fill_clean_items()

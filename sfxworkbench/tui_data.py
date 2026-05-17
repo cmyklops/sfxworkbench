@@ -249,6 +249,33 @@ class FeatureFinding:
     detail: str = ""
 
 
+def workflow_history_finding(
+    feature: str,
+    label: str,
+    report_paths: list[Path],
+    *,
+    actions: tuple[str, ...],
+    no_history_detail: str,
+    history_detail_suffix: str,
+) -> FeatureFinding:
+    """Summarize the latest saved action for a workflow area.
+
+    The findings tables show live DB/index state. This row gives users the
+    missing second half: the most recent saved workflow action, so a remaining
+    count reads as "current work still open" instead of "maybe the app forgot."
+    """
+    from sfxworkbench.tui_actions import read_latest_action_history
+
+    latest = read_latest_action_history(report_paths, actions=set(actions))
+    if latest is None:
+        return FeatureFinding(feature, label, "Not run", "info", no_history_detail)
+    action = latest.action.replace("_", " ").title()
+    detail_parts = [f"{action}: {latest.message}"]
+    if history_detail_suffix:
+        detail_parts.append(history_detail_suffix)
+    return FeatureFinding(feature, label, latest.status, latest.status, " ".join(detail_parts))
+
+
 @dataclass(frozen=True)
 class DuplicateGroupRow:
     group_id: int
@@ -3503,7 +3530,9 @@ def plan_detail_rows(path: Path, *, limit: int = 100) -> list[PlanDetailRow]:
         if "entry_id" in entry and "source_log" in entry:
             path_type = _first_text(entry, "path_type")
             size = entry.get("size_bytes")
-            detail_parts = [part for part in (path_type, fmt_bytes(float(size)) if isinstance(size, int | float) else "") if part]
+            detail_parts = [
+                part for part in (path_type, fmt_bytes(float(size)) if isinstance(size, int | float) else "") if part
+            ]
             detail = "; ".join(detail_parts)
         if moves:
             move_detail = f"{len(moves):,} move(s)"

@@ -36,6 +36,14 @@ irm https://raw.githubusercontent.com/cmyklops/sfxworkbench/main/scripts/install
 
 The script installs missing prerequisites, clones or updates the repo in your user folder, installs dependencies, and launches the TUI.
 
+To run it again later, paste the same one-line command again. It checks GitHub
+for the latest `main`, syncs dependencies, and launches the app. If the first
+install completed, this local launcher does the same update-and-run path:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$HOME\sfxworkbench\scripts\run-windows-tui.ps1"
+```
+
 For macOS Terminal, use the companion installer instead:
 
 ```bash

@@ -74,6 +74,20 @@ macOS Terminal:
 curl -fsSL https://raw.githubusercontent.com/cmyklops/sfxworkbench/main/scripts/install-macos-tui.sh | bash
 ```
 
+Those one-line commands are also the safest "run it again" commands: each run
+downloads the latest launcher, updates the GitHub checkout, syncs dependencies,
+and starts the TUI. After the first install, Windows users can also run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$HOME\sfxworkbench\scripts\run-windows-tui.ps1"
+```
+
+macOS users can run:
+
+```bash
+bash "$HOME/sfxworkbench/scripts/run-macos-tui.sh"
+```
+
 Recommended beta install from a tagged GitHub release wheel:
 
 ```bash

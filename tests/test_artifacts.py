@@ -15,7 +15,7 @@ from sfxworkbench.artifacts import (
 )
 from sfxworkbench.cli import app
 from sfxworkbench.db import get_connection
-from sfxworkbench.jobs import finish_job, start_job, update_job_progress
+from sfxworkbench.jobs import finish_job, interrupt_running_jobs, latest_job, start_job, update_job_progress
 from typer.testing import CliRunner
 
 runner = CliRunner()
@@ -243,6 +243,23 @@ def test_jobs_record_progress_and_link_output_artifact(tmp_path: Path, tmp_db: P
     assert progress["phase"] == "running"
     assert progress["completed"] == 5
     assert progress["percent"] == 50.0
+
+
+def test_startup_recovery_marks_running_jobs_interrupted(tmp_db: Path) -> None:
+    job_id = start_job(tmp_db, "scan", message="Starting scan")
+
+    interrupted = interrupt_running_jobs(tmp_db)
+    latest = latest_job(tmp_db)
+
+    assert [job.id for job in interrupted] == [job_id]
+    assert interrupted[0].action == "scan"
+    assert interrupted[0].status == "interrupted"
+    assert interrupted[0].finished_at
+    assert interrupted[0].error == "Previous TUI session ended before this action reported completion."
+    assert latest is not None
+    assert latest.status == "interrupted"
+    assert latest.finished_at
+    assert latest.error == "Previous TUI session ended before this action reported completion."
 
 
 def test_maintenance_artifacts_sync_cli_rebuilds_registry(tmp_path: Path, tmp_db: Path) -> None:

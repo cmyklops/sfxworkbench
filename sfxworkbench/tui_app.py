@@ -23,7 +23,7 @@ from sfxworkbench.artifacts import (
 )
 from sfxworkbench.db import DEFAULT_DB_PATH
 from sfxworkbench.desktop import DesktopIntegration, desktop_open_command
-from sfxworkbench.jobs import finish_job, start_job, update_job_progress
+from sfxworkbench.jobs import finish_job, interrupt_running_jobs, start_job, update_job_progress
 from sfxworkbench.tui_actions import (
     ActionResult,
     apply_dedupe_plan_action,
@@ -45,6 +45,7 @@ from sfxworkbench.tui_actions import (
     organize_audit_action,
     pack_audit_action,
     pack_plan_action,
+    read_latest_action_history,
     rename_preview_action,
     scan_action,
     tag_plan_action,
@@ -1288,13 +1289,52 @@ def run_tui(
 
         def on_mount(self) -> None:
             self._last_compact = self._compact
+            self._restore_previous_session_state()
             self._fill_library_status()
             self.query_one("#status-strip", Static).update("Loading index summary…")
-            self.query_one("#operation-strip", Static).update("No action is running.")
+            self._fill_operation_strip()
+            self._fill_action_result()
             self._fill_start_loading()
             self.query_one("#feature-tabs", Tabs).focus()
             self._start_artifact_sync(materialize=True)
             self.set_timer(0.01, self._start_initial_load)
+
+        def _restore_previous_session_state(self) -> None:
+            """Recover durable context from the previous TUI launch.
+
+            Closing the terminal kills in-memory workers, so only generated
+            plans/logs, action history, and the SQLite job rows are durable.
+            Startup marks abandoned jobs interrupted and restores the latest
+            action summary from the current library's report search paths.
+            """
+            interrupted = []
+            try:
+                interrupted = interrupt_running_jobs(db_path)
+            except sqlite3.Error:
+                interrupted = []
+            try:
+                restored = read_latest_action_history(self._history_report_paths())
+            except OSError:
+                restored = None
+            if restored is not None:
+                self._last_action = restored
+            if interrupted:
+                latest = interrupted[0]
+                previous = (
+                    f" Latest saved action: {self._last_action.action} ({self._last_action.status})."
+                    if self._last_action is not None
+                    else ""
+                )
+                self._last_action = ActionResult(
+                    action=latest.action or "resume_check",
+                    status="warning",
+                    message=(
+                        f"Previous session ended with {len(interrupted):,} unfinished action(s); "
+                        f"review History or rerun the action if needed.{previous}"
+                    ),
+                    errors=tuple(filter(None, (latest.error,))),
+                    refresh=("status", "reports"),
+                )
 
         def _start_initial_load(self) -> None:
             def _load() -> None:
