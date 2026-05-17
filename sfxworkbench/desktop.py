@@ -7,7 +7,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 
@@ -92,6 +92,8 @@ class DesktopIntegration:
         selected = str(getattr(completed, "stdout", "") or "").strip()
         if not selected:
             return None
+        if self.platform == "win32":
+            selected = PureWindowsPath(selected).as_posix()
         return Path(selected).expanduser()
 
 
