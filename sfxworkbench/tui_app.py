@@ -847,6 +847,7 @@ def run_tui(
             def _request_terminal_sync_mode_support(self) -> None:
                 return
 
+    from sfxworkbench.tui_screens.action_issues import build_action_issues_screen
     from sfxworkbench.tui_screens.confirm_action import build_confirm_action_screen
 
     class SfxworkbenchTui(App):
@@ -1076,6 +1077,7 @@ def run_tui(
             )
             self._file_query = ""
             self._last_action: ActionResult | None = None
+            self._last_action_history_path: Path | None = None
             self._running_worker: Worker[ActionResult] | None = None
             self._running_action = ""
             self._running_label = ""
@@ -1318,6 +1320,7 @@ def run_tui(
                 restored = None
             if restored is not None:
                 self._last_action = restored
+                self._last_action_history_path = None
             if interrupted:
                 latest = interrupted[0]
                 previous = (
@@ -1564,6 +1567,12 @@ def run_tui(
                 self._fill_action_result()
                 return
             self._push_unique_screen("metadata-review", build_metadata_review_screen(plan_path, db_path=db_path))
+
+        def _open_action_history(self, history_path: Path | None) -> None:
+            if history_path is not None:
+                self._history_selected_path = str(history_path)
+            self._dirty_tabs.add("history")
+            self._open_feature("history")
 
         def _metadata_previous_page(self) -> None:
             self._metadata_random_pending = False
@@ -2528,7 +2537,9 @@ def run_tui(
 
         def _run_action(self, result: ActionResult, *, job_id: int | None = None) -> None:
             self._last_action = result
+            self._last_action_history_path = None
             output_artifact_id: int | None = None
+            history_path: Path | None = None
             if result.output_path:
                 output_path = Path(result.output_path).expanduser()
                 if output_path.suffix.lower() == ".json" and output_path.exists():
@@ -2538,6 +2549,7 @@ def run_tui(
                         output_artifact_id = None
             try:
                 history_path = write_action_history(result, self._report_dir)
+                self._last_action_history_path = history_path
                 try:
                     history_artifact_id = register_artifact(db_path, history_path).id
                     output_artifact_id = output_artifact_id or history_artifact_id
@@ -2610,6 +2622,27 @@ def run_tui(
             self._start_artifact_sync(materialize=True)
             self._refresh(dirty)
             self._fill_action_result()
+            self._maybe_show_action_issues(self._last_action, history_path)
+
+        def _maybe_show_action_issues(self, result: ActionResult, history_path: Path | None) -> None:
+            if not result.errors:
+                return
+
+            def after_review(choice: str | None) -> None:
+                if choice == "history":
+                    self._open_action_history(history_path)
+
+            self._push_unique_screen(
+                "action-issues",
+                build_action_issues_screen(
+                    action=result.action,
+                    status=result.status,
+                    message=result.message,
+                    errors=result.errors,
+                    output_path=result.output_path,
+                ),
+                callback=after_review,
+            )
 
         def _refresh(self, dirty: tuple[str, ...] | None = None) -> None:
             # Tier 5.14: only the strips and the active tab are filled eagerly.
@@ -2793,6 +2826,11 @@ def run_tui(
                     ("  "),
                     (self._last_action.message, style),
                 )
+                if self._last_action.errors:
+                    message.append("\n")
+                    message.append("Review: ", style="bold yellow")
+                    message.append(f"{len(self._last_action.errors):,} issue(s) recorded", style="yellow")
+                    message.append("; open History for details.", style="dim")
             else:
                 message = Text("No action is running.", style="dim")
             if self._running_worker is None or self._running_worker.is_finished:
@@ -3404,6 +3442,7 @@ def run_tui(
             table.add_row("Output", result.output_path or "")
             table.add_row("Refresh", ", ".join(result.refresh))
             if result.errors:
+                table.add_row("Issues", f"{len(result.errors):,} issue(s); open History to review details.")
                 table.add_row("Errors", "; ".join(result.errors[:6]))
 
     try:

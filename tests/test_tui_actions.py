@@ -927,3 +927,30 @@ def test_latest_tui_action_history_restores_previous_action(tmp_path: Path) -> N
 
     assert restored == second
     assert scan == first
+
+
+def test_latest_tui_action_history_normalizes_legacy_pack_partial_success(tmp_path: Path) -> None:
+    history_dir = tmp_path / "action_history"
+    history_dir.mkdir()
+    history_path = history_dir / "tui_action_20260516_161304_legacy_pack_apply.json"
+    history_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "command": "tui_action",
+                "action": "pack_apply",
+                "status": "error",
+                "message": "Quarantined 18 pack folder(s).",
+                "errors": ["file does not exist"],
+                "refresh": ["dedupe", "files", "reports"],
+                "details": {"quarantined": 18, "files_moved": 68},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    restored = read_latest_action_history([tmp_path])
+
+    assert restored is not None
+    assert restored.status == "applied"
+    assert restored.errors == ("file does not exist",)

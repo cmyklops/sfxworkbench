@@ -139,9 +139,18 @@ def read_latest_action_history(report_paths: list[Path], *, actions: set[str] | 
         errors = payload.get("errors")
         refresh = payload.get("refresh")
         details = payload.get("details")
+        status = str(payload.get("status") or "ok")
+        if (
+            action == "pack_apply"
+            and status == "error"
+            and isinstance(details, dict)
+            and isinstance(details.get("quarantined"), int | float)
+            and details["quarantined"] > 0
+        ):
+            status = "applied"
         return ActionResult(
             action=action,
-            status=str(payload.get("status") or "ok"),
+            status=status,
             message=str(payload.get("message") or ""),
             output_path=str(payload.get("output_path") or "") or None,
             errors=tuple(str(error) for error in errors) if isinstance(errors, list) else (),

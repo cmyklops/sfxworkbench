@@ -626,11 +626,28 @@ def test_tui_popup_open_actions_are_single_instance_guards() -> None:
     assert "def _screen_open" in app_text
     assert "def _push_unique_screen" in app_text
     assert '_push_unique_screen("command-palette"' in app_text
+    assert '"action-issues"' in app_text
     assert 'if self._screen_open("metadata-review")' in app_text
     assert '"confirm-action"' in app_text
     assert app_text.index('if self._screen_open("metadata-review")') < app_text.index(
         "build_metadata_review_screen(plan_path"
     )
+
+
+def test_tui_action_issues_are_reviewable_after_completion() -> None:
+    app_text = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
+    issues_text = (Path(__file__).parents[1] / "sfxworkbench" / "tui_screens" / "action_issues.py").read_text()
+    run_action_source = app_text[app_text.index("def _run_action") : app_text.index("def _refresh")]
+    operation_source = app_text[app_text.index("def _fill_operation_strip") : app_text.index("def _progress_line")]
+
+    assert "self._last_action_history_path = history_path" in run_action_source
+    assert "self._maybe_show_action_issues(self._last_action, history_path)" in run_action_source
+    assert 'choice == "history"' in app_text
+    assert "self._open_action_history(history_path)" in app_text
+    assert "issue(s) recorded" in operation_source
+    assert 'issue_class = "issue-error" if self._status == "error" else "issue-warning"' in issues_text
+    assert "#ff7b72" in issues_text
+    assert "#d29922" in issues_text
 
 
 def test_metadata_review_uses_canonical_metadata_tag_plan(tmp_path: Path) -> None:
@@ -653,12 +670,23 @@ def test_tui_popup_factories_expose_unique_keys(tmp_path: Path, tmp_db: Path) ->
 
         pytest.skip("Textual is not installed; install the `tui` extra to exercise this test.")
 
+    from sfxworkbench.tui_screens.action_issues import build_action_issues_screen
     from sfxworkbench.tui_screens.command_palette import build_command_palette
     from sfxworkbench.tui_screens.confirm_action import build_confirm_action_screen
     from sfxworkbench.tui_screens.metadata_review import build_metadata_review_screen
 
     assert build_command_palette({}).POPUP_KEY == "command-palette"
     assert build_confirm_action_screen("Confirm", "Continue?").POPUP_KEY == "confirm-action"
+    assert (
+        build_action_issues_screen(
+            action="pack_apply",
+            status="applied",
+            message="Quarantined 18 pack folder(s).",
+            errors=("file does not exist",),
+            output_path="reports/apply_logs/pack.json",
+        ).POPUP_KEY
+        == "action-issues"
+    )
     assert build_metadata_review_screen(tmp_path / "missing_plan.json", db_path=tmp_db).POPUP_KEY == "metadata-review"
 
 
