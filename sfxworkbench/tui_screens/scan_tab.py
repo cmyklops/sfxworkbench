@@ -26,8 +26,8 @@ if TYPE_CHECKING:
 KEY = "scan"
 TITLE = "Scan and Audit"
 NOTE = (
-    "Quick Index builds the searchable file list fast. Full Audit enriches audio, metadata, "
-    "hashes, and writes read-only reports."
+    "Quick Index builds the searchable file list fast. Smart Full Audit reuses same-library reports when safe; "
+    "palette overrides can reuse indexed data, run a full scan, or force a rescan."
 )
 
 
@@ -40,7 +40,7 @@ def compose(app) -> ComposeResult:
     yield DataTable(id="scan-findings-table")
     yield from app._button_row(
         ("Quick Index", "scan-run"),
-        ("Full Audit", "scan-full-audit"),
+        ("Smart Full Audit", "scan-full-audit"),
     )
 
 
@@ -55,7 +55,7 @@ def fill(app) -> None:
     from sfxworkbench.tui_data import scan_findings, workflow_history_finding
 
     app.query_one("#scan-note", Static).update(
-        "Counts are live index signals. Latest action shows what already ran; rerun Quick Index after outside file changes."
+        "Counts are live index signals. Latest action shows whether the audit reused reports, reused indexed data, scanned, or force-rescanned."
     )
     rows = [
         workflow_history_finding(

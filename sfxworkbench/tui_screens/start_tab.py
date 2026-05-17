@@ -24,7 +24,7 @@ def compose(app) -> ComposeResult:
     yield DataTable(id="start-steps-table")
     yield from app._button_row(
         ("Quick Index", "scan-run"),
-        ("Full Audit", "scan-full-audit"),
+        ("Smart Full Audit", "scan-full-audit"),
     )
 
 

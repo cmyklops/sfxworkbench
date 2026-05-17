@@ -481,6 +481,7 @@ def build_tag_plan(
     target: str = "db",
     sources: list[str] | None = None,
     fields: list[str] | None = None,
+    action_mode: str = "plan",
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
 ) -> TagPlan:
@@ -490,7 +491,9 @@ def build_tag_plan(
     if source_report is not None and csv_path is not None:
         raise ValueError("Use only one source: --from-suggestions or --from-csv")
     if csv_path is not None:
-        return _plan_from_csv(root, csv_path, db_path=db_path, target=target, sources=sources, fields=fields)
+        plan = _plan_from_csv(root, csv_path, db_path=db_path, target=target, sources=sources, fields=fields)
+        plan.action_mode = action_mode
+        return plan
     if source_report is not None:
         report = TagSuggestionReport.model_validate(json.loads(source_report.read_text()))
     else:
@@ -519,6 +522,7 @@ def build_tag_plan(
         sources=sources,
         fields=fields,
     )
+    plan.action_mode = action_mode
     if progress_callback is not None:
         progress_callback(
             "planning",

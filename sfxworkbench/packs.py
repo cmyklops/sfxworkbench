@@ -241,6 +241,7 @@ def _overlap_candidates(
     threshold: float,
     exact_pairs: set[tuple[str, str]],
     max_candidates: int,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
 ) -> list[PackOverlapCandidate]:
     by_hash: dict[str, list[_FolderStats]] = defaultdict(list)
     for folder in candidates:
@@ -264,7 +265,10 @@ def _overlap_candidates(
                 candidate_pairs.add(key)
 
     overlaps: list[PackOverlapCandidate] = []
-    for a_path, b_path in candidate_pairs:
+    total_pairs = len(candidate_pairs)
+    if progress_callback is not None:
+        progress_callback("auditing_overlap", 0, total_pairs, "Auditing pack overlap pairs")
+    for pair_index, (a_path, b_path) in enumerate(sorted(candidate_pairs), start=1):
         a = folder_by_path[a_path]
         b = folder_by_path[b_path]
         shared_files, shared_bytes = _shared_counts(a, b)
@@ -290,6 +294,13 @@ def _overlap_candidates(
                 classification="likely_duplicate_pack" if smaller_coverage >= 0.95 else "overlapping_pack",
             )
         )
+        if progress_callback is not None and (pair_index == 1 or pair_index == total_pairs or pair_index % 100 == 0):
+            progress_callback(
+                "auditing_overlap",
+                pair_index,
+                total_pairs,
+                f"Audited {pair_index:,}/{total_pairs:,} pack overlap pair(s)",
+            )
 
     overlaps.sort(key=lambda candidate: (candidate.shared_bytes, candidate.shared_files), reverse=True)
     overlaps = overlaps[:max_candidates]
@@ -305,6 +316,8 @@ def audit_packs(
     overlap_threshold: float = 0.95,
     max_overlap_candidates: int = 50,
     ensure_hash: bool = True,
+    progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    action_mode: str = "audit",
 ) -> PackAuditReport:
     """Build a report of exact duplicate folders and high-overlap pack candidates."""
     root = resolve_scope_root(root)
@@ -319,6 +332,7 @@ def audit_packs(
         threshold=overlap_threshold,
         exact_pairs=exact_pairs,
         max_candidates=max_overlap_candidates,
+        progress_callback=progress_callback,
     )
     summary = PackAuditSummary(
         folders_analyzed=len(candidates),
@@ -333,6 +347,7 @@ def audit_packs(
         tool_version=__version__,
         root=str(root),
         db_path=str(db_path),
+        action_mode=action_mode,
         min_files=min_files,
         overlap_threshold=overlap_threshold,
         summary=summary,
@@ -485,6 +500,7 @@ def build_pack_plan(
     safe_folders: list[Path] | None = None,
     prefer_folders: list[Path] | None = None,
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
+    action_mode: str = "plan",
 ) -> PackPlan:
     """Create a reviewed pack consolidation plan from a pack audit report."""
     report = PackAuditReport.model_validate(json.loads(report_path.read_text()))
@@ -614,6 +630,7 @@ def build_pack_plan(
         tool_version=__version__,
         root=report.root,
         db_path=report.db_path,
+        action_mode=action_mode,
         source_report=str(report_path),
         safe_folders=list(rules.safe_folders),
         preservation_priority=rules.model(),
@@ -826,7 +843,9 @@ def apply_pack_plan(
     )
 
     approved = set(raw_plan.get("review", {}).get("approved_groups", []))
-    planned_entries = [(index, entry) for index, entry in enumerate(plan.entries) if entry.action == "quarantine_folder"]
+    planned_entries = [
+        (index, entry) for index, entry in enumerate(plan.entries) if entry.action == "quarantine_folder"
+    ]
     validation_total = sum(len(entry.files) for _, entry in planned_entries)
     result = PackApplyResult(
         planned=len(planned_entries),

@@ -11,6 +11,7 @@ from sfxworkbench.desktop import DesktopIntegration
 from sfxworkbench.tui_app import (
     _ACTION_BUTTON_IDS,
     ButtonLockSnapshot,
+    _action_result_table_rows,
     _button_flow_rows,
     _button_lock_state,
     _clean_preview_table_rows,
@@ -218,6 +219,27 @@ def test_cleanup_preview_table_rows_follow_rename_preview(tmp_path: Path) -> Non
 
     assert _cleanup_preview_title("rename_preview") == "Previewed Name Cleanup"
     assert rows == [("rename", f"{Path('Bad Names') / ' bad hit.wav'} -> {Path('Bad Names') / 'bad hit.wav'}")]
+    assert remaining == 0
+
+
+def test_cleanup_result_rows_surface_action_issues() -> None:
+    from sfxworkbench.tui_actions import ActionResult
+
+    result = ActionResult(
+        action="organize_nesting_apply",
+        status="applied",
+        message="Flattened 1 nested folder(s), moved 1 path(s), skipped 1 issue(s).",
+        output_path="reports/apply_logs/nesting_log_20260517.json",
+        errors=("target exists",),
+        details={"flattened": 1, "moved": 1},
+    )
+
+    rows, remaining = _action_result_table_rows(result)
+
+    assert _cleanup_preview_title("organize_nesting_apply") == "Nesting Apply Results"
+    assert ("status", result.message) in rows
+    assert ("summary", "flattened 1, moved 1") in rows
+    assert ("issue", "target exists") in rows
     assert remaining == 0
 
 
@@ -648,6 +670,45 @@ def test_tui_action_issues_are_reviewable_after_completion() -> None:
     assert 'issue_class = "issue-error" if self._status == "error" else "issue-warning"' in issues_text
     assert "#ff7b72" in issues_text
     assert "#d29922" in issues_text
+
+
+def test_dedupe_table_surfaces_apply_issues_above_live_groups() -> None:
+    text = (Path(__file__).parents[1] / "sfxworkbench" / "tui_screens" / "dedupe_tab.py").read_text()
+
+    assert 'last_action.action in {"dedupe_apply", "pack_apply"}' in text
+    assert "Review History for apply issues." in text
+    assert text.index("Review History for apply issues.") < text.index("rows = dedupe_group_rows")
+
+
+def test_dedupe_table_surfaces_pack_audit_feedback() -> None:
+    from sfxworkbench.tui_actions import ActionResult
+    from sfxworkbench.tui_screens.dedupe_tab import pack_audit_feedback_row
+
+    result = ActionResult(
+        action="pack_audit",
+        status="ok",
+        message="Pack audit found 0 exact duplicate group(s) and 2 overlap candidate(s).",
+        details={
+            "summary": {
+                "exact_duplicate_groups": 0,
+                "overlap_candidates": 2,
+                "folders_analyzed": 8,
+                "indexed_files_considered": 120,
+            }
+        },
+    )
+
+    row = pack_audit_feedback_row(result)
+
+    assert row == (
+        "pack audit",
+        "0",
+        "2",
+        "",
+        "",
+        "review",
+        "Pack audit found 0 exact folder group(s), 2 overlap candidate(s), 8 folder(s), 120 indexed file(s).",
+    )
 
 
 def test_metadata_review_uses_canonical_metadata_tag_plan(tmp_path: Path) -> None:

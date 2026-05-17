@@ -167,6 +167,7 @@ class TagPlan(BaseModel):
     tool_version: str
     root: str
     db_path: str
+    action_mode: str = "plan"
     source_report: str | None = None
     target: str = "db"
     min_confidence: float = 0.0

@@ -37,6 +37,8 @@ class MetadataAuditReport(BaseModel):
     tool: str = "sfxworkbench"
     tool_version: str
     db_path: str
+    root: str | None = None
+    action_mode: str = "audit"
     standard_sample_rates: list[int] = []
     limit: int = 200
     summary: MetadataAuditSummary
@@ -184,6 +186,7 @@ class MetadataWritePlan(BaseModel):
     tool_version: str
     root: str | None = None
     db_path: str
+    action_mode: str = "write_plan"
     target: str = "embedded_metadata"
     dry_run_only: bool = True
     replace_existing: bool = False

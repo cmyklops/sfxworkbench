@@ -427,10 +427,20 @@ _CLEANUP_APPLY_ACTIONS: dict[str, str] = {
     "organize_apply": "Folder cleanup was applied; run Preview Folder Cleanup to refresh.",
     "organize_nesting_apply": "Nesting cleanup was applied; run Find Nested Folders or Build Nesting Plan to refresh.",
 }
+_CLEANUP_RESULT_TITLES: dict[str, str] = {
+    "clean_apply": "Junk Cleanup Results",
+    "rename_apply": "Name Cleanup Results",
+    "rename_undo": "Name Cleanup Undo Results",
+    "organize_apply": "Folder Cleanup Results",
+    "organize_undo": "Folder Cleanup Undo Results",
+    "organize_nesting_apply": "Nesting Apply Results",
+    "organize_nesting_undo": "Nesting Undo Results",
+}
 
 
 def _cleanup_preview_title(action: str | None) -> str:
-    return _CLEANUP_PREVIEW_TITLES.get(str(action or ""), "Latest Cleanup Preview")
+    text = str(action or "")
+    return _CLEANUP_PREVIEW_TITLES.get(text, _CLEANUP_RESULT_TITLES.get(text, "Latest Cleanup Preview"))
 
 
 def _preview_report_paths(report_paths: list[Path]) -> list[Path]:
@@ -571,6 +581,23 @@ def _cleanup_preview_table_rows(
         return rows, max(0, len(entries) - len(rows))
 
     return [], 0
+
+
+def _action_result_table_rows(result: ActionResult, *, per_type_limit: int = 100) -> tuple[list[tuple[str, str]], int]:
+    rows: list[tuple[str, str]] = [("status", result.message)]
+    details = result.details if isinstance(result.details, dict) else {}
+    summary_bits = []
+    for key in ("flattened", "moved", "undone", "deleted", "quarantined", "restored", "renamed", "removed"):
+        value = details.get(key)
+        if isinstance(value, int | float) and value:
+            summary_bits.append(f"{key.replace('_', ' ')} {int(value):,}")
+    if summary_bits:
+        rows.append(("summary", ", ".join(summary_bits)))
+    if result.output_path:
+        rows.append(("output", result.output_path))
+    shown_errors = result.errors[:per_type_limit]
+    rows.extend(("issue", error) for error in shown_errors)
+    return rows, max(0, len(result.errors) - len(shown_errors))
 
 
 def _json_has_work(
@@ -1722,11 +1749,46 @@ def run_tui(
                 root = self._root_path()
                 _start(
                     "full_audit",
-                    "Full Audit",
-                    lambda: full_audit_action(root, db_path, self._report_dir, progress_callback=pcb),
+                    "Smart Full Audit",
+                    lambda: full_audit_action(
+                        root, db_path, self._report_dir, action_mode="smart", progress_callback=pcb
+                    ),
                 )
 
             handlers["scan-full-audit"] = _h_full_audit
+            handlers["scan-audit-reuse-index"] = lambda: _start(
+                "full_audit_reuse_index",
+                "Reuse Indexed Data",
+                lambda: full_audit_action(
+                    self._root_path(),
+                    db_path,
+                    self._report_dir,
+                    action_mode="reuse_index",
+                    progress_callback=pcb,
+                ),
+            )
+            handlers["scan-audit-full"] = lambda: _start(
+                "full_audit_full_scan",
+                "Full Scan / Full Audit",
+                lambda: full_audit_action(
+                    self._root_path(),
+                    db_path,
+                    self._report_dir,
+                    action_mode="full_audit",
+                    progress_callback=pcb,
+                ),
+            )
+            handlers["scan-force-rescan"] = lambda: _start(
+                "full_audit_force_rescan",
+                "Force Rescan",
+                lambda: full_audit_action(
+                    self._root_path(),
+                    db_path,
+                    self._report_dir,
+                    action_mode="force_rescan",
+                    progress_callback=pcb,
+                ),
+            )
 
             # Clean
             def _h_clean_preview() -> None:
@@ -1766,11 +1828,36 @@ def run_tui(
             # Dedupe
             handlers["dedupe-build"] = lambda: _start(
                 "dedupe_build",
-                "Build Dedupe Plan",
+                "Smart Dedupe Plan",
                 lambda: build_dedupe_plan_action(
                     db_path,
                     self._report_dir,
                     root=self._root_path(),
+                    action_mode="smart",
+                    progress_callback=pcb,
+                    cancel_requested=cancel,
+                ),
+            )
+            handlers["dedupe-reuse-index"] = lambda: _start(
+                "dedupe_reuse_index",
+                "Reuse Indexed Data",
+                lambda: build_dedupe_plan_action(
+                    db_path,
+                    self._report_dir,
+                    root=self._root_path(),
+                    action_mode="reuse_index",
+                    progress_callback=pcb,
+                    cancel_requested=cancel,
+                ),
+            )
+            handlers["dedupe-rebuild"] = lambda: _start(
+                "dedupe_rebuild",
+                "Rebuild Dedupe Plan",
+                lambda: build_dedupe_plan_action(
+                    db_path,
+                    self._report_dir,
+                    root=self._root_path(),
+                    action_mode="rebuild_plan",
                     progress_callback=pcb,
                     cancel_requested=cancel,
                 ),
@@ -1784,6 +1871,7 @@ def run_tui(
                 lambda: apply_dedupe_plan_action(
                     db_path,
                     self._report_dir,
+                    root=self._root_path(),
                     target_paths=self._selection_tuple(),
                     progress_callback=pcb,
                     cancel_requested=cancel,
@@ -1795,21 +1883,74 @@ def run_tui(
                 root = self._root_path()
                 _start(
                     "pack_audit",
-                    "Pack Audit",
+                    "Smart Pack Audit",
                     lambda: pack_audit_action(
                         root,
                         db_path,
                         self._report_dir,
+                        action_mode="smart",
                         progress_callback=pcb,
                         cancel_requested=cancel,
                     ),
                 )
 
             handlers["pack-audit"] = _h_pack_audit
+            handlers["pack-audit-reuse-index"] = lambda: _start(
+                "pack_audit_reuse_index",
+                "Reuse Indexed Data",
+                lambda: pack_audit_action(
+                    self._root_path(),
+                    db_path,
+                    self._report_dir,
+                    action_mode="reuse_index",
+                    progress_callback=pcb,
+                    cancel_requested=cancel,
+                ),
+            )
+            handlers["pack-audit-rebuild"] = lambda: _start(
+                "pack_audit_rebuild",
+                "Rebuild Pack Audit",
+                lambda: pack_audit_action(
+                    self._root_path(),
+                    db_path,
+                    self._report_dir,
+                    action_mode="rebuild_report",
+                    progress_callback=pcb,
+                    cancel_requested=cancel,
+                ),
+            )
             handlers["pack-plan"] = lambda: _start(
                 "pack_plan",
-                "Build Pack Plan",
-                lambda: pack_plan_action(self._report_dir, progress_callback=pcb),
+                "Smart Pack Plan",
+                lambda: pack_plan_action(
+                    self._report_dir,
+                    root=self._root_path(),
+                    db_path=db_path,
+                    action_mode="smart",
+                    progress_callback=pcb,
+                ),
+            )
+            handlers["pack-plan-reuse-index"] = lambda: _start(
+                "pack_plan_reuse_index",
+                "Reuse Indexed Data",
+                lambda: pack_plan_action(
+                    self._report_dir,
+                    root=self._root_path(),
+                    db_path=db_path,
+                    action_mode="reuse_index",
+                    progress_callback=pcb,
+                ),
+            )
+            handlers["pack-plan-rebuild"] = lambda: _start(
+                "pack_plan_rebuild",
+                "Rebuild Pack Plan",
+                lambda: pack_plan_action(
+                    self._report_dir,
+                    root=self._root_path(),
+                    db_path=db_path,
+                    action_mode="rebuild_plan",
+                    progress_callback=pcb,
+                ),
             )
             handlers["pack-apply"] = lambda: _confirm(
                 "pack_apply",
@@ -1817,7 +1958,12 @@ def run_tui(
                 "This quarantines pack/folder overlaps from the current pack plan. "
                 f"{self._quarantine_destination_hint('pack')} "
                 "Any pending groups are auto-approved at apply time.",
-                lambda: apply_pack_plan_action(db_path, self._report_dir, progress_callback=pcb),
+                lambda: apply_pack_plan_action(
+                    db_path,
+                    self._report_dir,
+                    root=self._root_path(),
+                    progress_callback=pcb,
+                ),
             )
 
             # Organize: rename
@@ -1905,34 +2051,86 @@ def run_tui(
                 root = self._root_path()
                 _start(
                     "metadata_audit",
-                    "Metadata Audit",
+                    "Smart Metadata Audit",
                     lambda: metadata_audit_action(
                         db_path,
                         self._report_dir,
                         root=root,
+                        action_mode="smart",
                         progress_callback=pcb,
                         cancel_requested=cancel,
                     ),
                 )
 
             handlers["metadata-audit"] = _h_metadata_audit
+            handlers["metadata-audit-reuse-index"] = lambda: _start(
+                "metadata_audit_reuse_index",
+                "Reuse Indexed Data",
+                lambda: metadata_audit_action(
+                    db_path,
+                    self._report_dir,
+                    root=self._root_path(),
+                    action_mode="reuse_index",
+                    progress_callback=pcb,
+                    cancel_requested=cancel,
+                ),
+            )
+            handlers["metadata-audit-refresh"] = lambda: _start(
+                "metadata_audit_refresh",
+                "Refresh Metadata Only",
+                lambda: metadata_audit_action(
+                    db_path,
+                    self._report_dir,
+                    root=self._root_path(),
+                    action_mode="metadata_refresh",
+                    progress_callback=pcb,
+                    cancel_requested=cancel,
+                ),
+            )
 
             def _h_metadata_plan() -> None:
                 root = self._root_path()
                 _start(
                     "metadata_plan",
-                    "Find Tags",
+                    "Smart Find Tags",
                     lambda: tag_plan_action(
                         root,
                         db_path,
                         self._report_dir,
                         include_synonyms=True,
+                        action_mode="smart",
                         progress_callback=pcb,
                         cancel_requested=cancel,
                     ),
                 )
 
             handlers["metadata-plan"] = _h_metadata_plan
+            handlers["metadata-plan-reuse-index"] = lambda: _start(
+                "metadata_plan_reuse_index",
+                "Reuse Indexed Data",
+                lambda: tag_plan_action(
+                    self._root_path(),
+                    db_path,
+                    self._report_dir,
+                    include_synonyms=True,
+                    action_mode="reuse_index",
+                    progress_callback=pcb,
+                    cancel_requested=cancel,
+                ),
+            )
+            handlers["metadata-plan-rebuild"] = lambda: _start(
+                "metadata_plan_rebuild",
+                "Rebuild Tag Plan",
+                lambda: tag_plan_action(
+                    self._root_path(),
+                    db_path,
+                    self._report_dir,
+                    include_synonyms=True,
+                    action_mode="rebuild_plan",
+                    progress_callback=pcb,
+                    cancel_requested=cancel,
+                ),
+            )
 
             def _h_metadata_apply() -> None:
                 root = self._root_path()
@@ -1972,6 +2170,7 @@ def run_tui(
                 lambda: apply_embedded_metadata_action(
                     db_path,
                     self._report_dir,
+                    root=self._root_path(),
                     target_paths=self._selection_tuple(),
                     progress_callback=pcb,
                     cancel_requested=cancel,
@@ -2946,7 +3145,10 @@ def run_tui(
             details: dict | None = None
             preview_stale = False
             stale_message = "Cleanup was applied; run the matching preview to refresh."
-            if self._last_action is not None and self._last_action.action in _CLEANUP_PREVIEW_TITLES:
+            if self._last_action is not None and self._last_action.action in _CLEANUP_RESULT_TITLES:
+                action = self._last_action.action
+                details = {}
+            elif self._last_action is not None and self._last_action.action in _CLEANUP_PREVIEW_TITLES:
                 action = self._last_action.action
                 details = self._last_action.details or {}
             elif self._last_action is not None and self._last_action.action in _CLEANUP_APPLY_ACTIONS:
@@ -2963,7 +3165,14 @@ def run_tui(
                 table.add_row("none", "Run a cleanup preview to list the paths that action would touch.")
                 return
 
-            rows, remaining = _cleanup_preview_table_rows(action or "", details, library_path=self._library_path)
+            if (
+                self._last_action is not None
+                and self._last_action.action == action
+                and action in _CLEANUP_RESULT_TITLES
+            ):
+                rows, remaining = _action_result_table_rows(self._last_action)
+            else:
+                rows, remaining = _cleanup_preview_table_rows(action or "", details, library_path=self._library_path)
             if not rows:
                 table.add_row("clear", f"No rows were found for {_cleanup_preview_title(action).lower()}.")
                 return

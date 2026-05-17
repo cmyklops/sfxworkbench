@@ -16,7 +16,7 @@ from sfxworkbench.apply_logs import (
     mark_groups_approved,
     write_apply_log,
 )
-from sfxworkbench.db import get_connection
+from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params, resolve_scope_root
 from sfxworkbench.models import DedupeApplyResult, DedupeGroup, DedupeReviewResult, DedupeSummary
 from sfxworkbench.path_safety import path_exists_windows
 from sfxworkbench.preservation import build_preservation_rules, evidence, priority_key, protected_by
@@ -105,7 +105,7 @@ def _quarantine_target(path: Path, quarantine_dir: Path, root: str | Path | None
 # GROUP BY MD5 query is a few hundred ms — fine in isolation, but on the
 # Dedupe tab it ran on every search-input keystroke debounce. Now it runs
 # at most once per DB write, with subsequent reads short-circuiting the cache.
-_FIND_DUPLICATES_CACHE: dict[tuple[str, float, float, int], list[DedupeGroup]] = {}
+_FIND_DUPLICATES_CACHE: dict[tuple[str, str, float, float, int], list[DedupeGroup]] = {}
 
 
 def _db_mutation_signature(db_path: Path) -> tuple[float, float, int]:
@@ -141,15 +141,18 @@ def find_duplicates(db_path: Path, *, ensure_hash: bool = False, root: Path | No
         from sfxworkbench.scan import ensure_hashes
 
         ensure_hashes(db_path, root)
+    scope_root = resolve_scope_root(root) if root is not None else None
     signature = _db_mutation_signature(db_path)
-    cache_key = (str(db_path), *signature)
+    cache_key = (str(db_path), str(scope_root) if scope_root is not None else "", *signature)
     cached = _FIND_DUPLICATES_CACHE.get(cache_key)
     if cached is not None:
         return cached
 
     conn = get_connection(db_path)
+    scope_sql = f" AND {path_scope_filter()}" if scope_root is not None else ""
+    params = path_scope_params(scope_root) if scope_root is not None else ()
     rows = conn.execute(
-        """
+        f"""
         SELECT
             md5,
             size_bytes,
@@ -158,13 +161,14 @@ def find_duplicates(db_path: Path, *, ensure_hash: bool = False, root: Path | No
         FROM (
             SELECT md5, size_bytes, path
             FROM files
-            WHERE md5 IS NOT NULL
+            WHERE md5 IS NOT NULL{scope_sql}
             ORDER BY md5, path
         )
         GROUP BY md5
         HAVING cnt > 1
         ORDER BY size_bytes DESC
-        """
+        """,
+        params,
     ).fetchall()
     conn.close()
 
@@ -208,6 +212,8 @@ def write_dedupe_plan(
     plan_path: Path,
     db_path: Path | None = None,
     quiet: bool = False,
+    root: Path | str | None = None,
+    action_mode: str = "build",
     config_path: Path | None = None,
     safe_folders: list[Path] | None = None,
     prefer_folders: list[Path] | None = None,
@@ -220,12 +226,15 @@ def write_dedupe_plan(
         prefer_folders=prefer_folders,
         prefer_extensions=prefer_extensions,
     )
-    root = None
+    plan_root = str(resolve_scope_root(root)) if root is not None else None
     if db_path is not None:
         conn = get_connection(db_path)
-        row = conn.execute("SELECT value FROM scan_meta WHERE key = ?", ("last_scan_root",)).fetchone()
-        conn.close()
-        root = row["value"] if row else None
+        try:
+            row = conn.execute("SELECT value FROM scan_meta WHERE key = ?", ("last_scan_root",)).fetchone()
+        finally:
+            conn.close()
+        if plan_root is None:
+            plan_root = row["value"] if row else None
 
     plan = {
         "schema_version": PLAN_SCHEMA_VERSION,
@@ -233,7 +242,8 @@ def write_dedupe_plan(
         "tool": "sfxworkbench",
         "tool_version": __version__,
         "db_path": str(db_path) if db_path is not None else None,
-        "root": root,
+        "root": plan_root,
+        "action_mode": action_mode,
         "safe_folders": list(rules.safe_folders),
         "preservation_priority": rules.model(),
         "groups": [],

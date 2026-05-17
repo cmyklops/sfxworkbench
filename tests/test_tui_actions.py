@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 
 from sfxworkbench.db import get_connection
-from sfxworkbench.models import UcsCatalog, UcsCatalogProvenance, UcsEntry
+from sfxworkbench.models import AudioInfo, UcsCatalog, UcsCatalogProvenance, UcsEntry
 from sfxworkbench.scan import scan_library
 from sfxworkbench.tui_actions import (
     ActionResult,
@@ -25,6 +25,7 @@ from sfxworkbench.tui_actions import (
     build_delete_plan_action,
     clean_action,
     full_audit_action,
+    metadata_audit_action,
     operation_report_dir,
     organize_audit_action,
     pack_audit_action,
@@ -67,6 +68,16 @@ def _write_sample_ucs_csv(path: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
+
+
+def _fresh_artifact_payload(root: Path, db_path: Path, **extra) -> dict:
+    return {
+        "schema_version": 1,
+        "generated_at": "2999-01-01T00:00:00+00:00",
+        "root": str(root),
+        "db_path": str(db_path),
+        **extra,
+    }
 
 
 def test_tui_action_runner_scan_audit_and_clean_preview(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
@@ -130,6 +141,141 @@ def test_tui_long_actions_report_progress(tmp_library: Path, tmp_db: Path, tmp_p
     assert rename_events[-1][0] == "preview"
 
 
+def test_metadata_audit_smart_refreshes_metadata_when_no_previous_audit(
+    monkeypatch, tmp_library: Path, tmp_db: Path, tmp_path: Path
+) -> None:
+    scan_library(tmp_library, tmp_db, mode="index", quiet=True)
+    events: list[tuple[str, int, int | None, str]] = []
+
+    def fake_read_audio_info(path: Path) -> AudioInfo:
+        return AudioInfo(sample_rate=48000, bit_depth=24, channels=2, duration_s=1.0, has_bext=True)
+
+    monkeypatch.setattr("sfxworkbench.scan.audio_mod.read_audio_info", fake_read_audio_info)
+
+    result = metadata_audit_action(
+        tmp_db,
+        tmp_path / "reports",
+        root=tmp_library,
+        progress_callback=lambda phase, completed, total, message: events.append((phase, completed, total, message)),
+    )
+
+    assert result.ok
+    assert result.details is not None
+    assert result.details["decision"] == "metadata_refresh"
+    assert result.details["refresh_result"]["scanned"] > 0
+    assert any(event[0] == "refreshing_metadata" for event in events)
+    assert Path(result.output_path or "").name == "metadata_audit.json"
+
+
+def test_metadata_audit_smart_reuses_same_root_previous_audit(
+    monkeypatch, tmp_library: Path, tmp_db: Path, tmp_path: Path
+) -> None:
+    scan_library(tmp_library, tmp_db, mode="index", quiet=True)
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    (report_dir / "metadata_audit.json").write_text('{"command": "metadata_audit"}', encoding="utf-8")
+
+    def fail_read_audio_info(path: Path) -> AudioInfo:
+        raise AssertionError(f"same-root metadata audit should reuse indexed data: {path}")
+
+    monkeypatch.setattr("sfxworkbench.scan.audio_mod.read_audio_info", fail_read_audio_info)
+
+    result = metadata_audit_action(tmp_db, report_dir, root=tmp_library)
+
+    assert result.ok
+    assert result.details is not None
+    assert result.details["decision"] == "reuse_index"
+    assert "reused indexed metadata" in result.message
+
+
+def test_dedupe_smart_reuses_same_root_existing_plan(
+    monkeypatch, tmp_library: Path, tmp_db: Path, tmp_path: Path
+) -> None:
+    scan_library(tmp_library, tmp_db, mode="index", quiet=True)
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    (report_dir / "dedupe_plan.json").write_text(
+        json.dumps(_fresh_artifact_payload(tmp_library, tmp_db, groups=[{"entries": [{}, {}]}])),
+        encoding="utf-8",
+    )
+
+    def fail_ensure_hashes(*args, **kwargs) -> None:
+        raise AssertionError("same-root smart dedupe should reuse the existing plan")
+
+    monkeypatch.setattr("sfxworkbench.scan.ensure_hashes", fail_ensure_hashes)
+
+    result = build_dedupe_plan_action(tmp_db, report_dir, root=tmp_library)
+
+    assert result.ok
+    assert result.details is not None
+    assert result.details["decision"] == "reused_plan"
+    assert result.details["duplicate_groups"] == 1
+    assert "Reused same-library dedupe plan" in result.message
+
+
+def test_dedupe_apply_blocks_cross_root_plan(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    other_root = tmp_path / "other_library"
+    (report_dir / "dedupe_plan.json").write_text(
+        json.dumps(_fresh_artifact_payload(other_root, tmp_db, groups=[])),
+        encoding="utf-8",
+    )
+
+    result = apply_dedupe_plan_action(tmp_db, report_dir, root=tmp_library)
+
+    assert result.status == "error"
+    assert result.details is not None
+    assert result.details["decision"] == "blocked_root_mismatch"
+    assert "different library root" in result.message
+
+
+def test_pack_audit_smart_reuses_same_root_report(monkeypatch, tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
+    scan_library(tmp_library, tmp_db, mode="index", quiet=True)
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    (report_dir / "pack_overlap_report.json").write_text(
+        json.dumps(
+            _fresh_artifact_payload(
+                tmp_library,
+                tmp_db,
+                summary={"exact_duplicate_groups": 2, "overlap_candidates": 3},
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_ensure_hashes(*args, **kwargs) -> None:
+        raise AssertionError("same-root smart pack audit should reuse the existing report")
+
+    monkeypatch.setattr("sfxworkbench.scan.ensure_hashes", fail_ensure_hashes)
+
+    result = pack_audit_action(tmp_library, tmp_db, report_dir)
+
+    assert result.ok
+    assert result.details is not None
+    assert result.details["decision"] == "reused_report"
+    assert result.details["exact_duplicate_groups"] == 2
+    assert result.details["overlap_candidates"] == 3
+
+
+def test_tag_apply_blocks_cross_root_plan(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    other_root = tmp_path / "other_library"
+    (report_dir / "metadata_tag_plan.json").write_text(
+        json.dumps(_fresh_artifact_payload(other_root, tmp_db, entries=[])),
+        encoding="utf-8",
+    )
+
+    result = apply_tag_plan_action(tmp_db, report_dir, root=tmp_library)
+
+    assert result.status == "error"
+    assert result.details is not None
+    assert result.details["decision"] == "blocked_root_mismatch"
+    assert "different library root" in result.message
+
+
 def test_tui_pack_plan_action_reports_progress(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
     pack_a = tmp_library / "Pack A"
     pack_b = tmp_library / "Pack B"
@@ -154,6 +300,33 @@ def test_tui_pack_plan_action_reports_progress(tmp_library: Path, tmp_db: Path, 
     assert any(event[0] == "planning" for event in events)
     assert any(event[0] == "writing_report" for event in events)
     assert events[-1][0] == "complete"
+
+
+def test_tui_pack_audit_reports_overlap_progress(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
+    pack_a = tmp_library / "Pack A"
+    pack_b = tmp_library / "Pack B"
+    pack_a.mkdir()
+    pack_b.mkdir()
+    shutil.copy2(tmp_library / "sounds" / "AMB_RAIN_01.wav", pack_a / "AMB_RAIN_01.wav")
+    shutil.copy2(tmp_library / "sounds" / "AMB_RAIN_01.wav", pack_a / "AMB_RAIN_02.wav")
+    shutil.copy2(tmp_library / "sounds" / "SFX_GUNSHOT_01.wav", pack_a / "SFX_GUNSHOT_01.wav")
+    shutil.copy2(tmp_library / "sounds" / "AMB_RAIN_01.wav", pack_b / "AMB_RAIN_01.wav")
+    shutil.copy2(tmp_library / "sounds" / "AMB_RAIN_01.wav", pack_b / "AMB_RAIN_02.wav")
+    scan_library(tmp_library, tmp_db, skip_hash=False, quiet=True)
+    events: list[tuple[str, int, int | None, str]] = []
+
+    audit = pack_audit_action(
+        tmp_library,
+        tmp_db,
+        tmp_path / "reports",
+        progress_callback=lambda phase, completed, total, message: events.append((phase, completed, total, message)),
+    )
+
+    overlap_events = [event for event in events if event[0] == "auditing_overlap"]
+    assert audit.ok
+    assert overlap_events
+    assert any(total is not None and total > 0 for _phase, _completed, total, _message in overlap_events)
+    assert any(completed == total for _phase, completed, total, _message in overlap_events if total)
 
 
 def test_tui_pack_apply_action_reports_progress(tmp_library: Path, tmp_db: Path, tmp_path: Path) -> None:
@@ -578,7 +751,7 @@ def test_tui_apply_tags_and_plan_embedded_chains_both_steps(tmp_library: Path, t
     report_dir.mkdir()
     plan = {
         "schema_version": 1,
-        "generated_at": "2026-05-13T00:00:00+00:00",
+        "generated_at": "2999-01-01T00:00:00+00:00",
         "tool": "sfxworkbench",
         "tool_version": "test",
         "root": str(tmp_library),

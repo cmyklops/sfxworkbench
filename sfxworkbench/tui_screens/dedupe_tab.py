@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
@@ -10,9 +10,32 @@ if TYPE_CHECKING:
 KEY = "dedupe"
 TITLE = "Dedupe"
 NOTE = (
-    "Find exact MD5 duplicates and overlapping pack folders. Plans are reviewable; "
-    "applies quarantine extra copies into ``apply_logs/`` for safe undo."
+    "Smart dedupe and pack actions reuse same-library plans only when root, DB, and scan age match. "
+    "Palette overrides can reuse indexed hashes or rebuild reports and plans."
 )
+
+
+def pack_audit_feedback_row(result: Any) -> tuple[str, str, str, str, str, str, str] | None:
+    """Return a one-row summary for a just-completed pack audit action."""
+    if getattr(result, "action", "") != "pack_audit":
+        return None
+    details = getattr(result, "details", None)
+    if not isinstance(details, dict):
+        return None
+    summary = details.get("summary")
+    if not isinstance(summary, dict):
+        return None
+    exact_groups = int(summary.get("exact_duplicate_groups") or 0)
+    overlaps = int(summary.get("overlap_candidates") or 0)
+    folders = int(summary.get("folders_analyzed") or 0)
+    files = int(summary.get("indexed_files_considered") or 0)
+    total = exact_groups + overlaps
+    state = "review" if total else "clear"
+    message = (
+        f"Pack audit found {exact_groups:,} exact folder group(s), "
+        f"{overlaps:,} overlap candidate(s), {folders:,} folder(s), {files:,} indexed file(s)."
+    )
+    return ("pack audit", str(exact_groups), str(overlaps), "", "", state, message)
 
 
 def compose(app) -> ComposeResult:
@@ -21,10 +44,10 @@ def compose(app) -> ComposeResult:
     yield from app._page_header(KEY)
     yield DataTable(id="dedupe-findings-table")
     yield from app._button_row(
-        ("Build Dedupe Plan", "dedupe-build"),
+        ("Smart Dedupe Plan", "dedupe-build"),
         ("Apply Quarantine", "dedupe-apply", "warning"),
-        ("Pack Audit", "pack-audit"),
-        ("Build Pack Plan", "pack-plan"),
+        ("Smart Pack Audit", "pack-audit"),
+        ("Smart Pack Plan", "pack-plan"),
         ("Apply Pack", "pack-apply", "warning"),
     )
     yield Input(placeholder="Filter duplicate groups (by hash or file path)", id="dedupe-search")
@@ -58,6 +81,21 @@ def fill(app) -> None:
         "dedupe-groups-table",
         ("Group", "Copies", "Extra", "Size", "Wasted", "State", "Keep Path"),
     )
+    last_action = getattr(app, "_last_action", None)
+    pack_feedback = pack_audit_feedback_row(last_action)
+    if pack_feedback is not None:
+        group, copies, extra, size, wasted, state, message = pack_feedback
+        table.add_row(group, copies, extra, size, wasted, _state_token(state), message)
+    if last_action is not None and last_action.action in {"dedupe_apply", "pack_apply"} and last_action.errors:
+        table.add_row(
+            "issues",
+            "",
+            _fmt(len(last_action.errors)),
+            "",
+            "",
+            _state_token("warning"),
+            "Review History for apply issues.",
+        )
     rows = dedupe_group_rows(
         db_path=app.db_path,
         query=getattr(app, "_dedupe_query", ""),

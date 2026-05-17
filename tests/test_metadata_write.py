@@ -26,6 +26,7 @@ from sfxworkbench.metadata_write import (
     undo_metadata_write_apply_log,
     write_metadata_write_plan,
 )
+from sfxworkbench.utils import fmt_bytes
 
 
 def _fake_bwfmetaedit(tmp_path: Path) -> Path:
@@ -1408,12 +1409,12 @@ def test_metadata_write_apply_rejects_file_changed_after_plan(tmp_path: Path, tm
         {
             "entry_id": 1,
             "path": str(audio),
-            "error": f"file size changed: expected {len(original)}, got {len(changed)}",
+            "error": f"file size changed: expected {fmt_bytes(len(original))}, got {fmt_bytes(len(changed))}",
         },
         {
             "entry_id": 2,
             "path": str(audio),
-            "error": f"file size changed: expected {len(original)}, got {len(changed)}",
+            "error": f"file size changed: expected {fmt_bytes(len(original))}, got {fmt_bytes(len(changed))}",
         },
     ]
 

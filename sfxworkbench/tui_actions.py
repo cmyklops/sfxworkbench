@@ -181,6 +181,232 @@ def _applied_status(result: Any, errors: tuple[str, ...], *success_fields: str, 
     return "error"
 
 
+@dataclass(frozen=True)
+class _ReuseCheck:
+    ok: bool
+    reason: str = ""
+    payload: dict[str, Any] | None = None
+
+
+def _same_path(left: str | Path | None, right: str | Path | None) -> bool:
+    if left is None or right is None:
+        return False
+    try:
+        from sfxworkbench.db import canonical_path_key
+
+        return canonical_path_key(left) == canonical_path_key(right)
+    except Exception:
+        return str(left).strip().casefold() == str(right).strip().casefold()
+
+
+def _read_json_object(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _parse_iso_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _last_scan_meta(db_path: Path) -> tuple[str | None, str | None]:
+    from sfxworkbench.db import get_connection
+
+    conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT key, value FROM scan_meta WHERE key IN ('last_scan_root', 'last_scan_at')"
+        ).fetchall()
+    finally:
+        conn.close()
+    values = {str(row["key"]): str(row["value"]).strip() for row in rows if row["value"]}
+    return values.get("last_scan_root") or None, values.get("last_scan_at") or None
+
+
+def _last_scan_root(db_path: Path) -> str | None:
+    return _last_scan_meta(db_path)[0]
+
+
+def _db_signature_details(db_path: Path) -> dict[str, int | float]:
+    details: dict[str, int | float] = {}
+    try:
+        stat = db_path.stat()
+    except OSError:
+        return details
+    details["db_mtime"] = stat.st_mtime
+    details["db_size"] = stat.st_size
+    wal_path = db_path.with_name(db_path.name + "-wal")
+    try:
+        wal_stat = wal_path.stat()
+    except OSError:
+        return details
+    details["db_wal_mtime"] = wal_stat.st_mtime
+    details["db_wal_size"] = wal_stat.st_size
+    return details
+
+
+def _scoped_index_counts(db_path: Path, root: Path | str | None) -> dict[str, int]:
+    from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params, resolve_scope_root
+
+    scope_root = resolve_scope_root(root) if root is not None else None
+    scope_sql = f" WHERE {path_scope_filter()}" if scope_root is not None else ""
+    scope_params = path_scope_params(scope_root) if scope_root is not None else ()
+
+    def count(condition: str | None = None) -> int:
+        if condition is None:
+            sql = "SELECT COUNT(*) FROM files" + scope_sql
+            params = scope_params
+        elif scope_root is not None:
+            sql = f"SELECT COUNT(*) FROM files WHERE {condition} AND {path_scope_filter()}"
+            params = scope_params
+        else:
+            sql = f"SELECT COUNT(*) FROM files WHERE {condition}"
+            params = ()
+        return int(conn.execute(sql, params).fetchone()[0] or 0)
+
+    conn = get_connection(db_path)
+    try:
+        return {
+            "indexed_files": count(),
+            "missing_hashes": count("md5 IS NULL"),
+            "missing_metadata": count("metadata_scanned_at IS NULL"),
+        }
+    finally:
+        conn.close()
+
+
+def _scope_details(
+    *,
+    db_path: Path,
+    root: Path | str | None,
+    action_mode: str,
+    decision: str,
+    **extra: Any,
+) -> dict[str, Any]:
+    scan_root, scan_at = _last_scan_meta(db_path)
+    details: dict[str, Any] = {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "root": str(root) if root is not None else scan_root,
+        "db_path": str(db_path),
+        "action_mode": action_mode,
+        "decision": decision,
+        "scan_root": scan_root,
+        "scan_last_scan_at": scan_at,
+    }
+    try:
+        details.update(_scoped_index_counts(db_path, root))
+    except Exception:
+        pass
+    details.update(_db_signature_details(db_path))
+    details.update({key: value for key, value in extra.items() if value is not None})
+    return details
+
+
+def _summary_value(payload: dict[str, Any], *keys: str) -> int:
+    summary = payload.get("summary")
+    if not isinstance(summary, dict):
+        summary = {}
+    for key in keys:
+        value = summary.get(key, payload.get(key))
+        if isinstance(value, int | float):
+            return int(value)
+    return 0
+
+
+def _artifact_reuse_check(
+    path: Path,
+    *,
+    root: Path | str | None,
+    db_path: Path,
+    require_fresh: bool = True,
+    allow_missing_root: bool = False,
+) -> _ReuseCheck:
+    payload = _read_json_object(path)
+    if payload is None:
+        return _ReuseCheck(False, "missing" if not path.exists() else "invalid_json")
+
+    expected_root = str(root) if root is not None else _last_scan_root(db_path)
+    artifact_root = payload.get("root")
+    if expected_root:
+        if isinstance(artifact_root, str) and artifact_root.strip():
+            if not _same_path(artifact_root, expected_root):
+                return _ReuseCheck(False, "root_mismatch", payload)
+        elif not allow_missing_root:
+            return _ReuseCheck(False, "missing_root", payload)
+
+    artifact_db = payload.get("db_path")
+    if isinstance(artifact_db, str) and artifact_db.strip():
+        if not _same_path(artifact_db, db_path):
+            return _ReuseCheck(False, "db_mismatch", payload)
+    else:
+        return _ReuseCheck(False, "missing_db", payload)
+
+    if require_fresh:
+        _scan_root, scan_at = _last_scan_meta(db_path)
+        generated_at = payload.get("generated_at")
+        scan_dt = _parse_iso_datetime(scan_at)
+        generated_dt = _parse_iso_datetime(generated_at)
+        if scan_dt is not None and generated_dt is not None and scan_dt > generated_dt:
+            return _ReuseCheck(False, "scan_newer", payload)
+        if generated_dt is None:
+            return _ReuseCheck(False, "missing_generated_at", payload)
+
+    return _ReuseCheck(True, payload=payload)
+
+
+def _scope_error_text(reason: str, artifact_name: str) -> str:
+    messages = {
+        "root_mismatch": f"{artifact_name} belongs to a different library root.",
+        "db_mismatch": f"{artifact_name} belongs to a different SQLite DB.",
+        "scan_newer": f"{artifact_name} is older than the current scan data.",
+        "missing_root": f"{artifact_name} does not record its library root.",
+        "missing_db": f"{artifact_name} does not record its SQLite DB.",
+        "missing_generated_at": f"{artifact_name} does not record when it was built.",
+        "invalid_json": f"{artifact_name} is not valid JSON.",
+    }
+    return messages.get(reason, f"{artifact_name} cannot be validated for this library.")
+
+
+def _destructive_plan_guard(
+    action: str,
+    plan_path: Path,
+    *,
+    db_path: Path,
+    root: Path | str | None,
+) -> ActionResult | None:
+    check = _artifact_reuse_check(plan_path, root=root, db_path=db_path, require_fresh=True)
+    if check.ok:
+        return None
+    message = _scope_error_text(check.reason, plan_path.name) + " Rebuild the plan before applying it."
+    return ActionResult(
+        action=action,
+        status="error",
+        message=message,
+        errors=(message,),
+        refresh=("dedupe", "metadata", "files", "reports"),
+        details=_scope_details(
+            db_path=db_path,
+            root=root,
+            action_mode="apply_guard",
+            decision=f"blocked_{check.reason}",
+            plan_path=str(plan_path),
+        ),
+    )
+
+
 def _per_entry_plan_has_approvals(plan_path: Path) -> bool:
     """Return ``True`` if a per-entry plan (tag/embedded/delete) has any approved entries."""
     try:
@@ -389,33 +615,80 @@ def full_audit_action(
     db_path: Path,
     report_dir: Path,
     *,
+    action_mode: str = "smart",
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
 ) -> ActionResult:
     from sfxworkbench.audit_bundle import build_audit_bundle
 
     try:
+        if action_mode not in {"smart", "reuse_index", "full_audit", "force_rescan"}:
+            raise ValueError("full audit action_mode must be smart, reuse_index, full_audit, or force_rescan")
+        output_dir = _ensure_report_dir(report_dir)
+        bundle_path = output_dir / "audit_bundle.json"
+        if action_mode == "smart":
+            reuse = _artifact_reuse_check(bundle_path, root=root, db_path=db_path, require_fresh=True)
+            if reuse.ok and reuse.payload is not None:
+                summary = reuse.payload.get("summary") if isinstance(reuse.payload.get("summary"), dict) else {}
+                details = {
+                    **reuse.payload,
+                    **_scope_details(
+                        db_path=db_path,
+                        root=root,
+                        action_mode=action_mode,
+                        decision="reused_audit_bundle",
+                    ),
+                }
+                return ActionResult(
+                    action="full_audit",
+                    status="ok",
+                    message=(
+                        "Full Audit reused the same-library audit bundle: "
+                        f"{int(summary.get('reports_written') or 0):,} report(s), "
+                        f"{int(summary.get('total_files') or 0):,} indexed file(s)."
+                    ),
+                    output_path=str(output_dir),
+                    refresh=("files", "status", "reports"),
+                    details=details,
+                )
+        decision = (
+            "reuse_index"
+            if action_mode == "reuse_index"
+            else "force_rescan"
+            if action_mode == "force_rescan"
+            else "full_scan"
+        )
         bundle = build_audit_bundle(
             root,
             db_path=db_path,
-            output_dir=_ensure_report_dir(report_dir),
+            output_dir=output_dir,
             quiet=True,
+            reuse_index=action_mode == "reuse_index",
+            force_rescan=action_mode == "force_rescan",
+            action_mode=action_mode,
             progress_callback=progress_callback,
         )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("full_audit", e)
     summary = bundle.summary
+    details = bundle.model_dump()
+    details.update(_scope_details(db_path=db_path, root=root, action_mode=action_mode, decision=decision))
+    decision_text = {
+        "reuse_index": "reused indexed data",
+        "force_rescan": "force-rescanned the library",
+        "full_scan": "ran a full scan/audit",
+    }[decision]
     return ActionResult(
         action="full_audit",
         status="ok" if summary.errors == 0 else "error",
         message=(
-            f"Audit bundle wrote {summary.reports_written:,} report(s): "
+            f"Audit bundle {decision_text} and wrote {summary.reports_written:,} report(s): "
             f"{summary.total_files:,} files, {summary.duplicate_groups:,} duplicate group(s), "
             f"{summary.missing_metadata:,} metadata gap(s)."
         ),
         output_path=bundle.output_dir,
         errors=tuple(error.get("error", str(error)) for error in bundle.errors),
         refresh=("files", "status", "reports"),
-        details=bundle.model_dump(),
+        details=details,
     )
 
 
@@ -463,20 +736,88 @@ def clean_action(
     )
 
 
+def _previous_metadata_audit_matches_root(db_path: Path, report_dir: Path, root: Path | None) -> bool:
+    if root is None:
+        return False
+
+    report_path = report_dir / "metadata_audit.json"
+    report_check = _artifact_reuse_check(
+        report_path,
+        root=root,
+        db_path=db_path,
+        require_fresh=True,
+        allow_missing_root=False,
+    )
+    if report_check.ok:
+        return True
+
+    latest = read_latest_action_history([report_dir], actions={"metadata_audit"})
+    if latest is not None and isinstance(latest.details, dict):
+        detail_root = latest.details.get("root")
+        detail_db = latest.details.get("db_path")
+        scan_at = _parse_iso_datetime(_last_scan_meta(db_path)[1])
+        generated_at = _parse_iso_datetime(latest.details.get("generated_at"))
+        scan_is_newer = scan_at is not None and generated_at is not None and scan_at > generated_at
+        if (
+            isinstance(detail_root, str)
+            and _same_path(detail_root, root)
+            and (not isinstance(detail_db, str) or _same_path(detail_db, db_path))
+            and not scan_is_newer
+        ):
+            return True
+
+    # Older TUI runs did not store the root in action history. If the canonical
+    # report exists and the DB still points at this library, treat it as a
+    # same-root prior audit so the smart button can reuse indexed data.
+    return report_check.reason == "missing_root" and report_path.exists() and _same_path(_last_scan_root(db_path), root)
+
+
 def metadata_audit_action(
     db_path: Path,
     report_dir: Path,
     *,
     root: Path | None = None,
+    action_mode: str = "smart",
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
 ) -> ActionResult:
     from sfxworkbench.metadata_audit import build_metadata_audit_report, write_metadata_audit_report
+    from sfxworkbench.scan import scan_library
 
     try:
+        refresh_result = None
+        decision = "reuse_index"
+        if action_mode not in {"smart", "reuse_index", "metadata_refresh"}:
+            raise ValueError("metadata audit action_mode must be smart, reuse_index, or metadata_refresh")
+        needs_refresh = action_mode == "metadata_refresh" or (
+            action_mode == "smart"
+            and root is not None
+            and not _previous_metadata_audit_matches_root(db_path, report_dir, root)
+        )
+        if needs_refresh:
+            decision = "metadata_refresh"
+            if progress_callback is not None:
+                progress_callback(
+                    "refreshing_metadata",
+                    0,
+                    None,
+                    "Refreshing metadata only; unchanged files are skipped and hashes are not read",
+                )
+            refresh_result = scan_library(
+                root,
+                db_path,
+                skip_hash=True,
+                quiet=True,
+                mode="metadata",
+                progress_callback=progress_callback,
+                cancel_requested=cancel_requested,
+            )
         if progress_callback is not None:
-            progress_callback("auditing", 0, None, "Building metadata audit report")
-        report = build_metadata_audit_report(db_path)
+            if decision == "reuse_index":
+                progress_callback("auditing", 0, None, "Reusing indexed metadata from the previous same-path audit")
+            else:
+                progress_callback("auditing", 0, None, "Building metadata audit report")
+        report = build_metadata_audit_report(db_path, root=root, action_mode=action_mode)
         output = _ensure_report_dir(report_dir) / "metadata_audit.json"
         if progress_callback is not None:
             progress_callback("writing_report", 0, None, f"Writing metadata audit report to {output.name}")
@@ -490,16 +831,35 @@ def metadata_audit_action(
             )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("metadata_audit", e)
+    details = report.model_dump()
+    details["decision"] = decision
+    details.update(
+        _scope_details(
+            db_path=db_path,
+            root=root,
+            action_mode=action_mode,
+            decision=decision,
+        )
+    )
+    if root is not None:
+        details["root"] = str(root)
+    if refresh_result is not None:
+        details["refresh_result"] = refresh_result.model_dump()
+    decision_text = (
+        "reused indexed metadata"
+        if decision == "reuse_index"
+        else "refreshed metadata without hashing, then wrote the report"
+    )
     return ActionResult(
         action="metadata_audit",
         status="ok",
         message=(
-            f"Metadata audit found {report.summary.missing_metadata:,} missing BEXT/iXML file(s) "
+            f"Metadata audit {decision_text}; found {report.summary.missing_metadata:,} missing BEXT/iXML file(s) "
             f"and {report.summary.unusual_sample_rate_files:,} unusual sample-rate file(s)."
         ),
         output_path=str(output),
         refresh=("metadata", "reports"),
-        details=report.model_dump(),
+        details=details,
     )
 
 
@@ -560,6 +920,7 @@ def tag_plan_action(
     fields: list[str] | None = None,
     include_synonyms: bool = False,
     min_confidence: float = 0.75,
+    action_mode: str = "smart",
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
 ) -> ActionResult:
@@ -571,7 +932,44 @@ def tag_plan_action(
     effective_fields = fields if fields is not None else _TUI_DEFAULT_TAG_FIELDS
     effective_min_confidence = min(min_confidence, 0.62) if include_synonyms else min_confidence
     try:
-        ensure_metadata_info(db_path, root, progress_callback=progress_callback, cancel_requested=cancel_requested)
+        if action_mode not in {"smart", "reuse_index", "rebuild_plan"}:
+            raise ValueError("tag plan action_mode must be smart, reuse_index, or rebuild_plan")
+        output = _ensure_report_dir(report_dir) / "metadata_tag_plan.json"
+        if action_mode == "smart":
+            reuse = _artifact_reuse_check(output, root=root, db_path=db_path, require_fresh=True)
+            params_match = False
+            if reuse.payload is not None:
+                params_match = reuse.payload.get("fields") == effective_fields and float(
+                    reuse.payload.get("min_confidence") or 0.0
+                ) == float(effective_min_confidence)
+            if reuse.ok and reuse.payload is not None and params_match:
+                add_entries = _summary_value(reuse.payload, "add_entries")
+                return ActionResult(
+                    action="tag_plan",
+                    status="ok",
+                    message=f"Reused same-library metadata tag plan with {add_entries:,} planned DB tag write(s).",
+                    output_path=str(output),
+                    refresh=("metadata", "reports"),
+                    details={
+                        **reuse.payload,
+                        **_scope_details(
+                            db_path=db_path,
+                            root=root,
+                            action_mode=action_mode,
+                            decision="reused_plan",
+                            add_entries=add_entries,
+                            plan_path=str(output),
+                        ),
+                    },
+                )
+        metadata_result = None
+        if action_mode != "reuse_index":
+            metadata_result = ensure_metadata_info(
+                db_path,
+                root,
+                progress_callback=progress_callback,
+                cancel_requested=cancel_requested,
+            )
         catalog_details = _ensure_ucs_catalog_for_suggestions(root, report_dir, progress_callback)
         try:
             plan = build_tag_plan(
@@ -585,6 +983,7 @@ def tag_plan_action(
                 synonym_depth=_TUI_SYNONYM_DEPTH if include_synonyms else 0,
                 sources=sources,
                 fields=effective_fields,
+                action_mode=action_mode,
                 progress_callback=progress_callback,
                 cancel_requested=cancel_requested,
             )
@@ -604,10 +1003,10 @@ def tag_plan_action(
                 synonym_depth=_TUI_SYNONYM_DEPTH if include_synonyms else 0,
                 sources=sources,
                 fields=effective_fields,
+                action_mode=action_mode,
                 progress_callback=progress_callback,
                 cancel_requested=cancel_requested,
             )
-        output = _ensure_report_dir(report_dir) / "metadata_tag_plan.json"
         if progress_callback is not None:
             progress_callback("writing_report", len(plan.entries), len(plan.entries), f"Writing {output.name}")
         write_tag_plan(plan, output, quiet=True)
@@ -628,7 +1027,16 @@ def tag_plan_action(
         )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("tag_plan", e)
-    message = f"Built metadata tag plan with {plan.summary.add_entries:,} planned DB tag write(s)."
+    refreshed = metadata_result.scanned if metadata_result is not None else 0
+    decision = "reused_indexed_data" if action_mode == "reuse_index" else "rebuilt_plan"
+    decision_text = "reused indexed data and rebuilt"
+    if action_mode != "reuse_index":
+        if refreshed:
+            decision = "refreshed_missing_metadata"
+            decision_text = f"refreshed metadata for {refreshed:,} file(s), then rebuilt"
+        else:
+            decision_text = "reused indexed metadata and rebuilt"
+    message = f"Find Tags {decision_text} the plan with {plan.summary.add_entries:,} planned DB tag write(s)."
     if catalog_details.get("ucs_catalog_imported"):
         message += f" Imported UCS catalog with {catalog_details.get('ucs_catalog_entries', 0):,} entries first."
     if not used_catalog:
@@ -641,6 +1049,15 @@ def tag_plan_action(
         refresh=("metadata", "reports"),
         details={
             **plan.model_dump(),
+            **_scope_details(
+                db_path=db_path,
+                root=root,
+                action_mode=action_mode,
+                decision=decision,
+                refreshed_metadata_files=refreshed,
+                add_entries=plan.summary.add_entries,
+                plan_path=str(output),
+            ),
             "used_ucs_catalog": used_catalog,
             **catalog_details,
             "fields": effective_fields,
@@ -677,6 +1094,7 @@ def apply_tag_plan_action(
     db_path: Path,
     report_dir: Path,
     *,
+    root: Path | None = None,
     target_paths: tuple[str, ...] | None = None,
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
@@ -696,6 +1114,10 @@ def apply_tag_plan_action(
         return ActionResult(
             "tag_apply", "error", "No metadata tag plan found.", errors=("No metadata tag plan found.",)
         )
+    if root is not None:
+        guard = _destructive_plan_guard("tag_apply", plan_path, db_path=db_path, root=root)
+        if guard is not None:
+            return guard
     from sfxworkbench.tag_plan import apply_tag_plan, review_tag_plan
 
     auto_approve_error = _auto_approve_plan(plan_path, review_tag_plan, _per_entry_plan_has_approvals)
@@ -725,7 +1147,16 @@ def apply_tag_plan_action(
         output_path=result.log_path,
         errors=errors,
         refresh=("metadata", "files", "reports"),
-        details=result.model_dump(),
+        details={
+            **result.model_dump(),
+            **_scope_details(
+                db_path=db_path,
+                root=root,
+                action_mode="apply",
+                decision="applied",
+                plan_path=str(plan_path),
+            ),
+        },
     )
 
 
@@ -753,6 +1184,7 @@ def build_dedupe_plan_action(
     report_dir: Path,
     *,
     root: Path | None = None,
+    action_mode: str = "smart",
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
 ) -> ActionResult:
@@ -760,25 +1192,70 @@ def build_dedupe_plan_action(
     from sfxworkbench.scan import ensure_hashes
 
     try:
-        ensure_hashes(db_path, root, progress_callback=progress_callback, cancel_requested=cancel_requested)
+        if action_mode not in {"smart", "reuse_index", "rebuild_plan"}:
+            raise ValueError("dedupe plan action_mode must be smart, reuse_index, or rebuild_plan")
+        output = _ensure_report_dir(report_dir) / "dedupe_plan.json"
+        if action_mode == "smart":
+            reuse = _artifact_reuse_check(output, root=root, db_path=db_path, require_fresh=True)
+            if reuse.ok and reuse.payload is not None:
+                duplicate_groups = len(reuse.payload.get("groups") or [])
+                return ActionResult(
+                    action="dedupe_plan",
+                    status="ok",
+                    message=f"Reused same-library dedupe plan with {duplicate_groups:,} duplicate group(s).",
+                    output_path=str(output),
+                    refresh=("dedupe", "reports"),
+                    details=_scope_details(
+                        db_path=db_path,
+                        root=root,
+                        action_mode=action_mode,
+                        decision="reused_plan",
+                        duplicate_groups=duplicate_groups,
+                        plan_path=str(output),
+                    ),
+                )
+        hash_result = None
+        if action_mode != "reuse_index":
+            hash_result = ensure_hashes(
+                db_path, root, progress_callback=progress_callback, cancel_requested=cancel_requested
+            )
         if progress_callback is not None:
             progress_callback("planning", 0, None, "Finding duplicate files")
-        groups = find_duplicates(db_path)
-        output = _ensure_report_dir(report_dir) / "dedupe_plan.json"
+        groups = find_duplicates(db_path, root=root)
         if progress_callback is not None:
             progress_callback("writing_report", len(groups), len(groups), f"Writing {output.name}")
-        write_dedupe_plan(groups, output, db_path=db_path, quiet=True)
+        write_dedupe_plan(groups, output, db_path=db_path, root=root, action_mode=action_mode, quiet=True)
         if progress_callback is not None:
             progress_callback("complete", len(groups), len(groups), "Dedupe plan complete")
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("dedupe_plan", e)
+    hashed = hash_result.scanned if hash_result is not None else 0
+    decision = "rebuilt_plan"
+    decision_text = "rebuilt the plan"
+    if action_mode == "reuse_index":
+        decision = "reused_indexed_hashes"
+        decision_text = "reused indexed hashes and rebuilt the plan"
+    elif hashed:
+        decision = "hashed_missing_files"
+        decision_text = f"hashed {hashed:,} missing file(s) and rebuilt the plan"
     return ActionResult(
         action="dedupe_plan",
         status="ok",
-        message=f"Built dedupe plan with {len(groups):,} duplicate group(s).",
+        message=f"Dedupe {decision_text} with {len(groups):,} duplicate group(s).",
         output_path=str(output),
         refresh=("dedupe", "reports"),
-        details={"duplicate_groups": len(groups)},
+        details={
+            **_scope_details(
+                db_path=db_path,
+                root=root,
+                action_mode=action_mode,
+                decision=decision,
+                duplicate_groups=len(groups),
+                hashed_files=hashed,
+                plan_path=str(output),
+            ),
+            **({"hash_result": hash_result.model_dump()} if hash_result is not None else {}),
+        },
     )
 
 
@@ -806,6 +1283,7 @@ def apply_dedupe_plan_action(
     db_path: Path,
     report_dir: Path,
     *,
+    root: Path | None = None,
     target_paths: tuple[str, ...] | None = None,
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
@@ -818,6 +1296,10 @@ def apply_dedupe_plan_action(
     plan_path = report_dir / "dedupe_plan.json"
     if not plan_path.exists():
         return ActionResult("dedupe_apply", "error", "No dedupe plan found.", errors=("No dedupe plan found.",))
+    if root is not None:
+        guard = _destructive_plan_guard("dedupe_apply", plan_path, db_path=db_path, root=root)
+        if guard is not None:
+            return guard
     from sfxworkbench.dedupe import apply_dedupe_plan, review_dedupe_plan
 
     auto_approve_error = _auto_approve_plan(plan_path, review_dedupe_plan, _group_plan_has_approvals)
@@ -851,7 +1333,16 @@ def apply_dedupe_plan_action(
         output_path=result.log_path or result.quarantine_dir,
         errors=errors,
         refresh=("dedupe", "files", "reports"),
-        details=result.model_dump(),
+        details={
+            **result.model_dump(),
+            **_scope_details(
+                db_path=db_path,
+                root=root,
+                action_mode="apply",
+                decision="applied",
+                plan_path=str(plan_path),
+            ),
+        },
     )
 
 
@@ -860,6 +1351,7 @@ def pack_audit_action(
     db_path: Path,
     report_dir: Path,
     *,
+    action_mode: str = "smart",
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
 ) -> ActionResult:
@@ -867,11 +1359,50 @@ def pack_audit_action(
     from sfxworkbench.scan import ensure_hashes
 
     try:
-        ensure_hashes(db_path, root, progress_callback=progress_callback, cancel_requested=cancel_requested)
+        if action_mode not in {"smart", "reuse_index", "rebuild_report"}:
+            raise ValueError("pack audit action_mode must be smart, reuse_index, or rebuild_report")
+        output = _ensure_report_dir(report_dir) / "pack_overlap_report.json"
+        if action_mode == "smart":
+            reuse = _artifact_reuse_check(output, root=root, db_path=db_path, require_fresh=True)
+            if reuse.ok and reuse.payload is not None:
+                exact = _summary_value(reuse.payload, "exact_duplicate_groups")
+                overlaps = _summary_value(reuse.payload, "overlap_candidates")
+                return ActionResult(
+                    action="pack_audit",
+                    status="ok",
+                    message=(
+                        f"Reused same-library pack audit with {exact:,} exact duplicate group(s) "
+                        f"and {overlaps:,} overlap candidate(s)."
+                    ),
+                    output_path=str(output),
+                    refresh=("dedupe", "reports"),
+                    details={
+                        **reuse.payload,
+                        **_scope_details(
+                            db_path=db_path,
+                            root=root,
+                            action_mode=action_mode,
+                            decision="reused_report",
+                            exact_duplicate_groups=exact,
+                            overlap_candidates=overlaps,
+                            report_path=str(output),
+                        ),
+                    },
+                )
+        hash_result = None
+        if action_mode != "reuse_index":
+            hash_result = ensure_hashes(
+                db_path, root, progress_callback=progress_callback, cancel_requested=cancel_requested
+            )
         if progress_callback is not None:
             progress_callback("auditing", 0, None, "Auditing pack overlap")
-        report = audit_packs(root, db_path=db_path)
-        output = _ensure_report_dir(report_dir) / "pack_overlap_report.json"
+        report = audit_packs(
+            root,
+            db_path=db_path,
+            ensure_hash=False,
+            progress_callback=progress_callback,
+            action_mode=action_mode,
+        )
         if progress_callback is not None:
             progress_callback("writing_report", 0, None, f"Writing {output.name}")
         write_pack_audit_report(report, output, quiet=True)
@@ -884,43 +1415,123 @@ def pack_audit_action(
             )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("pack_audit", e)
+    hashed = hash_result.scanned if hash_result is not None else 0
+    decision = "reused_indexed_hashes" if action_mode == "reuse_index" else "rebuilt_report"
+    decision_text = "reused indexed hashes" if action_mode == "reuse_index" else "rebuilt the report"
+    if hashed:
+        decision = "hashed_missing_files"
+        decision_text = f"hashed {hashed:,} missing file(s)"
+    details = report.model_dump()
+    details.update(
+        _scope_details(
+            db_path=db_path,
+            root=root,
+            action_mode=action_mode,
+            decision=decision,
+            hashed_files=hashed,
+            report_path=str(output),
+        )
+    )
     return ActionResult(
         action="pack_audit",
         status="ok",
         message=(
-            f"Pack audit found {report.summary.exact_duplicate_groups:,} exact duplicate group(s) "
+            f"Pack audit {decision_text}; found {report.summary.exact_duplicate_groups:,} exact duplicate group(s) "
             f"and {report.summary.overlap_candidates:,} overlap candidate(s)."
         ),
         output_path=str(output),
         refresh=("dedupe", "reports"),
-        details=report.model_dump(),
+        details=details,
     )
 
 
 def pack_plan_action(
     report_dir: Path,
     *,
+    root: Path | None = None,
+    db_path: Path | None = None,
+    action_mode: str = "smart",
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
 ) -> ActionResult:
     report_path = report_dir / "pack_overlap_report.json"
-    if not report_path.exists():
-        return ActionResult(
-            "pack_plan", "error", "No pack overlap report found.", errors=("No pack overlap report found.",)
-        )
     from sfxworkbench.packs import build_pack_plan
 
     try:
+        if action_mode not in {"smart", "reuse_index", "rebuild_plan"}:
+            raise ValueError("pack plan action_mode must be smart, reuse_index, or rebuild_plan")
         output = report_dir / "pack_consolidation_plan.json"
-        plan = build_pack_plan(report_path, output_path=output, quiet=True, progress_callback=progress_callback)
+        if db_path is not None and root is not None and action_mode == "smart":
+            reuse = _artifact_reuse_check(output, root=root, db_path=db_path, require_fresh=True)
+            if reuse.ok and reuse.payload is not None:
+                candidates = _summary_value(reuse.payload, "candidate_entries")
+                return ActionResult(
+                    action="pack_plan",
+                    status="ok",
+                    message=f"Reused same-library pack plan with {candidates:,} candidate entrie(s).",
+                    output_path=str(output),
+                    refresh=("dedupe", "reports"),
+                    details={
+                        **reuse.payload,
+                        **_scope_details(
+                            db_path=db_path,
+                            root=root,
+                            action_mode=action_mode,
+                            decision="reused_plan",
+                            candidate_entries=candidates,
+                            plan_path=str(output),
+                        ),
+                    },
+                )
+        rebuilt_report = False
+        if db_path is not None and root is not None:
+            report_check = _artifact_reuse_check(report_path, root=root, db_path=db_path, require_fresh=True)
+            if not report_check.ok:
+                audit_mode = "reuse_index" if action_mode == "reuse_index" else "rebuild_report"
+                audit_result = pack_audit_action(
+                    root,
+                    db_path,
+                    report_dir,
+                    action_mode=audit_mode,
+                    progress_callback=progress_callback,
+                )
+                if not audit_result.ok:
+                    return audit_result
+                rebuilt_report = True
+        elif not report_path.exists():
+            return ActionResult(
+                "pack_plan", "error", "No pack overlap report found.", errors=("No pack overlap report found.",)
+            )
+        plan = build_pack_plan(
+            report_path,
+            output_path=output,
+            quiet=True,
+            progress_callback=progress_callback,
+            action_mode=action_mode,
+        )
     except Exception as e:  # pragma: no cover - defensive UI boundary
         return _action_error("pack_plan", e)
+    decision = "rebuilt_report_and_plan" if rebuilt_report else "rebuilt_plan"
+    details = plan.model_dump()
+    if db_path is not None:
+        details.update(
+            _scope_details(
+                db_path=db_path,
+                root=root,
+                action_mode=action_mode,
+                decision=decision,
+                candidate_entries=plan.summary.candidate_entries,
+                plan_path=str(output),
+                report_path=str(report_path),
+            )
+        )
+    prefix = "Rebuilt pack audit and plan" if rebuilt_report else "Built pack plan"
     return ActionResult(
         action="pack_plan",
         status="ok",
-        message=f"Built pack plan with {plan.summary.candidate_entries:,} candidate entrie(s).",
+        message=f"{prefix} with {plan.summary.candidate_entries:,} candidate entrie(s).",
         output_path=str(output),
         refresh=("dedupe", "reports"),
-        details=plan.model_dump(),
+        details=details,
     )
 
 
@@ -948,11 +1559,16 @@ def apply_pack_plan_action(
     db_path: Path,
     report_dir: Path,
     *,
+    root: Path | None = None,
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
 ) -> ActionResult:
     plan_path = report_dir / "pack_consolidation_plan.json"
     if not plan_path.exists():
         return ActionResult("pack_apply", "error", "No pack plan found.", errors=("No pack plan found.",))
+    if root is not None:
+        guard = _destructive_plan_guard("pack_apply", plan_path, db_path=db_path, root=root)
+        if guard is not None:
+            return guard
     from sfxworkbench.packs import apply_pack_plan, review_pack_plan
 
     auto_approve_error = _auto_approve_plan(plan_path, review_pack_plan, _group_plan_has_approvals)
@@ -977,7 +1593,16 @@ def apply_pack_plan_action(
         output_path=result.log_path,
         errors=errors,
         refresh=("dedupe", "files", "reports"),
-        details=result.model_dump(),
+        details={
+            **result.model_dump(),
+            **_scope_details(
+                db_path=db_path,
+                root=root,
+                action_mode="apply",
+                decision="applied",
+                plan_path=str(plan_path),
+            ),
+        },
     )
 
 
@@ -1295,6 +1920,7 @@ def apply_tag_plan_and_build_embedded_plan_action(
     apply_result = apply_tag_plan_action(
         db_path,
         report_dir,
+        root=root,
         target_paths=target_paths,
         progress_callback=progress_callback,
         cancel_requested=cancel_requested,
@@ -1396,6 +2022,7 @@ def apply_embedded_metadata_action(
     db_path: Path,
     report_dir: Path,
     *,
+    root: Path | None = None,
     target_paths: tuple[str, ...] | None = None,
     progress_callback: Callable[[str, int, int | None, str], None] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
@@ -1412,6 +2039,10 @@ def apply_embedded_metadata_action(
             "No embedded metadata write plan found.",
             errors=("No embedded metadata write plan found.",),
         )
+    if root is not None:
+        guard = _destructive_plan_guard("metadata_write_apply", plan_path, db_path=db_path, root=root)
+        if guard is not None:
+            return guard
     from sfxworkbench.metadata_write import apply_metadata_write_plan, review_metadata_write_plan
 
     auto_approve_error = _auto_approve_plan(plan_path, review_metadata_write_plan, _per_entry_plan_has_approvals)
@@ -1441,7 +2072,16 @@ def apply_embedded_metadata_action(
         output_path=result.log_path,
         errors=errors,
         refresh=("metadata", "files", "reports"),
-        details=result.model_dump(),
+        details={
+            **result.model_dump(),
+            **_scope_details(
+                db_path=db_path,
+                root=root,
+                action_mode="apply",
+                decision="applied",
+                plan_path=str(plan_path),
+            ),
+        },
     )
 
 

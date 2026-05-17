@@ -13,7 +13,7 @@ from sfxworkbench.dedupe import find_duplicates, summarize_duplicates
 from sfxworkbench.format_audit import build_format_audit_report, write_format_audit_report
 from sfxworkbench.groups import audit_related_groups, write_related_groups_report
 from sfxworkbench.metadata_audit import build_metadata_audit_report, write_metadata_audit_report
-from sfxworkbench.models import AuditBundleReport, AuditBundleSummary
+from sfxworkbench.models import AuditBundleReport, AuditBundleSummary, ScanResult
 from sfxworkbench.packs import audit_packs, write_pack_audit_report
 from sfxworkbench.scan import scan_library
 from sfxworkbench.ucs_validate import build_ucs_validation_report, write_ucs_validation_report
@@ -51,7 +51,9 @@ def build_audit_bundle(
     output_dir: Path | None = None,
     skip_hash: bool = False,
     force_rescan: bool = False,
+    reuse_index: bool = False,
     include_similarity: bool = False,
+    action_mode: str = "full_audit",
     quiet: bool = True,
     limit: int = 200,
     progress_callback: ProgressCallback | None = None,
@@ -78,35 +80,40 @@ def build_audit_bundle(
         if progress_callback is not None:
             progress_callback("auditing", step, total_steps, message)
 
-    if progress_callback is not None:
-        progress_callback("scanning", 0, None, "Scanning library for audit bundle")
-    scan_result = scan_library(
-        root,
-        db_path,
-        skip_hash=skip_hash,
-        force_rescan=force_rescan,
-        quiet=quiet,
-        mode="full",
-        progress_callback=progress_callback,
-    )
+    if reuse_index:
+        if progress_callback is not None:
+            progress_callback("auditing", 0, total_steps, "Reusing indexed data for audit bundle")
+        scan_result = ScanResult()
+    else:
+        if progress_callback is not None:
+            progress_callback("scanning", 0, None, "Scanning library for audit bundle")
+        scan_result = scan_library(
+            root,
+            db_path,
+            skip_hash=skip_hash,
+            force_rescan=force_rescan,
+            quiet=quiet,
+            mode="full",
+            progress_callback=progress_callback,
+        )
     scan_path = output / "scan_result.json"
     _write_json(scan_path, scan_result)
     report_paths["scan"] = str(scan_path)
     advance("Wrote scan result")
 
-    audit = run_audit(db_path, quiet=True)
+    audit = run_audit(db_path, quiet=True, root=root, action_mode=action_mode)
     audit_path = output / "index_audit.json"
     _write_json(audit_path, audit)
     report_paths["index_audit"] = str(audit_path)
     advance("Wrote index audit")
 
-    metadata = build_metadata_audit_report(db_path, limit=limit)
+    metadata = build_metadata_audit_report(db_path, limit=limit, root=root, action_mode=action_mode)
     metadata_path = output / "metadata_audit.json"
     write_metadata_audit_report(metadata, metadata_path, quiet=True)
     report_paths["metadata_audit"] = str(metadata_path)
     advance("Wrote metadata audit")
 
-    duplicates = find_duplicates(db_path, ensure_hash=not skip_hash, root=root)
+    duplicates = find_duplicates(db_path, ensure_hash=not skip_hash and not reuse_index, root=root)
     duplicate_summary = summarize_duplicates(duplicates)
     duplicates_path = output / "dedupe_summary.json"
     _write_json(
@@ -116,7 +123,9 @@ def build_audit_bundle(
             "generated_at": _now_iso(),
             "tool": "sfxworkbench",
             "tool_version": __version__,
+            "root": str(root),
             "db_path": str(db_path),
+            "action_mode": action_mode,
             "summary": duplicate_summary.model_dump(),
             "groups": [group.model_dump() for group in duplicates[: limit or None]],
         },
@@ -136,7 +145,7 @@ def build_audit_bundle(
     report_paths["format_audit"] = str(format_path)
     advance("Wrote format audit")
 
-    packs = audit_packs(root, db_path=db_path, ensure_hash=not skip_hash)
+    packs = audit_packs(root, db_path=db_path, ensure_hash=not skip_hash and not reuse_index, action_mode=action_mode)
     packs_path = output / "pack_overlap_report.json"
     write_pack_audit_report(packs, packs_path, quiet=True)
     report_paths["pack_overlap"] = str(packs_path)
@@ -178,6 +187,7 @@ def build_audit_bundle(
         tool_version=__version__,
         root=str(root),
         db_path=str(db_path),
+        action_mode=action_mode,
         output_dir=str(output),
         include_similarity=include_similarity,
         report_paths=report_paths,

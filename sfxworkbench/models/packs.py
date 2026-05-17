@@ -49,6 +49,7 @@ class PackAuditReport(BaseModel):
     tool_version: str
     root: str
     db_path: str
+    action_mode: str = "audit"
     min_files: int = 2
     overlap_threshold: float = 0.95
     summary: PackAuditSummary
@@ -101,6 +102,7 @@ class PackPlan(BaseModel):
     tool_version: str
     root: str
     db_path: str
+    action_mode: str = "plan"
     source_report: str | None = None
     safe_folders: list[str] = []
     preservation_priority: dict = {}

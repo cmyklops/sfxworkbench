@@ -52,6 +52,10 @@ class ScanResult(BaseModel):
 
 
 class AuditResult(BaseModel):
+    generated_at: str | None = None
+    root: str | None = None
+    db_path: str | None = None
+    action_mode: str = "audit"
     total_files: int = 0
     scan_errors: int = 0
     missing_metadata: int = 0
@@ -91,6 +95,7 @@ class AuditBundleReport(BaseModel):
     tool_version: str
     root: str
     db_path: str
+    action_mode: str = "full_audit"
     output_dir: str
     include_similarity: bool = False
     report_paths: dict[str, str] = {}

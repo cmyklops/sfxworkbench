@@ -15,7 +15,10 @@ if TYPE_CHECKING:
 
 KEY = "metadata"
 TITLE = "Metadata"
-NOTE = "Find reviewable tags, accept the good ones into the index, then write accepted metadata to files."
+NOTE = (
+    "Smart Audit and Smart Find Tags reuse same-library metadata only when root, DB, and scan age match. "
+    "Palette overrides can refresh metadata only, reuse indexed metadata, or rebuild tag plans."
+)
 
 
 def compose(app) -> ComposeResult:
@@ -24,8 +27,8 @@ def compose(app) -> ComposeResult:
     yield from app._page_header(KEY)
     yield DataTable(id="metadata-findings-table")
     yield from app._button_flow(
-        ("Metadata Audit", "metadata-audit"),
-        ("Find Tags", "metadata-plan"),
+        ("Smart Metadata Audit", "metadata-audit"),
+        ("Smart Find Tags", "metadata-plan"),
         ("Review Tags", "metadata-review-open"),
         ("Accept Tags & Prepare Write", "metadata-apply", "warning"),
         ("Write Metadata to Files", "metadata-write-apply", "warning"),

@@ -2287,7 +2287,7 @@ def review_queues(
             "Missing BEXT/iXML",
             missing_metadata,
             "Files with neither BEXT nor iXML.",
-            f"Write metadata gap report: uv run sfx metadata audit {db} --output ~/reports/metadata_report.json",
+            f"Smart metadata audit: reuse indexed data if already audited, or run uv run sfx scan {quoted_root} {db} --mode metadata --no-hash before writing the report.",
         ),
         QueueSummary(
             "missing_bext",
@@ -2295,7 +2295,7 @@ def review_queues(
             "Missing BEXT",
             missing_bext,
             "Files without BWF/BEXT metadata.",
-            f"Write metadata gap report: uv run sfx metadata audit {db} --output ~/reports/metadata_report.json",
+            f"Smart metadata audit: reuse indexed data if already audited, or run uv run sfx scan {quoted_root} {db} --mode metadata --no-hash before writing the report.",
         ),
         QueueSummary(
             "missing_ixml",
@@ -2303,7 +2303,7 @@ def review_queues(
             "Missing iXML",
             missing_ixml,
             "Files without iXML metadata.",
-            f"Write metadata gap report: uv run sfx metadata audit {db} --output ~/reports/metadata_report.json",
+            f"Smart metadata audit: reuse indexed data if already audited, or run uv run sfx scan {quoted_root} {db} --mode metadata --no-hash before writing the report.",
         ),
         QueueSummary(
             "unusual_rates",

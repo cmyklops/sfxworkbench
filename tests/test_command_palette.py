@@ -7,7 +7,15 @@ from sfxworkbench.tui_screens.command_palette import filter_commands, label_for
 
 def test_label_for_uses_lookup_first() -> None:
     assert label_for("scan-run") == "Quick index"
+    assert label_for("scan-full-audit") == "Smart full audit"
     assert label_for("metadata-write-apply") == "Write metadata to files"
+
+
+def test_label_for_exposes_smart_button_overrides() -> None:
+    assert label_for("scan-force-rescan") == "Force rescan"
+    assert label_for("metadata-audit-refresh") == "Refresh metadata only"
+    assert label_for("dedupe-rebuild") == "Rebuild dedupe plan"
+    assert label_for("pack-plan-reuse-index") == "Reuse indexed data for pack plan"
 
 
 def test_label_for_falls_back_to_title_case() -> None:

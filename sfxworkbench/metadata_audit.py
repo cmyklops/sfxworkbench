@@ -11,7 +11,7 @@ from rich.table import Table
 
 from sfxworkbench import __version__
 from sfxworkbench.audit_cmd import _STANDARD_SAMPLE_RATES
-from sfxworkbench.db import get_connection
+from sfxworkbench.db import get_connection, path_scope_filter, path_scope_params, resolve_scope_root
 from sfxworkbench.models import MetadataAuditEntry, MetadataAuditReport, MetadataAuditSummary
 
 console = Console()
@@ -58,26 +58,50 @@ def _limit_clause(limit: int) -> tuple[str, tuple[int, ...]]:
     return " LIMIT ?", (limit,)
 
 
-def build_metadata_audit_report(db_path: Path, limit: int = 200) -> MetadataAuditReport:
+def build_metadata_audit_report(
+    db_path: Path,
+    limit: int = 200,
+    *,
+    root: Path | None = None,
+    action_mode: str = "audit",
+) -> MetadataAuditReport:
     """Build a report for files missing BWF/iXML metadata or using unusual sample rates."""
     if limit < 0:
         raise ValueError("--limit must be 0 or greater")
+
+    scope_root = resolve_scope_root(root) if root is not None else None
+    scope_filter = path_scope_filter() if scope_root is not None else ""
+    scope_params = path_scope_params(scope_root) if scope_root is not None else ()
+
+    def scoped_where(condition: str | None = None) -> tuple[str, tuple[object, ...]]:
+        clauses = []
+        params: list[object] = []
+        if condition:
+            clauses.append(condition)
+        if scope_filter:
+            clauses.append(scope_filter)
+            params.extend(scope_params)
+        return (" WHERE " + " AND ".join(clauses), tuple(params)) if clauses else ("", ())
 
     conn = get_connection(db_path)
     standard_rates = sorted(_STANDARD_SAMPLE_RATES)
     placeholders = ",".join("?" for _ in standard_rates)
 
-    total = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-    missing_metadata_count = conn.execute("SELECT COUNT(*) FROM files WHERE has_bext = 0 AND has_ixml = 0").fetchone()[
-        0
-    ]
+    total_where, total_params = scoped_where()
+    total = conn.execute("SELECT COUNT(*) FROM files" + total_where, total_params).fetchone()[0]
+    missing_where, missing_params = scoped_where("has_bext = 0 AND has_ixml = 0")
+    missing_metadata_count = conn.execute("SELECT COUNT(*) FROM files" + missing_where, missing_params).fetchone()[0]
+    unusual_where, unusual_params = scoped_where(f"sample_rate IS NOT NULL AND sample_rate NOT IN ({placeholders})")
     unusual_sample_rate_count = conn.execute(
-        f"SELECT COUNT(*) FROM files WHERE sample_rate IS NOT NULL AND sample_rate NOT IN ({placeholders})",
-        tuple(standard_rates),
+        "SELECT COUNT(*) FROM files" + unusual_where,
+        tuple(standard_rates) + unusual_params,
     ).fetchone()[0]
+    sample_rate_where, sample_rate_params = scoped_where("sample_rate IS NOT NULL")
     sample_rate_rows = conn.execute(
         "SELECT sample_rate, COUNT(*) AS cnt FROM files "
-        "WHERE sample_rate IS NOT NULL GROUP BY sample_rate ORDER BY cnt DESC, sample_rate"
+        + sample_rate_where
+        + " GROUP BY sample_rate ORDER BY cnt DESC, sample_rate",
+        sample_rate_params,
     ).fetchall()
     sample_rates = {str(row["sample_rate"]): row["cnt"] for row in sample_rate_rows}
 
@@ -89,15 +113,11 @@ def build_metadata_audit_report(db_path: Path, limit: int = 200) -> MetadataAudi
         FROM files
     """
     missing_rows = conn.execute(
-        select_columns + " WHERE has_bext = 0 AND has_ixml = 0 ORDER BY path" + limit_sql,
-        limit_args,
+        select_columns + missing_where + " ORDER BY path" + limit_sql, missing_params + limit_args
     ).fetchall()
     unusual_rows = conn.execute(
-        select_columns
-        + f" WHERE sample_rate IS NOT NULL AND sample_rate NOT IN ({placeholders})"
-        + " ORDER BY sample_rate, path"
-        + limit_sql,
-        tuple(standard_rates) + limit_args,
+        select_columns + unusual_where + " ORDER BY sample_rate, path" + limit_sql,
+        tuple(standard_rates) + unusual_params + limit_args,
     ).fetchall()
     conn.close()
 
@@ -108,6 +128,8 @@ def build_metadata_audit_report(db_path: Path, limit: int = 200) -> MetadataAudi
         generated_at=_now_iso(),
         tool_version=__version__,
         db_path=str(db_path),
+        root=str(scope_root) if scope_root is not None else None,
+        action_mode=action_mode,
         standard_sample_rates=standard_rates,
         limit=limit,
         summary=MetadataAuditSummary(
