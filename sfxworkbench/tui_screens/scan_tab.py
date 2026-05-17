@@ -66,7 +66,7 @@ def fill(app) -> None:
             no_history_detail="No saved scan action found for this report folder.",
             history_detail_suffix="Counts below are current DB signals.",
         ),
-        *scan_findings(db_path=app.db_path, config_path=app.config_path),
+        *scan_findings(db_path=app.db_path, config_path=app.config_path, library_path=app._library_path),
     ]
     app._fill_findings(
         "scan-findings-table",

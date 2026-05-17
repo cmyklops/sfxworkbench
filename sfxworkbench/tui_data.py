@@ -22,6 +22,7 @@ from sfxworkbench.metadata_fields import (
     normalize_value_for_dedup,
     values_equal_for_dedup,
 )
+from sfxworkbench.path_safety import path_exists_windows
 from sfxworkbench.preservation import build_preservation_rules
 from sfxworkbench.tag_suggest import clean_tag_suggestion_text, is_technical_metadata_blob
 from sfxworkbench.tui_perf import record_phase as _perf_record_phase
@@ -579,18 +580,50 @@ def _count(conn, sql: str, params: tuple = ()) -> int:
     return int(conn.execute(sql, params).fetchone()[0] or 0)
 
 
-def _duplicate_group_count(conn) -> int:
-    return _count(
-        conn,
-        """
-        SELECT COUNT(*) FROM (
-            SELECT md5 FROM files
-            WHERE md5 IS NOT NULL
-            GROUP BY md5
-            HAVING COUNT(*) > 1
-        )
-        """,
-    )
+def _active_scope_root(library_path: str | Path | None) -> Path | None:
+    if library_path is None:
+        return None
+    text = str(library_path).strip()
+    if not text or text == "PATH":
+        return None
+    return Path(text).expanduser()
+
+
+def _scope_detail(root: Path | None) -> str:
+    return f"Scoped to {_display_path(root)}." if root is not None else ""
+
+
+def _actionable_duplicate_groups(
+    db_path: Path,
+    root: Path | None = None,
+) -> tuple[list[tuple[Any, tuple[str, ...]]], int]:
+    cache_key = ("actionable_duplicate_groups", _file_signature(db_path), str(root or ""))
+    cached = _ADAPTER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    from sfxworkbench.dedupe import find_duplicates
+
+    groups = find_duplicates(db_path, root=root)
+    actionable: list[tuple[Any, tuple[str, ...]]] = []
+    resolved_or_stale = 0
+    for group in groups:
+        existing = tuple(path for path in group.files if path_exists_windows(Path(path)))
+        if len(existing) > 1:
+            actionable.append((group, existing))
+        else:
+            resolved_or_stale += 1
+    result = (actionable, resolved_or_stale)
+    _ADAPTER_CACHE[cache_key] = result
+    while len(_ADAPTER_CACHE) > _ADAPTER_CACHE_MAX:
+        oldest = next(iter(_ADAPTER_CACHE))
+        _ADAPTER_CACHE.pop(oldest, None)
+    return result
+
+
+def _actionable_duplicate_group_count(db_path: Path, root: Path | None = None) -> int:
+    actionable, _resolved_or_stale = _actionable_duplicate_groups(db_path, root)
+    return len(actionable)
 
 
 def _last_scan_root(conn) -> str:
@@ -737,9 +770,15 @@ def indexed_library_size_gb(db_path: Path = DEFAULT_DB_PATH) -> float:
     return float(row["total_bytes"] or 0) / 1_000_000_000
 
 
-def dashboard_metrics(db_path: Path = DEFAULT_DB_PATH, config_path: Path | None = None) -> list[DashboardMetric]:
+def dashboard_metrics(
+    db_path: Path = DEFAULT_DB_PATH,
+    config_path: Path | None = None,
+    *,
+    library_path: str | Path | None = None,
+) -> list[DashboardMetric]:
     """Return the first dashboard signals for the review workbench."""
-    cache_key = ("dashboard_metrics", _file_signature(db_path), _file_signature(config_path))
+    root = _active_scope_root(library_path)
+    cache_key = ("dashboard_metrics", _file_signature(db_path), _file_signature(config_path), str(root or ""))
     cached = _ADAPTER_CACHE.get(cache_key)
     if cached is not None:
         return cached
@@ -759,7 +798,7 @@ def dashboard_metrics(db_path: Path = DEFAULT_DB_PATH, config_path: Path | None 
             tuple(sorted(_STANDARD_SAMPLE_RATES)),
         )
         ucs_named = _count(conn, "SELECT COUNT(*) FROM files WHERE is_ucs = 1")
-        duplicate_groups = _duplicate_group_count(conn)
+        duplicate_groups = _actionable_duplicate_group_count(db_path, root)
         accepted_tags = _count(conn, "SELECT COUNT(*) FROM accepted_tags")
         db_only_tagged_files = _count(conn, "SELECT COUNT(DISTINCT file_id) FROM accepted_tags")
         similarity_segments = _count(conn, "SELECT COUNT(*) FROM audio_segments")
@@ -791,13 +830,22 @@ def dashboard_metrics(db_path: Path = DEFAULT_DB_PATH, config_path: Path | None 
     return result
 
 
-def feature_pages(db_path: Path = DEFAULT_DB_PATH, config_path: Path | None = None) -> list[FeaturePage]:
+def feature_pages(
+    db_path: Path = DEFAULT_DB_PATH,
+    config_path: Path | None = None,
+    *,
+    library_path: str | Path | None = None,
+) -> list[FeaturePage]:
     """Return top-level operation pages and their current signal state."""
-    cache_key = ("feature_pages", _file_signature(db_path), _file_signature(config_path))
+    root = _active_scope_root(library_path)
+    cache_key = ("feature_pages", _file_signature(db_path), _file_signature(config_path), str(root or ""))
 
     def _build() -> list[FeaturePage]:
-        metrics = {metric.key: metric for metric in dashboard_metrics(db_path=db_path, config_path=config_path)}
-        queues = {queue.key: queue for queue in review_queues(db_path=db_path)}
+        metrics = {
+            metric.key: metric
+            for metric in dashboard_metrics(db_path=db_path, config_path=config_path, library_path=root)
+        }
+        queues = {queue.key: queue for queue in review_queues(db_path=db_path, library_path=root)}
 
         def metric_count(key: str) -> int | str:
             return metrics.get(key, DashboardMetric(key, key, 0)).value
@@ -832,11 +880,17 @@ def feature_pages(db_path: Path = DEFAULT_DB_PATH, config_path: Path | None = No
     return _adapter_cached(cache_key, _build)
 
 
-def scan_findings(db_path: Path = DEFAULT_DB_PATH, config_path: Path | None = None) -> list[FeatureFinding]:
-    cache_key = ("scan_findings", _file_signature(db_path), _file_signature(config_path))
+def scan_findings(
+    db_path: Path = DEFAULT_DB_PATH,
+    config_path: Path | None = None,
+    *,
+    library_path: str | Path | None = None,
+) -> list[FeatureFinding]:
+    root = _active_scope_root(library_path)
+    cache_key = ("scan_findings", _file_signature(db_path), _file_signature(config_path), str(root or ""))
 
     def _build() -> list[FeatureFinding]:
-        metrics = dashboard_metrics(db_path=db_path, config_path=config_path)
+        metrics = dashboard_metrics(db_path=db_path, config_path=config_path, library_path=root)
         return [
             FeatureFinding("scan", metric.label, metric.value, metric.severity, metric.detail)
             for metric in metrics
@@ -898,34 +952,36 @@ def dedupe_group_rows(
     *,
     query: str = "",
     limit: int = 100,
+    library_path: str | Path | None = None,
 ) -> list[DuplicateGroupRow]:
-    cache_key = ("dedupe_group_rows", _file_signature(db_path), query, int(limit))
+    root = _active_scope_root(library_path)
+    cache_key = ("dedupe_group_rows", _file_signature(db_path), query, int(limit), str(root or ""))
     cached = _ADAPTER_CACHE.get(cache_key)
     if cached is not None:
         return cached
 
-    from sfxworkbench.dedupe import find_duplicates
-
-    groups = find_duplicates(db_path)
+    groups, _resolved_or_stale = _actionable_duplicate_groups(db_path, root)
     # Tier 3.7: post-hoc filter — ``find_duplicates`` already builds the full
     # group set, so we screen each group against the search terms (all must
     # match somewhere in the hash, keep path, or any member file).
     terms = [term.lower() for term in query.split() if term.strip()]
     rows: list[DuplicateGroupRow] = []
     group_index = 0
-    for group in groups:
+    for group, existing_paths in groups:
         group_index += 1
-        keep = sorted(group.files)[0] if group.files else ""
+        keep = sorted(existing_paths)[0] if existing_paths else ""
         if terms:
-            haystack = " ".join([str(keep).lower(), (group.hash or "").lower()] + [str(f).lower() for f in group.files])
+            haystack = " ".join(
+                [str(keep).lower(), (group.hash or "").lower()] + [str(path).lower() for path in existing_paths]
+            )
             if not all(term in haystack for term in terms):
                 continue
-        extra = max(0, len(group.files) - 1)
+        extra = max(0, len(existing_paths) - 1)
         rows.append(
             DuplicateGroupRow(
                 group_id=group_index,
                 hash=group.hash,
-                copies=len(group.files),
+                copies=len(existing_paths),
                 extra_copies=extra,
                 size_bytes=group.size_bytes,
                 wasted_bytes=(group.size_bytes or 0) * extra,
@@ -942,19 +998,32 @@ def dedupe_group_rows(
     return rows
 
 
-def dedupe_findings(db_path: Path = DEFAULT_DB_PATH) -> list[FeatureFinding]:
-    cache_key = ("dedupe_findings", _file_signature(db_path))
+def dedupe_findings(
+    db_path: Path = DEFAULT_DB_PATH,
+    *,
+    library_path: str | Path | None = None,
+) -> list[FeatureFinding]:
+    root = _active_scope_root(library_path)
+    cache_key = ("dedupe_findings", _file_signature(db_path), str(root or ""))
 
     def _build() -> list[FeatureFinding]:
-        from sfxworkbench.dedupe import find_duplicates, summarize_duplicates
-
-        groups = find_duplicates(db_path)
-        summary = summarize_duplicates(groups)
+        groups, resolved_or_stale = _actionable_duplicate_groups(db_path, root)
+        duplicate_groups = len(groups)
+        duplicate_files = sum(len(existing_paths) for _group, existing_paths in groups)
+        extra_copies = sum(max(0, len(existing_paths) - 1) for _group, existing_paths in groups)
+        wasted_bytes = sum((group.size_bytes or 0) * max(0, len(existing_paths) - 1) for group, existing_paths in groups)
+        detail_parts = [_scope_detail(root)] if root is not None else []
+        if resolved_or_stale:
+            detail_parts.append(
+                f"{resolved_or_stale:,} resolved duplicate group(s) have stale missing-file index rows; run Quick Index to refresh."
+            )
+        detail = " ".join(part for part in detail_parts if part)
+        status = "review" if groups else "clear"
         return [
-            FeatureFinding("dedupe", "Duplicate groups", summary.duplicate_groups, "review" if groups else "clear"),
-            FeatureFinding("dedupe", "Duplicate files", summary.duplicate_files, "review" if groups else "clear"),
-            FeatureFinding("dedupe", "Extra copies", summary.extra_copies, "review" if groups else "clear"),
-            FeatureFinding("dedupe", "Wasted size", summary.wasted_bytes, "review" if groups else "clear"),
+            FeatureFinding("dedupe", "Duplicate groups", duplicate_groups, status, detail),
+            FeatureFinding("dedupe", "Duplicate files", duplicate_files, status, detail),
+            FeatureFinding("dedupe", "Extra copies", extra_copies, status, detail),
+            FeatureFinding("dedupe", "Wasted size", wasted_bytes, status, detail),
         ]
 
     return _adapter_cached(cache_key, _build)
@@ -2227,7 +2296,8 @@ def review_queues(
                 """,
                 tuple(sorted(_STANDARD_SAMPLE_RATES)),
             )
-            duplicate_groups = _duplicate_group_count(conn)
+            root = _active_scope_root(library_path)
+            duplicate_groups = _actionable_duplicate_group_count(db_path, root)
             db_only_tags = _count(conn, "SELECT COUNT(*) FROM accepted_tags")
             ucs_named = _count(conn, "SELECT COUNT(*) FROM files WHERE is_ucs = 1")
             similarity_feedback = _count(conn, "SELECT COUNT(*) FROM similarity_feedback")

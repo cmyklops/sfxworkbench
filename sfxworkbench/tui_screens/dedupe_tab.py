@@ -72,9 +72,9 @@ def fill(app) -> None:
             app._history_report_paths(),
             actions=("dedupe_plan", "dedupe_apply", "pack_audit", "pack_plan", "pack_apply"),
             no_history_detail="No saved dedupe or pack action found for this report folder.",
-            history_detail_suffix="Duplicate rows below are live index state.",
+            history_detail_suffix="Duplicate rows below are live index state scoped to the active library.",
         ),
-        *dedupe_findings(db_path=app.db_path),
+        *dedupe_findings(db_path=app.db_path, library_path=app._library_path),
     ]
     app._fill_findings("dedupe-findings-table", findings)
     table = app._reset_table(
@@ -100,6 +100,7 @@ def fill(app) -> None:
         db_path=app.db_path,
         query=getattr(app, "_dedupe_query", ""),
         limit=100,
+        library_path=app._library_path,
     )
     if not rows:
         table.add_row("none", "0", "0", "0", "0", _state_token("clear"), "No exact duplicate groups indexed.")

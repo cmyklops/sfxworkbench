@@ -1010,7 +1010,8 @@ def run_tui(
             border: solid #263647;
         }
         #dedupe-groups-table {
-            height: 16;
+            height: 1fr;
+            min-height: 16;
         }
         #clean-items-table,
         #files-table,
@@ -1018,12 +1019,14 @@ def run_tui(
             height: 1fr;
             min-height: 18;
         }
-        #scan-findings-table,
+        #scan-findings-table {
+            height: 9;
+        }
         #clean-findings-table,
         #dedupe-findings-table,
         #metadata-findings-table,
         #files-findings-table {
-            height: 6;
+            height: 8;
         }
         #metadata-rows-table {
             min-height: 24;
@@ -1369,11 +1372,15 @@ def run_tui(
         def _start_initial_load(self) -> None:
             def _load() -> None:
                 try:
-                    pages = feature_pages(db_path=db_path, config_path=config_path)
+                    pages = feature_pages(db_path=db_path, config_path=config_path, library_path=self._library_path)
                     indexed_gb = indexed_library_size_gb(db_path)
                     from sfxworkbench.tui_data import scan_findings, start_steps
 
-                    findings = scan_findings(db_path=db_path, config_path=config_path)
+                    findings = scan_findings(
+                        db_path=db_path,
+                        config_path=config_path,
+                        library_path=self._library_path,
+                    )
                     steps = start_steps(db_path=db_path, library_path=self._library_path)
                     self.call_from_thread(self._finish_initial_load, pages, indexed_gb, findings, steps, None)
                 except Exception as exc:  # pragma: no cover - defensive thread boundary
@@ -2972,7 +2979,7 @@ def run_tui(
                     self.query_one("#status-strip", Static).update("Loading index summary…")
                     return
             else:
-                pages = feature_pages(db_path=db_path, config_path=config_path)
+                pages = feature_pages(db_path=db_path, config_path=config_path, library_path=self._library_path)
                 indexed_gb = indexed_library_size_gb(db_path)
                 self._status_pages_cache = pages
                 self._status_indexed_gb_cache = indexed_gb

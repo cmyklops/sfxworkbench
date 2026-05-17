@@ -578,6 +578,49 @@ def test_tui_dedupe_rows_and_metadata_rows_surface_review_state(
     assert isinstance(dedupe_group_rows(tmp_db), list)
 
 
+def test_tui_dedupe_signals_scope_to_active_library(tmp_db: Path, tmp_path: Path) -> None:
+    active = tmp_path / "active_library"
+    stale = tmp_path / "old_library"
+    rows = [
+        (active / "keep.wav", "ACTIVE_ONLY", 10),
+        (active / "missing_a.wav", "ACTIVE_STALE_DUP", 30),
+        (active / "missing_b.wav", "ACTIVE_STALE_DUP", 30),
+        (stale / "dupe_a.wav", "STALE_DUP", 20),
+        (stale / "dupe_b.wav", "STALE_DUP", 20),
+    ]
+    for path, _md5, size in rows:
+        if "missing" in path.name:
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x" * size)
+    conn = sqlite3.connect(tmp_db)
+    try:
+        conn.executemany(
+            """
+            INSERT INTO files (path, filename, stem, extension, size_bytes, mtime, md5, scanned_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (str(path), path.name, path.stem, path.suffix, size, 1.0, md5, "2026-05-17T00:00:00")
+                for path, md5, size in rows
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    all_findings = {row.label: row for row in dedupe_findings(tmp_db)}
+    scoped_findings = {row.label: row for row in dedupe_findings(tmp_db, library_path=active)}
+    scoped_queues = {queue.key: queue for queue in review_queues(tmp_db, library_path=active)}
+
+    assert all_findings["Duplicate groups"].count == 1
+    assert scoped_findings["Duplicate groups"].count == 0
+    assert scoped_findings["Duplicate groups"].status == "clear"
+    assert scoped_findings["Duplicate groups"].detail.startswith("Scoped to ")
+    assert dedupe_group_rows(tmp_db, library_path=active) == []
+    assert scoped_queues["duplicates"].count == 0
+
+
 def test_tui_metadata_rows_can_page_and_randomize_pending_plan_files(
     tmp_library: Path, tmp_db: Path, tmp_path: Path, monkeypatch
 ) -> None:
