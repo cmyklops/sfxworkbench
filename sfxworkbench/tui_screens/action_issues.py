@@ -104,8 +104,8 @@ def build_action_issues_screen(
                     if remaining > 0:
                         yield Static(f"... {remaining:,} more issue(s) in History.", classes="issue-muted")
                 with Horizontal(id="action-issues-actions"):
-                    yield Button("Dismiss", id="action-issues-dismiss")
-                    yield Button("Review History", id="action-issues-review", variant="warning")
+                    yield Button("Review History", id="action-issues-review")
+                    yield Button("Dismiss", id="action-issues-dismiss", variant="warning")
 
         def on_button_pressed(self, event: Button.Pressed) -> None:
             event.stop()

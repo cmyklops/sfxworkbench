@@ -657,8 +657,10 @@ def test_tui_popup_open_actions_are_single_instance_guards() -> None:
 
 
 def test_tui_action_issues_are_reviewable_after_completion() -> None:
-    app_text = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text()
-    issues_text = (Path(__file__).parents[1] / "sfxworkbench" / "tui_screens" / "action_issues.py").read_text()
+    app_text = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text(encoding="utf-8")
+    issues_text = (
+        Path(__file__).parents[1] / "sfxworkbench" / "tui_screens" / "action_issues.py"
+    ).read_text(encoding="utf-8")
     run_action_source = app_text[app_text.index("def _run_action") : app_text.index("def _refresh")]
     operation_source = app_text[app_text.index("def _fill_operation_strip") : app_text.index("def _progress_line")]
 
@@ -668,6 +670,9 @@ def test_tui_action_issues_are_reviewable_after_completion() -> None:
     assert "self._open_action_history(history_path)" in app_text
     assert "issue(s) recorded" in operation_source
     assert 'issue_class = "issue-error" if self._status == "error" else "issue-warning"' in issues_text
+    assert issues_text.index('Button("Review History", id="action-issues-review")') < issues_text.index(
+        'Button("Dismiss", id="action-issues-dismiss", variant="warning")'
+    )
     assert "#ff7b72" in issues_text
     assert "#d29922" in issues_text
 
