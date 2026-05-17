@@ -1011,7 +1011,9 @@ def dedupe_findings(
         duplicate_groups = len(groups)
         duplicate_files = sum(len(existing_paths) for _group, existing_paths in groups)
         extra_copies = sum(max(0, len(existing_paths) - 1) for _group, existing_paths in groups)
-        wasted_bytes = sum((group.size_bytes or 0) * max(0, len(existing_paths) - 1) for group, existing_paths in groups)
+        wasted_bytes = sum(
+            (group.size_bytes or 0) * max(0, len(existing_paths) - 1) for group, existing_paths in groups
+        )
         detail_parts = [_scope_detail(root)] if root is not None else []
         if resolved_or_stale:
             detail_parts.append(

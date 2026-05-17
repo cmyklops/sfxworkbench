@@ -69,7 +69,7 @@ ignore = ["E501"]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
-line-ending = "lf"
+line-ending = "auto"
 
 [tool.mypy]
 python_version = "3.11"
@@ -79,6 +79,7 @@ files = ["sfxworkbench"]
 
 [tool.poe.tasks]
 test = "pytest tests/ -v"
+test-win-local = "python -X utf8 -m pytest tests/ -v --basetemp C:/tmp/sfxworkbench-pytest"
 lint = "ruff check ."
 # mypy is onboarded with lax settings; not yet gated on `check` because the
 # brownfield codebase has a pre-existing error baseline. Track via the
@@ -87,7 +88,10 @@ lint-types = "mypy sfxworkbench"
 fmt = "ruff format ."
 fmt-check = "ruff format --check ."
 json-smoke = "pytest tests/test_cli_json.py tests/test_json_contracts.py -v"
+metadata-smoke = "pytest tests/test_audio.py tests/test_metadata_backends.py tests/test_metadata_write.py -v"
 test-windows-smoke = "pytest tests/test_db.py tests/test_platform_paths.py tests/test_artifacts.py tests/test_health.py tests/test_groups.py tests/test_packs.py tests/test_tag_suggest.py tests/test_ucs_validate.py -v"
 check = ["lint", "fmt-check", "test"]
+preflight = ["check", "metadata-smoke", "json-smoke"]
+preflight-win = ["lint", "fmt-check", "test-win-local"]
 bench-scan = "python scripts/bench_large_library.py"
 beta-audit = "python scripts/internal_beta_audit.py"

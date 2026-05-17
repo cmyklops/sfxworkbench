@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+set -eu
+
+case "$(uname -s 2>/dev/null || echo unknown)" in
+    MINGW*|MSYS*|CYGWIN*)
+        uv run poe preflight-win
+        ;;
+    *)
+        uv run poe preflight
+        ;;
+esac

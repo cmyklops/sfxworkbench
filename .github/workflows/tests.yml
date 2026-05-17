@@ -4,40 +4,63 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  lint-format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: uv sync --locked --extra dev
+      - run: uv run poe lint
+      - run: uv run poe fmt-check
+
   pytest:
+    needs: lint-format
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv sync --extra dev
-      - run: uv run poe check
+      - run: uv sync --locked --extra dev
+      - run: uv run poe test
 
   windows-smoke:
+    needs: lint-format
     runs-on: windows-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-      - run: uv sync --extra dev
+      - run: uv sync --locked --extra dev
       - run: uv run poe test-windows-smoke
 
   metadata-extras:
+    needs: lint-format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-      - run: uv sync --extra metadata --extra dev
-      - run: uv run pytest tests/test_audio.py tests/test_metadata_backends.py tests/test_metadata_write.py -v
+      - run: uv sync --locked --extra metadata --extra dev
+      - run: uv run poe metadata-smoke

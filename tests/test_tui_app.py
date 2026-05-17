@@ -658,9 +658,9 @@ def test_tui_popup_open_actions_are_single_instance_guards() -> None:
 
 def test_tui_action_issues_are_reviewable_after_completion() -> None:
     app_text = (Path(__file__).parents[1] / "sfxworkbench" / "tui_app.py").read_text(encoding="utf-8")
-    issues_text = (
-        Path(__file__).parents[1] / "sfxworkbench" / "tui_screens" / "action_issues.py"
-    ).read_text(encoding="utf-8")
+    issues_text = (Path(__file__).parents[1] / "sfxworkbench" / "tui_screens" / "action_issues.py").read_text(
+        encoding="utf-8"
+    )
     run_action_source = app_text[app_text.index("def _run_action") : app_text.index("def _refresh")]
     operation_source = app_text[app_text.index("def _fill_operation_strip") : app_text.index("def _progress_line")]
 
@@ -783,7 +783,7 @@ def test_large_workbench_tables_get_flexible_height() -> None:
 
     for table_id in ("#clean-items-table", "#files-table", "#metadata-rows-table"):
         assert table_id in app_text
-    flexible_block = app_text[app_text.index("#clean-items-table,") : app_text.index("#scan-findings-table,")]
+    flexible_block = app_text[app_text.index("#clean-items-table,") : app_text.index("#scan-findings-table {")]
     assert "height: 1fr;" in flexible_block
     assert "min-height: 18;" in flexible_block
 
