@@ -1,68 +1,22 @@
 # sfxworkbench
 
-sfxworkbench helps sound designers clean up large SFX libraries without guessing
-what will happen to their files.
+Safety-first tools for auditing, indexing, tagging, and organizing large
+sound-effects libraries.
 
-It is built for commercial audio collections: Sound Ideas, GDC/Soniss bundles,
-vendor packs, downloaded freebies, personal recordings, and years of folders
-that have slowly become hard to search.
+sfxworkbench is built for commercial and personal SFX collections that have
+grown hard to search: Sound Ideas, GDC/Soniss bundles, vendor packs, downloaded
+freebies, field recordings, and years of mixed folders.
 
-sfxworkbench is currently a **public-readiness beta**. The goal is practical,
-reviewable library cleanup for copied studio libraries before a stable v1.0
-release.
+The project is currently a **public-readiness beta**. Start on a copied library,
+review the reports, and apply changes only when the plan looks right.
 
-## Product Direction
+## Start With The TUI
 
-The core sfxworkbench CLI is intended to remain free and open source. The free core
-should cover local scanning, reporting, dry-run cleanup plans, duplicate
-detection, search, tagging plans, and other safety-first library hygiene tools.
+The Textual workbench is now the front door. It gives you a guided view over the
+same safe CLI workflows: indexing, audits, cleanup previews, duplicate plans,
+pack overlap reports, metadata/tag review, apply logs, and history.
 
-A future desktop app may be offered as a low-cost paid product, likely in the
-$10-$20 range for solo users. The app would focus on workflow polish rather than
-locking away core safety features: visual review queues, guided metadata repair,
-richer undo/history views, batch decision interfaces, saved profiles, and
-friendlier onboarding for non-CLI users.
-
-## What It Helps With
-
-- Remove junk files such as `.DS_Store`, AppleDouble files, waveform caches, and
-  other non-audio clutter.
-- Scan a library into a local SQLite index for search, audits, duplicate checks,
-  and future UI workflows.
-- Find exact duplicate audio files and quarantine extras instead of deleting
-  them permanently.
-- Clean risky filenames and folder names so libraries are more portable across
-  macOS, Windows, DAWs, sync tools, and external drives.
-- Organize obvious folder patterns, such as numbered Sound Ideas series folders,
-  vendor/product folders, and sibling bundle groups.
-- Report metadata, sample-rate, channel-layout, and related-take issues before
-  any write workflow.
-- Propose useful UCS tags from corroborated evidence while preserving filenames
-  and existing metadata.
-
-sfxworkbench does **not** change audio content. Loudness normalization and sample
-rate conversion are out of scope for the beta safety promise. The advanced
-dual-mono workflow only writes reviewed mono copies to a separate output root;
-it does not replace originals.
-
-## Safety Promise
-
-Filesystem-changing commands are designed to be boring and reversible:
-
-- preview first
-- never overwrite existing files
-- require an explicit apply step
-- write JSON reports or logs
-- update the SQLite index after successful moves
-- prefer quarantine or undo logs over permanent deletion
-
-When in doubt, run the preview command and inspect the report before applying.
-
-## Install
-
-Fast TUI setup for internal testers:
-
-Windows PowerShell - paste only this line, without adding `powershell` before it:
+Windows PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/cmyklops/sfxworkbench/main/scripts/install-windows-tui.ps1 | iex
@@ -74,246 +28,175 @@ macOS Terminal:
 curl -fsSL https://raw.githubusercontent.com/cmyklops/sfxworkbench/main/scripts/install-macos-tui.sh | bash
 ```
 
-Those one-line commands are also the safest "run it again" commands: each run
-downloads the latest launcher, updates the GitHub checkout, syncs dependencies,
-and starts the TUI. After the first install, Windows users can also run:
+Those commands install or update the GitHub checkout, sync dependencies, and
+launch the TUI. After the first run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "$HOME\sfxworkbench\scripts\run-windows-tui.ps1"
 ```
 
-macOS users can run:
-
 ```bash
 bash "$HOME/sfxworkbench/scripts/run-macos-tui.sh"
 ```
 
-Recommended beta install from a tagged GitHub release wheel:
+From a cloned repo:
 
 ```bash
-python3.11 -m venv ~/.venvs/sfxworkbench
-source ~/.venvs/sfxworkbench/bin/activate
-python -m pip install /path/to/sfxworkbench-0.1.0-py3-none-any.whl
-sfx --help
+uv sync --extra tui --extra metadata --extra dev
+uv run --extra tui --extra metadata --extra dev sfx tui --db ~/.sfxworkbench/index.db --report ~/reports
 ```
 
-When a PyPI release is published, the install command will be:
+The TUI is organized around the real work:
 
-```bash
-python -m pip install sfxworkbench
-sfx --help
-```
+- **Start**: choose a library, run Quick Index, or run Smart Full Audit.
+- **Scan**: inspect index health and refresh scan state.
+- **Cleanup**: preview junk cleanup, rename plans, and safe apply/undo flows.
+- **Dedupe**: build/review/apply exact duplicate and pack overlap plans.
+- **Metadata**: audit coverage, build tag plans, review DB-only tags, and prepare
+  embedded metadata writes.
+- **Files**: browse indexed files and metadata evidence.
+- **History**: inspect generated reports, plans, logs, previews, and TUI action
+  history.
 
-For development or internal beta use from a cloned repo:
+## Smart Buttons
 
-```bash
-uv sync --extra dev
-uv run sfx --help
-uv run --extra dev poe beta-audit PATH --output-dir ~/reports/sfxworkbench_beta_audit --similarity-validation
-```
+Default buttons use **Smart** mode. Smart mode is conservative: it picks a safe
+default from current state, but it does not hide scope, cache, or scan-depth
+decisions.
 
-Optional richer WAV metadata reads:
+Smart actions can:
 
-```bash
-uv sync --extra metadata --extra dev
-```
+- reuse same-library indexed data or reports when `root` and `db_path` match
+- refresh missing metadata instead of rescanning everything
+- hash missing files before duplicate or pack planning
+- rebuild reports or plans when current data is newer
+- block stale or cross-library apply plans before anything destructive happens
 
-Optional Textual review workbench:
+Generated reports, plans, and TUI action history include the library root,
+SQLite DB path, action mode, timestamp, and relevant counts. The command palette
+keeps explicit override paths available, including:
 
-```bash
-uv sync --extra tui --extra dev
-uv run --extra tui --extra dev sfx tui --db ~/.sfxworkbench/index.db --report ~/reports
-```
+- Reuse Indexed Data
+- Quick Index
+- Refresh Metadata Only
+- Full Scan / Full Audit
+- Force Rescan
+- Rebuild Plan or Rebuild Report
 
-The TUI opens as a feature-oriented operations workbench: Start, Scan, Cleanup,
-Dedupe, Metadata, Files, and History. Buttons run the same safe workflow
-functions as the CLI: quick index/full audit, junk preview/apply, dedupe and
-pack plans, rename previews/applies/undo, DB-only metadata tag review/apply,
-sidecar export, and similarity crawl. Guarded workflows such as embedded audio
-metadata writes and permanent deletion stay behind explicit confirmation. The
-normal UI shows the library path and status; the SQLite index path is treated as
-an advanced cache.
-If `--report` is omitted, the workbench looks for JSON reports beside the
-validation DB, near the last scanned library root, and in `~/reports`.
+## Safety Model
 
-For source installs from GitHub before a wheel is attached to a release:
+sfxworkbench is designed to make file operations boring:
 
-```bash
-python -m pip install "sfxworkbench @ git+https://github.com/cmyklops/sfxworkbench.git"
-sfx --help
-```
+- preview first
+- never overwrite existing files
+- require explicit apply steps for filesystem changes
+- prefer quarantine or undo logs over deletion
+- write JSON reports, plans, and logs
+- update the SQLite index after successful moves or metadata writes
+- block stale, cross-root, or cross-DB destructive plans
 
-## Common Workflow
+sfxworkbench does not alter audio content. Metadata write workflows are reviewed,
+backed up, readback-verified, and limited to proven embedded metadata fields.
+The dual-mono workflow writes reviewed mono copies to a separate output root. The
+permanent delete workflow only acts on reviewed plans built from quarantine logs.
 
-Replace `PATH` with your copied library folder. Do not start on your only copy.
-For a friendlier first pass, see [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md)
-or run:
+## Common TUI Workflow
 
-```bash
-uv run sfx guide PATH
-uv run --extra tui --extra dev sfx tui
-```
+1. Open the TUI and choose a copied library folder.
+2. Run **Quick Index** to populate the SQLite cache.
+3. Run **Smart Full Audit** for a broad report bundle.
+4. Review Cleanup, Dedupe, Metadata, Files, and History tabs.
+5. Build plans from the TUI, review them, then apply only the changes you want.
 
-```bash
-# 1. Remove obvious junk. Dry-run first.
-uv run sfx clean PATH
-uv run sfx clean PATH --apply
-
-# 2. Build or refresh the local index.
-uv run sfx scan PATH
-
-# 3. Check library health.
-uv run sfx audit
-
-# 4. Find exact duplicates.
-uv run sfx dedupe --summary-only
-uv run sfx dedupe --output ~/reports/dedupe_plan.json
-uv run sfx dedupe --output ~/reports/dedupe_plan.json --safe-folder ~/CommercialLibraries/Master
-uv run sfx dedupe --output ~/reports/dedupe_plan.json --prefer-folder ~/CommercialLibraries/Master --prefer-extension wav
-uv run sfx dedupe --review ~/reports/dedupe_plan.json --approve-all
-uv run sfx dedupe --apply ~/reports/dedupe_plan.json --require-reviewed
-uv run sfx dedupe --apply ~/reports/dedupe_plan.json --safe-folder ~/CommercialLibraries/Master --require-reviewed
-
-# 5. Preview portable filename cleanup.
-uv run sfx rename PATH --pattern portable
-uv run sfx rename PATH --pattern portable --config ~/sfxworkbench.json
-uv run sfx rename PATH --pattern portable --apply --log ~/reports/apply_logs/portable_rename_log.json
-
-# 6. Search indexed filenames.
-uv run sfx search "gunshot exterior"
-
-# 7. Optional advanced reports.
-uv run sfx compare audit ~/IncomingPack --against-db ~/.sfxworkbench/index.db --output ~/reports/compare_report.json
-uv run sfx compare plan ~/reports/compare_report.json --output ~/reports/compare_plan.json
-uv run sfx processed PATH --db ~/.sfxworkbench/index.db --output ~/reports/processed_files.json
-uv run sfx audio dual-mono audit PATH --db ~/.sfxworkbench/index.db --output ~/reports/dual_mono_report.json
-uv run sfx audio dual-mono plan ~/reports/dual_mono_report.json --output ~/reports/dual_mono_plan.json
-uv run sfx audio dual-mono review ~/reports/dual_mono_plan.json --approve-all
-uv run sfx audio dual-mono apply ~/reports/dual_mono_plan.json --require-reviewed --output-root ~/ConvertedMono --apply
-
-# 8. Optional permanent delete, only from quarantine logs.
-uv run sfx delete plan ~/reports/apply_logs/pack_quarantine_log_YYYYMMDD_HHMMSS.json --output ~/reports/delete_plan.json
-uv run sfx delete review ~/reports/delete_plan.json --approve-all
-uv run sfx delete apply ~/reports/delete_plan.json --require-reviewed --i-understand-permanent-delete --apply
-```
-
-When an apply command writes a default log, it places it in an `apply_logs/`
-folder beside the source plan or report. Explicit `--log` paths are still
-honored.
-
-Default database:
+The default database is:
 
 ```text
 ~/.sfxworkbench/index.db
 ```
 
-Override it with `--db` when needed.
+If `--report` is omitted, the TUI looks for reports beside the DB, near the last
+scanned library root, and in `~/reports`.
 
-## Folder Organization
+## CLI Quick Reference
 
-Folder organization is report-first. Preview, review, then apply.
-
-```bash
-# Remove simple numeric prefixes such as "01 Pack Name".
-uv run sfx organize audit PATH --depth 1 --output ~/reports/organize_report.json
-
-# Group known vendor/product folders.
-uv run sfx organize audit PATH --pattern vendor-product-folders --output ~/reports/vendor_folders.json
-
-# Group sibling families such as GDC 2015, GDC 2016, GDC2023.
-uv run sfx organize audit PATH --pattern common-prefix-folders --output ~/reports/common_prefix_folders.json
-
-# Group strict numeric library folders such as Sound Ideas 6000/7000/9000.
-uv run sfx organize audit PATH --pattern numeric-series-folders --output ~/reports/numeric_series_folders.json
-
-# Apply an approved organization report.
-uv run sfx organize review ~/reports/organize_report.json --approve-all
-uv run sfx organize apply ~/reports/organize_report.json --require-reviewed --log ~/reports/apply_logs/organize_log.json
-uv run sfx organize apply ~/reports/organize_report.json --config ~/sfxworkbench.json --require-reviewed --log ~/reports/apply_logs/organize_log.json
-```
-
-Examples:
-
-```text
-6000 -> Sound Ideas/The General Series 6000
-9000 -> Sound Ideas/Series 9000 Open and Close
-SoundMorph - Energy -> SoundMorph/Energy
-GDC 2015 - Soniss -> GDC/2015 - Soniss
-CreaturesCK_1 -> CreaturesCK/1
-```
-
-## Portable Rename Mode
-
-Use portable rename when a library needs safer names for drives, DAWs, shells,
-CSV exports, and cross-platform collaboration.
+The CLI remains the automation and power-user layer. Replace `PATH` with a
+copied library folder.
 
 ```bash
-uv run sfx rename PATH --pattern portable
-uv run sfx rename PATH --pattern portable --apply --log ~/reports/apply_logs/portable_rename_log.json
-```
+# Guided first run
+uv run sfx guide PATH
+uv run --extra tui --extra metadata --extra dev sfx tui
 
-Examples:
+# Index and audit
+uv run sfx scan PATH
+uv run sfx audit
+uv run sfx audit-bundle PATH --output-dir ~/reports/sfxworkbench_audit
+uv run sfx search "gunshot exterior"
 
-```text
-Series 9000 Open & Close -> Series 9000 Open and Close
-100_C#_Flesh & Bones!.wav -> 100_CSharp_Flesh and Bones_.wav
-Bad:Name.wav -> Bad_Name.wav
-```
+# Junk cleanup
+uv run sfx clean PATH
+uv run sfx clean PATH --apply
 
-Portable mode handles Unicode normalization, risky punctuation, non-ASCII
-characters, illegal filename characters, and conservative long-path shortening.
+# Exact duplicate workflow
+uv run sfx dedupe --summary-only
+uv run sfx dedupe --output ~/reports/dedupe_plan.json
+uv run sfx dedupe --review ~/reports/dedupe_plan.json --approve-all
+uv run sfx dedupe --apply ~/reports/dedupe_plan.json --require-reviewed
 
-## Reports And Metadata
-
-These commands are report-only:
-
-```bash
-uv run sfx metadata audit --output ~/reports/metadata_report.json
-uv run sfx metadata view "FIRE_BURST_SmallBurst_6109.wav" --db ~/.sfxworkbench/index.db
-uv run sfx metadata backends --json
-uv run sfx groups audit PATH --output ~/reports/related_groups_report.json
-uv run sfx format audit PATH --output ~/reports/format_report.json
+# Pack/folder overlap workflow
 uv run sfx packs audit PATH --output ~/reports/pack_overlap_report.json
-uv run sfx tag propose PATH --db ~/.sfxworkbench/index.db --min-confidence 0.6 --output ~/reports/tag_proposals.json
-uv run sfx tag suggest PATH --use-ucs-catalog --min-confidence 0.8 --source ucs_catalog --field ucs_category --field ucs_subcategory --output ~/reports/tag_suggestions.json
-uv run sfx tag suggest PATH --include-synonyms --synonym-limit 3 --synonym-depth 1 --field keyword --output ~/reports/synonym_keywords.json
-```
-
-These commands create reviewed plans, update SQLite DB-only tags, or move files
-only after the usual review/apply gates:
-
-```bash
 uv run sfx packs plan --report ~/reports/pack_overlap_report.json --output ~/reports/pack_consolidation_plan.json
 uv run sfx packs review ~/reports/pack_consolidation_plan.json --approve-all
 uv run sfx packs apply ~/reports/pack_consolidation_plan.json --require-reviewed
+
+# Portable rename preview/apply
+uv run sfx rename PATH --pattern portable
+uv run sfx rename PATH --pattern portable --apply --log ~/reports/apply_logs/portable_rename_log.json
+uv run sfx rename --undo ~/reports/apply_logs/portable_rename_log.json --apply
+
+# Folder organization
+uv run sfx organize audit PATH --depth 1 --output ~/reports/organize_report.json
+uv run sfx organize audit PATH --pattern vendor-product-folders --output ~/reports/vendor_folders.json
+uv run sfx organize review ~/reports/organize_report.json --approve-all
+uv run sfx organize apply ~/reports/organize_report.json --require-reviewed --log ~/reports/apply_logs/organize_log.json
+```
+
+## Metadata And Tags
+
+Metadata workflows are report-first. DB-only accepted tags are safe to apply to
+SQLite. Embedded metadata writes require reviewed plans, backups, and readback
+verification.
+
+```bash
+# Read-only metadata and tag evidence
+uv run sfx metadata audit --output ~/reports/metadata_report.json
+uv run sfx metadata view "FIRE_BURST_SmallBurst_6109.wav" --db ~/.sfxworkbench/index.db
+uv run sfx metadata backends --json
+uv run sfx tag suggest PATH --use-ucs-catalog --min-confidence 0.8 --source ucs_catalog --field ucs_category --field ucs_subcategory --output ~/reports/tag_suggestions.json
+uv run sfx tag propose PATH --db ~/.sfxworkbench/index.db --min-confidence 0.6 --output ~/reports/tag_proposals.json
+
+# Reviewed DB-only tag workflow
 uv run sfx tag plan PATH --from-suggestions ~/reports/tag_suggestions.json --source ucs_catalog --field ucs_category --field ucs_subcategory --output ~/reports/tag_plan.json
-uv run sfx tag plan PATH --include-synonyms --synonym-limit 3 --synonym-depth 1 --source synonym --field keyword --output ~/reports/synonym_keyword_plan.json
 uv run sfx tag summarize ~/reports/tag_plan.json --value-limit 20
-uv run sfx tag review ~/reports/tag_plan.json --approve-field ucs_category --only-status pending
 uv run sfx tag review ~/reports/tag_plan.json --approve-all
 uv run sfx tag apply ~/reports/tag_plan.json --require-reviewed --apply --log ~/reports/apply_logs/tag_apply_log.json
 uv run sfx tag sidecar-export ~/reports/accepted_tags.sidecar.json --path PATH
 uv run sfx tag sidecar-import ~/reports/accepted_tags.sidecar.json --db ~/.sfxworkbench/index.db
+
+# Reviewed embedded metadata workflow
 uv run sfx metadata write-plan ~/reports/metadata_write_plan.json --path PATH --bwfmetaedit /path/to/bwfmetaedit
 uv run sfx metadata write-review ~/reports/metadata_write_plan.json --approve-all
 uv run sfx metadata write-preview ~/reports/metadata_write_plan.json --require-reviewed
-uv run sfx metadata write-fixtures ~/reports/metadata_write_plan.json ~/reports/metadata_fixtures
 uv run sfx metadata write-fixtures ~/reports/metadata_write_plan.json ~/reports/metadata_fixtures --write-fixture-metadata
 uv run sfx metadata write-readback ~/reports/metadata_fixtures --json
-uv run sfx metadata write-apply ~/reports/metadata_write_plan.json --require-reviewed
-uv run sfx metadata write-apply ~/reports/metadata_write_plan.json --config ~/sfxworkbench.json --require-reviewed
 uv run sfx metadata write-apply ~/reports/metadata_write_plan.json --require-reviewed --apply --log ~/reports/apply_logs/metadata_write_apply_log.json
-uv run sfx metadata write-undo ~/reports/apply_logs/metadata_write_apply_log.json
 uv run sfx metadata write-undo ~/reports/apply_logs/metadata_write_apply_log.json --apply
 ```
 
-`metadata write-apply` is deliberately narrow in the beta: it writes reviewed
-Mutagen-backed tags for proven fields in FLAC, Ogg/Vorbis, Opus, MP3, and M4A,
-plus reviewed BWF `bext` fields and RIFF INFO `IKEY` keywords for WAV/RF64
-through BWF MetaEdit. AIFF/AIF and unsupported container/field combinations stay
-visible as unsupported plan entries instead of failing during apply. It creates
-backups first, verifies readback, and refreshes the SQLite index. W64 remains
-sidecar/DB-only until a reliable embedded-write backend is proven.
+Embedded writes currently support reviewed Mutagen-backed tags for FLAC,
+Ogg/Vorbis, Opus, MP3, and M4A, plus reviewed BWF `bext` fields and RIFF INFO
+`IKEY` keywords for WAV/RF64 through BWF MetaEdit. Unsupported container/field
+combinations remain visible in plans instead of failing during apply.
 
 UCS catalog support:
 
@@ -324,38 +207,48 @@ uv run sfx ucs categories --cat-short AMB
 uv run sfx ucs validate PATH --json
 ```
 
-Experimental similarity work starts with an optional descriptor crawler, not
-with the default scan:
+## Optional Advanced Workflows
+
+```bash
+# Compare incoming packs against an existing index
+uv run sfx compare audit ~/IncomingPack --against-db ~/.sfxworkbench/index.db --output ~/reports/compare_report.json
+uv run sfx compare plan ~/reports/compare_report.json --output ~/reports/compare_plan.json
+
+# Processed-file and dual-mono reports
+uv run sfx processed PATH --db ~/.sfxworkbench/index.db --output ~/reports/processed_files.json
+uv run sfx audio dual-mono audit PATH --db ~/.sfxworkbench/index.db --output ~/reports/dual_mono_report.json
+uv run sfx audio dual-mono plan ~/reports/dual_mono_report.json --output ~/reports/dual_mono_plan.json
+uv run sfx audio dual-mono review ~/reports/dual_mono_plan.json --approve-all
+uv run sfx audio dual-mono apply ~/reports/dual_mono_plan.json --require-reviewed --output-root ~/ConvertedMono --apply
+
+# Permanent delete, only from quarantine logs
+uv run sfx delete plan ~/reports/apply_logs/pack_quarantine_log_YYYYMMDD_HHMMSS.json --output ~/reports/delete_plan.json
+uv run sfx delete review ~/reports/delete_plan.json --approve-all
+uv run sfx delete apply ~/reports/delete_plan.json --require-reviewed --i-understand-permanent-delete --apply
+```
+
+## Similarity
+
+Similarity is optional and report-only. It uses deterministic descriptors cached
+in SQLite and skips unchanged files on later runs.
 
 ```bash
 uv run sfx similarity crawl PATH --db ~/.sfxworkbench/index.db --cache ~/.sfxworkbench/similarity
-uv run sfx similarity crawl PATH --db ~/.sfxworkbench/index.db --max-files 500 --throttle-ms 10 --json
 uv run sfx similarity backends --json
 uv run sfx similarity segments PATH --db ~/.sfxworkbench/index.db --limit 200 --json
 uv run sfx similarity search --file query.wav --db ~/.sfxworkbench/index.db --limit 20 --json
 uv run sfx similarity search --file query.wav --db ~/.sfxworkbench/index.db --scope segment --limit 20 --json
 uv run sfx similarity audit PATH --db ~/.sfxworkbench/index.db --threshold 0.92 --output ~/reports/similarity_audit.json
-uv run sfx similarity audit PATH --db ~/.sfxworkbench/index.db --scope segment --threshold 0.95 --json
 uv run sfx similarity feedback set --left one.wav --right two.wav --state ignored --db ~/.sfxworkbench/index.db
 uv run sfx similarity feedback list --db ~/.sfxworkbench/index.db --state ignored --json
 ```
 
-This first slice stores deterministic descriptors in SQLite and skips unchanged
-files on later runs. It captures loudness, silence, transient, zero-crossing,
-basic spectral-shape evidence, and RMS-based event windows, then can rank
-cached whole-file or segment descriptors against a query file and produce
-report-only near-duplicate groups at either whole-file or event-window scope.
-Segment audit uses coarse descriptor buckets to keep comparisons bounded and
-reports how many candidate comparisons were evaluated. Review feedback such as
-favorite, hidden, ignored, accepted, and rejected is stored only in SQLite.
-The larger roadmap folds Sononym-style descriptor discovery together with a
-Soundminer-style resumable cache builder. See
-[`docs/SIMILARITY.md`](docs/SIMILARITY.md).
+See [`docs/SIMILARITY.md`](docs/SIMILARITY.md) for the longer roadmap.
 
 ## Standalone First-Look Audit
 
-`audit.py` is a no-install, zero-dependency script for a first look at a library.
-It does not import the `sfxworkbench` package.
+`audit.py` is a no-install, zero-dependency first-look script. It does not
+import the `sfxworkbench` package.
 
 ```bash
 python3 audit.py PATH --output-dir ~/reports
@@ -363,37 +256,25 @@ python3 audit.py PATH --no-hash
 python3 audit.py PATH --json
 ```
 
-## Project Docs
-
-- [`NEXT.md`](NEXT.md): current solo-dev sprint note
-- [`docs/RELEASE.md`](docs/RELEASE.md): release checklist and clean install smoke tests
-- [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md): SQLite schema migration notes
-- [`docs/DEMO.md`](docs/DEMO.md): tiny committed demo library workflow
-- [`docs/PHASES.md`](docs/PHASES.md): roadmap, safety model, JSON contracts
-- [`docs/PRODUCT_DIRECTION.md`](docs/PRODUCT_DIRECTION.md): product positioning, GUI feature direction, and free/paid boundary
-- [`docs/APP_UI_DIRECTION.md`](docs/APP_UI_DIRECTION.md): app/TUI visual and review-workbench direction
-- [`docs/UCS.md`](docs/UCS.md): UCS data and category integration plan
-- [`docs/METADATA_TAGGING.md`](docs/METADATA_TAGGING.md): metadata writing and audio-suggestion plan
-- [`docs/REAL_LIBRARY_SLICES.md`](docs/REAL_LIBRARY_SLICES.md): copied real-library validation slices
-- [`docs/SIMILARITY.md`](docs/SIMILARITY.md): optional audio similarity crawler roadmap
-- [`docs/PACK_DEDUPLICATION.md`](docs/PACK_DEDUPLICATION.md): pack/folder duplicate detection plan
-- [`CONTRIBUTING.md`](CONTRIBUTING.md): contribution policy during internal beta
-- [`SECURITY.md`](SECURITY.md): private reporting guidance
-
 ## Development
 
 ```bash
-uv run --extra dev poe test
-uv run --extra dev poe lint
-uv run --extra dev poe fmt-check
+uv sync --extra tui --extra metadata --extra dev
+uv run sfx --help
 uv run --extra dev poe check
 ```
 
-Run the full check before committing:
+Useful docs:
 
-```bash
-uv run --extra dev poe check
-```
+- [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md): first guided pass
+- [`docs/WINDOWS.md`](docs/WINDOWS.md): Windows TUI setup and smoke tests
+- [`docs/PHASES.md`](docs/PHASES.md): roadmap and safety model
+- [`docs/PRODUCT_DIRECTION.md`](docs/PRODUCT_DIRECTION.md): product direction
+- [`docs/METADATA_TAGGING.md`](docs/METADATA_TAGGING.md): metadata/tagging plan
+- [`docs/PACK_DEDUPLICATION.md`](docs/PACK_DEDUPLICATION.md): pack duplicate plan
+- [`docs/RELEASE.md`](docs/RELEASE.md): release checklist
+- [`CONTRIBUTING.md`](CONTRIBUTING.md): contribution policy
+- [`SECURITY.md`](SECURITY.md): private reporting guidance
 
 ## License
 
